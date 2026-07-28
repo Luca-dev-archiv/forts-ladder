@@ -24,6 +24,10 @@ public partial class MainWindow : Window
         TableEmpty.Text = Loc.T("table.missing");
         InitServerViews();
 
+        _draft = new ServerDraft(_api);
+        _draft.Changed += RefreshDraft;
+        RefreshDraft();
+
         _watcher = new LogWatcher(TimeSpan.FromSeconds(2));
         _watcher.StatusChanged += (s, ok) => Dispatcher.Invoke(() => SetStatus(s, ok));
         _watcher.AccountDetected += (id, persona) =>
@@ -32,7 +36,7 @@ public partial class MainWindow : Window
 
         Loaded += (_, _) => LoadHistory();
         Loaded += (_, _) => _ = CheckForUpdateAsync();
-        Closed += (_, _) => _watcher.Dispose();
+        Closed += (_, _) => { _watcher.Dispose(); _draft.Dispose(); };
     }
 
     // ----------------------------------------------------------------- Updates
@@ -344,37 +348,66 @@ public partial class MainWindow : Window
     }
 
     // ------------------------------------------------------------------ Draft
-    private DraftEngine? _draft;
-    // With nobody on the other end, one person operates both sides (hot
-    // seat). For the simultaneous commander pick that means A locks in
-    // first, then B — it stays blind regardless, because the result only
-    // appears once both have locked in.
-    private DraftSide _hotSeat = DraftSide.A;
+    //
+    // Server-backed. The client holds no draft rules at all: it sends a value
+    // and re-reads the state. Whose turn it is, what is legal, and above all
+    // what the opponent may see are decided server-side — the half that hides
+    // a pick must not run on the machine it is being hidden from.
+    private readonly ServerDraft _draft;
 
     private void NavDraft_Click(object sender, RoutedEventArgs e) => ShowView("draft");
 
-    private void BtnNewDraft_Click(object sender, RoutedEventArgs e)
+    private async void BtnHostDraft_Click(object sender, RoutedEventArgs e)
     {
-        var bestOf = DraftFormat.SelectedIndex switch { 0 => 1, 2 => 5, _ => 3 };
+        if (!RequireServer()) return;
         var maps = LeagueMapPool();
         var commanders = CommanderNames.Installed();
-        if (maps.Count < bestOf || commanders.Count < 4)
+        if (maps.Count < 5 || commanders.Count < 4)
         {
-            MessageBox.Show(this,
-                $"Zu wenig Material: {maps.Count} Karten, {commanders.Count} Commander.\n" +
-                "Ist Forts gefunden worden?", Loc.T("draft.impossible"),
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            ShowDraftError(Loc.T("draft.too_little", maps.Count, commanders.Count));
             return;
         }
-        try { _draft = new DraftEngine(maps, commanders, bestOf); }
-        catch (ArgumentException ex)
+        var bestOf = DraftFormat.SelectedIndex switch { 0 => 1, 2 => 5, _ => 3 };
+        if (!await _draft.CreateAsync(maps, commanders, bestOf))
+            ShowDraftError(_draft.LastError ?? "?");
+    }
+
+    private async void BtnJoinDraft_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RequireServer()) return;
+        var code = JoinCodeBox.Text.Trim();
+        if (code.Length == 0) return;
+        if (!await _draft.JoinAsync(code))
+            ShowDraftError(_draft.LastError ?? "?");
+    }
+
+    /// <summary>A networked draft needs both a server and an account.</summary>
+    private bool RequireServer()
+    {
+        if (!_api.Configured)
         {
-            MessageBox.Show(this, ex.Message, Loc.T("draft.impossible"),
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            ShowDraftError(Loc.T("draft.needs_server"));
+            return false;
         }
-        _hotSeat = DraftSide.A;
-        RefreshDraft();
+        if (!_api.LoggedIn)
+        {
+            ShowDraftError(Loc.T("draft.needs_login"));
+            return false;
+        }
+        return true;
+    }
+
+    private void ShowDraftError(string message)
+    {
+        DraftError.Text = message;
+        DraftErrorBar.Visibility = Visibility.Visible;
+    }
+
+    private async void Tile_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button b || b.Tag is not string id) return;
+        if (!await _draft.ApplyAsync(id))
+            ShowDraftError(_draft.LastError ?? "?");
     }
 
     /// <summary>
@@ -419,108 +452,161 @@ public partial class MainWindow : Window
         return pool;
     }
 
-    private void Tile_Click(object sender, RoutedEventArgs e)
-    {
-        if (_draft is null || sender is not Button b || b.Tag is not string id) return;
-        try
-        {
-            var step = _draft.Current;
-            _draft.Apply(id, step?.Side ?? _hotSeat);
-            if (step?.Side is null)
-                _hotSeat = DraftEngine.Other(_hotSeat);   // hand over the seat
-        }
-        catch (InvalidOperationException ex)
-        {
-            DraftHint.Text = ex.Message;
-            return;
-        }
-        RefreshDraft();
-    }
-
+    // -------------------------------------------------------------- Rendering
     private void RefreshDraft()
     {
-        if (_draft is null) return;
-        var d = _draft;
-        var step = d.Current;
+        var s = _draft.State;
+        var running = _draft.Active && s is not null;
+
+        DraftSetup.Visibility = running && s!.Full
+            ? Visibility.Collapsed : Visibility.Visible;
+        VersusBar.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+        BoardPanel.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+        DraftEmpty.Visibility = running ? Visibility.Collapsed : Visibility.Visible;
+
+        if (running && !s!.Full && _draft.JoinCode is { Length: > 0 } code)
+        {
+            RoomCodePanel.Visibility = Visibility.Visible;
+            RoomCodeText.Text = code;
+        }
+        else RoomCodePanel.Visibility = Visibility.Collapsed;
+
+        if (_draft.LastError is { Length: > 0 } err) ShowDraftError(err);
+        else DraftErrorBar.Visibility = Visibility.Collapsed;
+
+        if (!running) return;
+        RenderVersus(s!);
+        RenderBoard(s!);
+        RenderPlan(s!);
+    }
+
+    private void RenderVersus(DraftStateDto s)
+    {
+        var you = s.Your_Side ?? "A";
+        var opp = you == "A" ? "B" : "A";
+        YouSide.Text = you;
+        OppSide.Text = opp;
+        YouName.Text = s.Seats.TryGetValue(you, out var yn) ? yn : "you";
+        OppName.Text = s.Seats.TryGetValue(opp, out var on)
+            ? on : Loc.T("draft.waiting_for_player");
+
+        // "Locked in" is the only thing said about the opponent during a blind
+        // pick — the server sends nothing more, and nothing more is needed.
+        YouStatus.Text = s.Locked_In.Contains(you) ? Loc.T("draft.locked_in") : "";
+        OppStatus.Text = s.Locked_In.Contains(opp) ? Loc.T("draft.locked_in") : "";
 
         DraftProgress.Text = Loc.T("draft.progress",
-            Math.Min(d.StepIndex + 1, d.Steps.Count), d.Steps.Count);
-        if (step is null)
+            Math.Min(s.Step_Index + 1, s.Step_Total), s.Step_Total);
+        LockedLabel.Text = s.Your_Pending_Pick is { Length: > 0 } p
+            ? Loc.T("draft.you_locked", s.Display(p)) : "";
+
+        if (s.Done)
         {
-            DraftStepText.Text = Loc.T("draft.finished");
-            DraftHint.Text = Loc.T("draft.finished_hint");
+            TurnBanner.Text = Loc.T("draft.finished");
+            TurnBanner.Foreground = (Brush)FindResource("Win");
+            TurnSub.Text = Loc.T("draft.finished_hint");
+            TimerBar.Width = 0;
+            return;
         }
-        else
+        if (!s.Full)
         {
-            DraftStepText.Text = step.Describe();
-            DraftHint.Text = step.Side is null
-                ? Loc.T("draft.hint_blind", _hotSeat)
-                : Loc.T("draft.hint_click");
+            TurnBanner.Text = Loc.T("draft.waiting_for_player");
+            TurnBanner.Foreground = (Brush)FindResource("Warn");
+            TurnSub.Text = Loc.T("draft.share_code");
+            TimerBar.Width = 0;
+            return;
         }
 
-        DraftStrike.Text = d.NeutralStrike is null ? ""
-            : Loc.T("draft.strike", d.NeutralStrike);
-        var bans = d.Steps.Count(s => s.Action == DraftAction.BanMap && s.Side == DraftSide.A);
-        var picks = d.Steps.Count(s => s.Action == DraftAction.PickMap && s.Side == DraftSide.A);
-        DraftFairness.Text = Loc.T("draft.fairness", bans, picks);
-
-        var activeSide = step?.Side ?? _hotSeat;
-        var legal = step is null ? new List<string>() : d.LegalOptions(activeSide);
-        var isMapStep = step?.Action is DraftAction.BanMap or DraftAction.PickMap;
-        var isBan = step?.Action is DraftAction.BanMap or DraftAction.BanCommander;
-
-        MapTiles.ItemsSource = d.MapPool.Select(m => TileFor(
-            m, m,
-            banned: d.BannedMaps.Contains(m),
-            picked: d.PickedMaps.Values.Contains(m),
-            pickedLabel: d.PickedMaps.FirstOrDefault(kv => kv.Value == m).Key is int g
-                && g > 0 ? Loc.T("draft.game_short", g) : null,
-            enabled: isMapStep && legal.Contains(m),
-            isBanStep: isBan)).ToList();
-
-        var plan = d.Plan();
-        CommanderTiles.ItemsSource = d.CommanderPool.Select(c => TileFor(
-            CommanderNames.Display(c), c,
-            banned: d.BannedCommanders.Contains(c),
-            picked: plan.Any(p => p.CommanderA == c || p.CommanderB == c),
-            pickedLabel: plan.FirstOrDefault(p => p.CommanderA == c || p.CommanderB == c)
-                is DraftEngine.PlannedGame pg ? Loc.T("draft.game_short", pg.Game) : null,
-            enabled: step?.Action is DraftAction.BanCommander
-                         or DraftAction.PickCommander && legal.Contains(c),
-            isBanStep: isBan)).ToList();
-
-        PlanList.ItemsSource = plan.Select(p => new
+        var mine = s.YourTurn && s.Your_Pending_Pick is null;
+        TurnBanner.Text = mine ? Loc.T("draft.your_turn") : Loc.T("draft.their_turn");
+        TurnBanner.Foreground = (Brush)FindResource(mine ? "Accent" : "TextMid");
+        TurnSub.Text = s.Action switch
         {
-            Title = Loc.T("draft.game", p.Game, p.Map ?? "—"),
-            Tag = p.Decider ? Loc.T("draft.decider")
-                : p.PickedBy is null ? "" : Loc.T("draft.picked_by", p.PickedBy),
-            Commanders = p.CommanderA is null && p.CommanderB is null
-                ? Loc.T("draft.commanders_open")
-                : $"{CommanderNames.Display(p.CommanderA ?? "?")} vs " +
-                  $"{CommanderNames.Display(p.CommanderB ?? "?")}",
+            "ban_map" => Loc.T("draft.sub_ban_map"),
+            "pick_map" => Loc.T("draft.sub_pick_map"),
+            "ban_commander" => Loc.T("draft.sub_ban_commander"),
+            "pick_commander" => Loc.T("draft.sub_pick_commander"),
+            _ => "",
+        };
+
+        // The bar is a fraction of the step budget rather than an animation, so
+        // it can only ever show what the server reported.
+        var left = s.Seconds_Left ?? 0;
+        TimerBar.Width = Math.Max(0, Math.Min(200, 200 * left / 30.0));
+        TimerBar.Background = (Brush)FindResource(left <= 5 ? "Loss" : "Accent");
+    }
+
+    private void RenderBoard(DraftStateDto s)
+    {
+        MapTiles.ItemsSource = s.Map_Pool.Select(m =>
+        {
+            var banned = s.Banned_Maps.Contains(m);
+            var game = s.Picked_Maps.FirstOrDefault(kv => kv.Value == m).Key;
+            var picked = game is not null;
+            return Tile(m, m, banned, picked,
+                        picked ? Loc.T("draft.game_short", game!) : null,
+                        s.IsMapStep && s.YourTurn && s.Options.Contains(m),
+                        s.IsBanStep);
+        }).ToList();
+
+        var inPlan = s.Plan
+            .SelectMany(g => new[] { g.Commander_A, g.Commander_B })
+            .Where(c => c is not null).ToHashSet();
+        CommanderTiles.ItemsSource = s.Commander_Names.Keys.Select(c =>
+        {
+            var banned = s.Banned_Commanders.Contains(c);
+            var chosen = inPlan.Contains(c) || s.Your_Pending_Pick == c;
+            var note = s.Your_Pending_Pick == c ? Loc.T("draft.locked_in")
+                     : inPlan.Contains(c) ? Loc.T("draft.state_picked") : null;
+            return Tile(s.Display(c), c, banned, chosen, note,
+                        !s.IsMapStep && s.YourTurn && s.Options.Contains(c),
+                        s.IsBanStep);
         }).ToList();
     }
 
-    private object TileFor(string label, string id, bool banned, bool picked,
-                           string? pickedLabel, bool enabled, bool isBanStep)
+    private void RenderPlan(DraftStateDto s)
     {
-        // Banned and picked have to be distinguishable at a glance — a draft
-        // is decided in seconds.
-        var bg = banned ? "#3A1F22" : picked ? "#1F3A2C" : enabled ? "#262B36" : "#1A1D24";
-        var fg = banned || (!enabled && !picked) ? "TextLow" : "TextHi";
+        DraftStrike.Text = s.Neutral_Strike is { Length: > 0 } n
+            ? Loc.T("draft.strike", n) : "";
+        DraftFairness.Text = s.Done ? Loc.T("draft.finished_hint") : "";
+        PlanList.ItemsSource = s.Plan.Select(g => new
+        {
+            Title = Loc.T("draft.game", g.Game, g.Map ?? "—"),
+            Tag = g.Decider ? Loc.T("draft.decider")
+                : g.Map_Picked_By is null ? "" : Loc.T("draft.picked_by", g.Map_Picked_By),
+            Commanders = g.Commander_A is null && g.Commander_B is null
+                ? Loc.T("draft.commanders_open")
+                : $"{s.Display(g.Commander_A ?? "?")}  vs  {s.Display(g.Commander_B ?? "?")}",
+            Accent = (Brush)FindResource(g.Decider ? "Warn" : "Stroke"),
+        }).ToList();
+    }
+
+    /// <summary>
+    /// One tile. Banned, picked, playable and idle have to be distinguishable
+    /// at a glance — a draft step is decided in seconds.
+    /// </summary>
+    private object Tile(string label, string id, bool banned, bool picked,
+                        string? note, bool enabled, bool isBanStep)
+    {
+        var bg = banned ? "#3A1F22" : picked ? "#1B3327"
+               : enabled ? "#242935" : "#191C23";
         return new
         {
             Id = id,
             Label = label,
-            State = banned ? Loc.T("draft.state_banned") : pickedLabel ?? (enabled
-                ? (isBanStep ? Loc.T("draft.state_ban") : Loc.T("draft.state_pick")) : ""),
+            Note = note ?? (enabled
+                ? (isBanStep ? Loc.T("draft.state_ban") : Loc.T("draft.state_pick"))
+                : banned ? Loc.T("draft.state_banned") : ""),
             Enabled = enabled,
             Background = new SolidColorBrush(
                 (Color)ColorConverter.ConvertFromString(bg)),
-            Foreground = (Brush)FindResource(fg),
-            StateBrush = banned ? (Brush)FindResource("Loss")
-                       : picked ? (Brush)FindResource("Win")
-                       : (Brush)FindResource("TextLow"),
+            Border = (Brush)FindResource(enabled ? "Accent"
+                : banned ? "Loss" : picked ? "Win" : "Stroke"),
+            Thickness = new Thickness(enabled ? 2 : 1),
+            Fore = (Brush)FindResource(banned || (!enabled && !picked)
+                ? "TextLow" : "TextHi"),
+            NoteBrush = (Brush)FindResource(banned ? "Loss"
+                : picked ? "Win" : enabled ? "Accent" : "TextLow"),
         };
     }
 

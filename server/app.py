@@ -145,6 +145,53 @@ def steam_callback(request: Request, ladder_session: str | None = Cookie(None),
     return RedirectResponse("/", status_code=303)
 
 
+class NativeLogin(BaseModel):
+    code: str
+    #: Must be one of the URIs registered on the Discord application. Discord
+    #: checks it when issuing the code and again on exchange, and the two have
+    #: to agree, so the client sends the one it used.
+    redirect_uri: str = "http://localhost"
+
+
+@app.get("/auth/discord/config")
+def discord_config():
+    """What the desktop client needs to talk to the local Discord app.
+
+    Only the client id, which is public by design — it appears in every OAuth
+    URL. The secret stays here: an .exe that anyone can download is not a place
+    to keep one.
+    """
+    client_id = os.environ.get("DISCORD_CLIENT_ID")
+    return {"client_id": client_id,
+            "native_login": bool(client_id),
+            "redirect_uri": os.environ.get("DISCORD_NATIVE_REDIRECT",
+                                           "http://localhost")}
+
+
+@app.post("/auth/discord/native")
+def discord_native(body: NativeLogin):
+    """Log in with a code obtained from the local Discord client.
+
+    Same verification as the browser callback — the code is exchanged with the
+    secret and the profile is read back. What is missing is the `state`, and
+    that is sound here: state exists to tie a *browser redirect* to a login we
+    started, and there is no redirect in this flow. The code came from Discord
+    over a local pipe to this machine, and it is still worthless without the
+    secret held on this server.
+    """
+    profile = guard(exchange_discord_code, body.code, body.redirect_uri)
+    acc = auth.login_discord(profile["id"], profile["name"])
+    session = auth.start_session(acc)
+    store.save_account(acc)
+    store.save_session(session)
+    return {"token": session.token,
+            "expires_at": session.expires_at,
+            "discord": acc.discord_name,
+            "ufer_name": acc.ufer_name,
+            "steam_id": acc.steam_id,
+            "tracking_consent": acc.tracking_consent}
+
+
 @app.post("/auth/pair")
 def auth_pair(ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):

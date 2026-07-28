@@ -135,15 +135,15 @@
 
       <DockPanel Grid.Row="0" Margin="0,0,0,16" x:Name="HeaderDraft"
                  Visibility="Collapsed">
+        <!-- Format only. Hosting and joining live in the setup strip on the
+             board, where the code that has to be shared is also shown. -->
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-          <ComboBox x:Name="DraftFormat" Width="90" Margin="0,0,8,0"
+          <ComboBox x:Name="DraftFormat" Width="90"
                     SelectedIndex="1" VerticalContentAlignment="Center">
             <ComboBoxItem Content="Bo1"/>
             <ComboBoxItem Content="Bo3"/>
             <ComboBoxItem Content="Bo5"/>
           </ComboBox>
-          <Button x:Name="BtnNewDraft" Content="{core:T draft.new}"
-                  Style="{StaticResource BtnAccent}" Click="BtnNewDraft_Click"/>
         </StackPanel>
         <StackPanel>
           <TextBlock Text="{core:T draft.headline}" FontSize="21" FontWeight="Bold"/>
@@ -193,86 +193,208 @@
       <Grid Grid.Row="1" x:Name="ViewDraft" Visibility="Collapsed">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*"/>
-          <ColumnDefinition Width="330"/>
+          <ColumnDefinition Width="320"/>
         </Grid.ColumnDefinitions>
 
-        <Border Grid.Column="0" Style="{StaticResource Card}" Padding="20">
+        <!-- ===================== Board ===================== -->
+        <Border Grid.Column="0" Style="{StaticResource Card}" Padding="0">
           <DockPanel>
-            <!-- Whose turn it is -->
-            <Border DockPanel.Dock="Top" CornerRadius="8" Padding="16,13"
-                    Background="{StaticResource BgPanel}"
-                    BorderBrush="{StaticResource Accent}" BorderThickness="2,0,0,0">
-              <DockPanel>
-                <TextBlock DockPanel.Dock="Right" x:Name="DraftProgress"
-                           Foreground="{StaticResource TextLow}" FontSize="12"
-                           VerticalAlignment="Center"/>
-                <StackPanel>
-                  <TextBlock x:Name="DraftStepText" FontSize="15" FontWeight="SemiBold"
-                             Text="{core:T draft.none}"/>
-                  <TextBlock x:Name="DraftHint" Style="{StaticResource Label}"
-                             Margin="0,3,0,0"
-                             Text="{core:T draft.hint_start}"/>
+
+            <!-- Setup strip: shown until a draft is running. -->
+            <Border DockPanel.Dock="Top" x:Name="DraftSetup"
+                    Background="{StaticResource BgPanel}" Padding="20,16"
+                    CornerRadius="10,10,0,0">
+              <StackPanel Orientation="Horizontal">
+                <StackPanel Margin="0,0,24,0">
+                  <TextBlock Text="{core:T draft.host_headline}"
+                             Style="{StaticResource Label}"/>
+                  <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                    <Button x:Name="BtnHostDraft" Content="{core:T draft.host}"
+                            Style="{StaticResource BtnAccent}"
+                            Click="BtnHostDraft_Click"/>
+                  </StackPanel>
                 </StackPanel>
-              </DockPanel>
+                <Border Width="1" Background="{StaticResource Stroke}"
+                        Margin="0,2,24,2"/>
+                <StackPanel>
+                  <TextBlock Text="{core:T draft.join_headline}"
+                             Style="{StaticResource Label}"/>
+                  <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                    <TextBox x:Name="JoinCodeBox" Width="130" Height="32"
+                             FontFamily="Consolas" FontSize="14"
+                             VerticalContentAlignment="Center"
+                             Margin="0,0,8,0"/>
+                    <Button x:Name="BtnJoinDraft" Content="{core:T draft.join}"
+                            Style="{StaticResource Btn}" Click="BtnJoinDraft_Click"/>
+                  </StackPanel>
+                </StackPanel>
+                <StackPanel x:Name="RoomCodePanel" Visibility="Collapsed"
+                            Margin="24,0,0,0">
+                  <TextBlock Text="{core:T draft.your_code}"
+                             Style="{StaticResource Label}"/>
+                  <TextBlock x:Name="RoomCodeText" FontFamily="Consolas"
+                             FontSize="22" FontWeight="Bold"
+                             Foreground="{StaticResource Accent}"
+                             Margin="0,4,0,0"/>
+                </StackPanel>
+              </StackPanel>
             </Border>
 
-            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,16,0,0">
-              <StackPanel>
-                <TextBlock Text="{core:T draft.maps}" Style="{StaticResource Label}"
-                           Margin="0,0,0,8"/>
-                <ItemsControl x:Name="MapTiles">
-                  <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
-                  </ItemsControl.ItemsPanel>
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                      <Button Style="{StaticResource Btn}" Margin="0,0,8,8"
-                              Width="150" Height="52"
-                              Background="{Binding Background}"
-                              IsEnabled="{Binding Enabled}"
-                              Tag="{Binding Id}" Click="Tile_Click">
-                        <StackPanel>
-                          <TextBlock Text="{Binding Label}" FontSize="13"
-                                     Foreground="{Binding Foreground}"
-                                     TextTrimming="CharacterEllipsis"/>
-                          <TextBlock Text="{Binding State}" FontSize="10"
-                                     Foreground="{Binding StateBrush}"/>
-                        </StackPanel>
-                      </Button>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
+            <!-- Versus header. Your side is always on the left, so the board
+                 reads the same way regardless of which seat you got. -->
+            <Border DockPanel.Dock="Top" x:Name="VersusBar"
+                    Visibility="Collapsed" Padding="20,14"
+                    Background="{StaticResource BgPanel}">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
 
-                <TextBlock Text="{core:T draft.commanders}" Style="{StaticResource Label}"
-                           Margin="0,14,0,8"/>
-                <ItemsControl x:Name="CommanderTiles">
-                  <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
-                  </ItemsControl.ItemsPanel>
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                      <Button Style="{StaticResource Btn}" Margin="0,0,8,8"
-                              Width="126" Height="52"
-                              Background="{Binding Background}"
-                              IsEnabled="{Binding Enabled}"
-                              Tag="{Binding Id}" Click="Tile_Click">
-                        <StackPanel>
-                          <TextBlock Text="{Binding Label}" FontSize="13"
-                                     Foreground="{Binding Foreground}"
-                                     TextTrimming="CharacterEllipsis"/>
-                          <TextBlock Text="{Binding State}" FontSize="10"
-                                     Foreground="{Binding StateBrush}"/>
-                        </StackPanel>
-                      </Button>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                  <Border x:Name="YouBadge" Width="30" Height="30"
+                          CornerRadius="15" Background="{StaticResource Accent}">
+                    <TextBlock x:Name="YouSide" Foreground="White"
+                               FontWeight="Bold" FontSize="14"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"/>
+                  </Border>
+                  <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                    <TextBlock x:Name="YouName" FontSize="14"
+                               FontWeight="SemiBold"/>
+                    <TextBlock x:Name="YouStatus" Style="{StaticResource Label}"
+                               Margin="0,1,0,0"/>
+                  </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Margin="20,0">
+                  <TextBlock x:Name="TurnBanner" FontSize="15"
+                             FontWeight="Bold" HorizontalAlignment="Center"/>
+                  <TextBlock x:Name="TurnSub" Style="{StaticResource Label}"
+                             HorizontalAlignment="Center" Margin="0,2,0,6"/>
+                  <!-- Countdown. The bar is driven from the server's value, so
+                       it cannot be stalled by pausing this process. -->
+                  <Border Width="200" Height="5" CornerRadius="3"
+                          Background="{StaticResource BgHover}">
+                    <Border x:Name="TimerBar" HorizontalAlignment="Left"
+                            Width="200" Height="5" CornerRadius="3"
+                            Background="{StaticResource Accent}"/>
+                  </Border>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal"
+                            HorizontalAlignment="Right">
+                  <StackPanel Margin="0,0,10,0" VerticalAlignment="Center">
+                    <TextBlock x:Name="OppName" FontSize="14"
+                               FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                    <TextBlock x:Name="OppStatus" Style="{StaticResource Label}"
+                               HorizontalAlignment="Right" Margin="0,1,0,0"/>
+                  </StackPanel>
+                  <Border Width="30" Height="30" CornerRadius="15"
+                          Background="{StaticResource BgHover}">
+                    <TextBlock x:Name="OppSide"
+                               Foreground="{StaticResource TextHi}"
+                               FontWeight="Bold" FontSize="14"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"/>
+                  </Border>
+                </StackPanel>
+              </Grid>
+            </Border>
+
+            <Border DockPanel.Dock="Bottom" x:Name="DraftErrorBar"
+                    Visibility="Collapsed" Background="#3A1F22"
+                    Padding="16,10">
+              <TextBlock x:Name="DraftError" Foreground="{StaticResource TextHi}"
+                         FontSize="12" TextWrapping="Wrap"/>
+            </Border>
+
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20,18">
+              <StackPanel>
+                <TextBlock x:Name="DraftEmpty" Text="{core:T draft.hint_start}"
+                           Foreground="{StaticResource TextMid}"
+                           TextWrapping="Wrap" FontSize="13"/>
+
+                <StackPanel x:Name="BoardPanel" Visibility="Collapsed">
+                  <DockPanel Margin="0,0,0,10">
+                    <TextBlock DockPanel.Dock="Right" x:Name="DraftProgress"
+                               Style="{StaticResource Label}"/>
+                    <TextBlock Text="{core:T draft.maps}"
+                               Style="{StaticResource Label}"/>
+                  </DockPanel>
+                  <ItemsControl x:Name="MapTiles">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Button Style="{StaticResource Btn}" Margin="0,0,8,8"
+                                Width="158" Height="58" Padding="12,0"
+                                Background="{Binding Background}"
+                                BorderBrush="{Binding Border}"
+                                BorderThickness="{Binding Thickness}"
+                                IsEnabled="{Binding Enabled}"
+                                Tag="{Binding Id}" Click="Tile_Click"
+                                HorizontalContentAlignment="Stretch">
+                          <DockPanel>
+                            <TextBlock DockPanel.Dock="Bottom"
+                                       Text="{Binding Note}" FontSize="10"
+                                       Foreground="{Binding NoteBrush}"/>
+                            <TextBlock Text="{Binding Label}" FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Foreground="{Binding Fore}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"/>
+                          </DockPanel>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+
+                  <DockPanel Margin="0,18,0,10">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                      <TextBlock x:Name="LockedLabel"
+                                 Style="{StaticResource Label}"/>
+                    </StackPanel>
+                    <TextBlock Text="{core:T draft.commanders}"
+                               Style="{StaticResource Label}"/>
+                  </DockPanel>
+                  <ItemsControl x:Name="CommanderTiles">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Button Style="{StaticResource Btn}" Margin="0,0,8,8"
+                                Width="126" Height="50" Padding="10,0"
+                                Background="{Binding Background}"
+                                BorderBrush="{Binding Border}"
+                                BorderThickness="{Binding Thickness}"
+                                IsEnabled="{Binding Enabled}"
+                                Tag="{Binding Id}" Click="Tile_Click"
+                                HorizontalContentAlignment="Stretch">
+                          <DockPanel>
+                            <TextBlock DockPanel.Dock="Bottom"
+                                       Text="{Binding Note}" FontSize="10"
+                                       Foreground="{Binding NoteBrush}"/>
+                            <TextBlock Text="{Binding Label}" FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{Binding Fore}"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"/>
+                          </DockPanel>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
               </StackPanel>
             </ScrollViewer>
           </DockPanel>
         </Border>
 
-        <!-- Ergebnis -->
+        <!-- ===================== Result ===================== -->
         <Border Grid.Column="1" Style="{StaticResource Card}" Margin="14,0,0,0"
                 Padding="18">
           <DockPanel>
@@ -282,13 +404,15 @@
                          Foreground="{StaticResource Warn}" TextWrapping="Wrap"
                          Margin="0,6,0,0"/>
               <TextBlock x:Name="DraftFairness" Style="{StaticResource Label}"
-                         Foreground="{StaticResource Win}" Margin="0,4,0,10"/>
+                         Foreground="{StaticResource Win}" Margin="0,4,0,10"
+                         TextWrapping="Wrap"/>
             </StackPanel>
             <ItemsControl x:Name="PlanList">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
                   <Border Background="{StaticResource BgPanel}" CornerRadius="6"
-                          Padding="12,10" Margin="0,0,0,6">
+                          Padding="12,10" Margin="0,0,0,6"
+                          BorderBrush="{Binding Accent}" BorderThickness="0,0,0,2">
                     <StackPanel>
                       <DockPanel>
                         <TextBlock DockPanel.Dock="Right" Text="{Binding Tag}"
@@ -298,7 +422,7 @@
                       </DockPanel>
                       <TextBlock Text="{Binding Commanders}" FontSize="12"
                                  Foreground="{StaticResource TextMid}"
-                                 Margin="0,3,0,0"/>
+                                 Margin="0,3,0,0" TextWrapping="Wrap"/>
                     </StackPanel>
                   </Border>
                 </DataTemplate>

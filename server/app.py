@@ -30,12 +30,14 @@ import secrets
 
 from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ladder.modes import BY_KEY
 from ladder.tournament import Participant, Tournament
 
 from . import page
+from .brackets import viewer_data
 from .auth import (
     AuthError, AuthService, Grant, Role, discord_authorize_url,
     exchange_discord_code, steam_openid_url, verify_steam_openid,
@@ -76,6 +78,14 @@ ranking = Ranking()
 # shared ranking was the imported spreadsheet and nothing else — winning a
 # match on this ladder changed no number anyone else could see.
 results = ResultService(auth, store, ranking)
+
+# The bracket viewer (MIT, see server/static/brackets-viewer.LICENSE) is served
+# from here rather than from a CDN: a ladder reachable through a tunnel should
+# not stop drawing brackets because jsdelivr is unreachable, and the whole point
+# of vendoring is that the version cannot change under us.
+_STATIC = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_STATIC):
+    app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 
 BASE_URL = os.environ.get("LADDER_BASE_URL", "http://localhost:8000")
 SESSION_COOKIE = "ladder_session"
@@ -1126,7 +1136,7 @@ def _bracket_page(acc, tid: str, error: str = "") -> HTMLResponse:
                   for r in t.bracket() for m in r["matches"])
     return HTMLResponse(page.bracket(
         name=t.name, mode=t.mode.label, best_of=t.series_length(),
-        rounds=t.bracket(), tid=tid,
+        rounds=t.bracket(), tid=tid, data=viewer_data(t, tid),
         champion=t.champion.name if t.champion else None,
         is_admin=acc.may("link_other_account"),
         can_report=acc.may("run_tournament"),
@@ -1146,6 +1156,21 @@ def bracket_page(tid: str, ladder_session: str | None = Cookie(None),
     if acc is None:
         return _login_first(f"/manage/tournaments/{tid}")
     return _bracket_page(acc, tid)
+
+
+@app.get("/tournaments/{tid}/viewer")
+def tournament_viewer_data(tid: str):
+    """The bracket in `brackets-model` shape.
+
+    Public, like `GET /tournaments/{tid}`: it is the same information in the
+    format a bracket viewer reads. Having it as its own route means the page is
+    not the only thing that can draw this tournament.
+    """
+    try:
+        t = store.load_tournament(tid)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    return viewer_data(t, tid)
 
 
 @app.post("/manage/tournaments/{tid}/rename", response_class=HTMLResponse)

@@ -16,6 +16,7 @@ JavaScript beyond a copy button: it is three pieces of text and two forms.
 from __future__ import annotations
 
 import html
+import json
 
 _CSS = """
 :root { color-scheme: dark; }
@@ -49,28 +50,54 @@ ol { padding-left: 20px; color: #A7B0C0; font-size: 14px; }
 li { margin: 6px 0; }
 select, textarea, input { font: inherit; color: #F2F4F8; background: #262B36;
         border: 1px solid #2A2F3A; border-radius: 6px; padding: 9px; }
-/* A bracket read as a bracket: rounds side by side, matches spread down the
-   column so it is visible who can meet whom. Scrolls sideways rather than
-   wrapping, because a wrapped bracket is not one. */
-.bracket { display: flex; gap: 14px; align-items: stretch;
-           overflow-x: auto; padding-bottom: 8px; }
-.round { display: flex; flex-direction: column; justify-content: space-around;
-         min-width: 240px; flex: 1; }
-.round .card { margin-bottom: 10px; }
-@media (max-width: 700px) { .bracket { display: block; } }
 select { min-width: 180px; }
 a { color: #FF9E6B; }
 p { margin: 10px 0; }
 """
 
 
-def _shell(body: str) -> str:
+def _shell(body: str, head: str = "") -> str:
     return (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<title>Forts Ladder</title><style>" + _CSS + "</style></head>"
-        "<body><main>" + body + "</main></body></html>"
+        "<title>Forts Ladder</title><style>" + _CSS + "</style>"
+        + head +
+        "</head><body><main>" + body + "</main></body></html>"
     )
+
+
+#: The bracket viewer's stylesheet plus the variables that make it match the
+#: rest of this page. Only loaded where a bracket is drawn — every other page
+#: is still one file with no assets.
+_VIEWER_HEAD = (
+    "<link rel=stylesheet href='/static/brackets-viewer.min.css'>"
+    "<style>"
+    ":root{"
+    "--primary-background:#1E222B;"
+    "--secondary-background:#262B36;"
+    "--match-background:#1E222B;"
+    "--font-color:#F2F4F8;"
+    "--win-color:#3DD68C;"
+    "--loss-color:#F0616D;"
+    "--label-color:#6B7488;"
+    "--hint-color:#6B7488;"
+    "--connector-color:#2A2F3A;"
+    "--border-color:#2A2F3A;"
+    "--border-hover-color:#FF6B2C;"
+    "--round-margin:22px;"
+    "--match-width:200px;"
+    "--match-horizontal-padding:10px;"
+    "--match-vertical-padding:8px;"
+    "}"
+    # 620px is right for a form and far too narrow for four rounds of 240px, so
+    # this one page gets the room. The viewer scrolls inside itself beyond that
+    # rather than making the whole page scroll sideways.
+    "main{max-width:1240px;}"
+    ".brackets-viewer{overflow-x:auto;}"
+    # Its own h1 duplicates ours, and its group title says "Round 1" for a
+    # single-elimination stage that has no groups worth naming.
+    ".brackets-viewer h1,.brackets-viewer .group-name{display:none;}"
+    "</style>")
 
 
 def signed_out(login_url: str) -> str:
@@ -183,6 +210,23 @@ def _nav(is_admin: bool, can_host: bool) -> str:
 
 
 ROLE_NAMES = ["guest", "player", "caster", "admin", "owner"]
+
+
+def _for_script(value) -> str:
+    """JSON that cannot climb out of the <script> element it sits in.
+
+    `json.dumps` escapes quotes but not angle brackets, so a tournament called
+    `</script><img src=x onerror=…>` ends the script block and runs. The three
+    escapes below are valid JSON — the parser sees the same string — and inert
+    in HTML. The existing markup-injection test is what caught this.
+    """
+    # The replacements are the six-character escape *sequences*, not the
+    # characters they stand for: "\u003c" written in Python source is just "<"
+    # again, a no-op that looks exactly like a fix. Hence the raw strings.
+    return (json.dumps(value)
+            .replace("<", r"\u003c")
+            .replace(">", r"\u003e")
+            .replace("&", r"\u0026"))
 
 
 def _error(message: str) -> str:
@@ -363,70 +407,64 @@ def tournaments(*, listing: list[dict], is_admin: bool,
 def bracket(*, name: str, mode: str, rounds: list[dict], champion: str | None,
             tid: str, is_admin: bool, best_of: int, error: str = "",
             can_report: bool = True, can_host: bool = True,
-            entrants: list[dict] | None = None, editable: bool = False) -> str:
-    """The bracket, drawn as one, with a result form on each open match.
+            entrants: list[dict] | None = None, editable: bool = False,
+            data: dict | None = None) -> str:
+    """The bracket, drawn as one, with a result form per open match.
 
-    Rounds are columns and each match is a box, because that is what a bracket
-    is — a list of rounds one under the other made it impossible to see who
-    would meet whom, which is the only thing a bracket is for.
+    The drawing is `brackets-viewer.js` — connector lines, byes that skip a
+    round, boxes spread so the pairings line up. Written by hand this was a
+    column of cards per round, which is not a bracket: it made it impossible to
+    see who could meet whom, which is the only thing a bracket is for. The
+    library is vendored rather than loaded from a CDN, because a ladder that is
+    reachable through a tunnel should not stop drawing when jsdelivr is
+    unreachable.
 
-    Readable by anyone with an account: an entrant wants to see the bracket
-    they are in. Only a host or referee gets the report forms, and renaming
-    stops the moment a result is in — the pairings are already built on the
-    names.
+    The forms below it are plain HTML on purpose. The viewer can call back on a
+    click, but a result is a thing you type a score into, and a form that works
+    without any JavaScript is one less thing that can fail during a tournament.
+
+    Readable by anyone signed in — an entrant wants to see their own bracket.
+    Only a host or referee gets the forms.
     """
-    blocks = []
-    for r in rounds:
-        cards = []
-        for m in r["matches"]:
-            a, b = m.get("a_name"), m.get("b_name")
-            if m["winner"]:
-                state = (f"<span class=ok>{html.escape(m['winner'])}</span>"
-                         + (f" &nbsp;{m['score'][0]}:{m['score'][1]}"
-                            if m.get("score") else "")
-                         + (" <span class=muted>(bye)</span>" if m["bye"] else ""))
-                form = ""
-            elif m["ready"] and not can_report:
-                state = "<span class=warn>waiting for a result</span>"
-                form = ""
-            elif m["ready"]:
-                state = "<span class=warn>waiting for a result</span>"
-                # The winner is picked from the two entrants rather than typed:
-                # a free text field can name someone who is not in the match.
-                form = (
-                    "<form method=post action='/manage/tournaments/"
-                    f"{html.escape(tid)}/report'>"
-                    f"<input type=hidden name=match value='{html.escape(m['id'])}'>"
-                    "<p><select name=winner>"
-                    f"<option value='{html.escape(a or '')}'>{html.escape(a or '?')}</option>"
-                    f"<option value='{html.escape(b or '')}'>{html.escape(b or '?')}</option>"
-                    "</select> "
-                    + _input("score", f"{best_of // 2 + 1}:0", width="70px")
-                    + "</p><button class='btn sec'>Report</button></form>")
-            else:
-                state = "<span class=muted>waiting for entrants</span>"
-                form = ""
-            cards.append(
-                "<div class=card>"
-                "<div class=row><span class=val>"
-                f"{html.escape(a or '—')} vs {html.escape(b or '—')}</span>"
-                f"<span class=muted>{html.escape(m['id'])}</span></div>"
-                f"<div class=row><span class=muted>result</span>"
-                f"<span>{state}</span></div>"
-                + (f"<div style='margin-top:12px'>{form}</div>" if form else "")
-                + "</div>")
-        blocks.append("<div class=round>"
-                      f"<p class=label>{html.escape(r['round'])}</p>"
-                      + "".join(cards) + "</div>")
-
     head = (f"<h1>{html.escape(name)}</h1>"
             f"<p class=sub>{html.escape(mode)} · Bo{best_of}"
             + (f" · <span class=ok>won by {html.escape(champion)}</span>"
                if champion else "")
             + "</p>")
 
-    # Renaming, while it is still harmless. A typo in an entrant's name is the
-    # commonest thing to fix and used to mean rebuilding the whole bracket.
+    # The report forms, one per match that can be played. Grouped by round so
+    # the list reads in the same order as the bracket above it.
+    forms = ""
+    if can_report:
+        blocks = []
+        for r in rounds:
+            open_ones = [m for m in r["matches"]
+                         if m["ready"] and not m["winner"]]
+            for m in open_ones:
+                a, b = m.get("a_name"), m.get("b_name")
+                blocks.append(
+                    "<div class=card>"
+                    f"<div class=row><span class=val>{html.escape(a or '—')}"
+                    f" vs {html.escape(b or '—')}</span>"
+                    f"<span class=muted>{html.escape(r['round'])}</span></div>"
+                    "<form method=post action='/manage/tournaments/"
+                    f"{html.escape(tid)}/report' style='margin-top:10px'>"
+                    f"<input type=hidden name=match value='{html.escape(m['id'])}'>"
+                    # Picked from the two entrants rather than typed: free text
+                    # can name somebody who is not in the match.
+                    "<select name=winner>"
+                    f"<option value='{html.escape(a or '')}'>{html.escape(a or '?')}</option>"
+                    f"<option value='{html.escape(b or '')}'>{html.escape(b or '?')}</option>"
+                    "</select> "
+                    + _input("score", f"{best_of // 2 + 1}:0", width="80px")
+                    + " <button class='btn sec'>Report</button></form></div>")
+        forms = ("<p class=label>Waiting for a result</p>" + "".join(blocks)
+                 if blocks else
+                 "<div class=card><p class=sub style='margin:0'>Nothing to "
+                 "report right now.</p></div>")
+
+    # Renaming, while it is still harmless: a typo is the commonest thing to fix
+    # and used to mean building the bracket again from scratch.
     rename = ""
     if editable and entrants:
         rows = "".join(
@@ -441,8 +479,32 @@ def bracket(*, name: str, mode: str, rounds: list[dict], champion: str | None,
         rename = ("<div class=card><p class=label>Entrants</p>" + rows
                   + "<p class=sub>Possible until the first result is reported: "
                     "after that the pairings rest on these names.</p></div>")
+
+    payload = _for_script(data or {})
+    viewer = (
+        "<div class=card style='padding:10px'>"
+        "<div class='brackets-viewer'></div></div>"
+        "<script src='/static/brackets-viewer.min.js'></script>"
+        "<script>\n"
+        "// Round names come from us, not from the library's counter: "
+        "\"Semi-final\" beats \"Round 2\", and the server already computes "
+        "them for the client too.\n"
+        f"const data = {payload};\n"
+        "const names = " + _for_script(
+            {r["round_key"] if "round_key" in r else str(i + 1): r["round"]
+             for i, r in enumerate(rounds)}) + ";\n"
+        "window.bracketsViewer.render(data, {\n"
+        "  customRoundName: (info) => Object.values(names)[info.roundNumber - 1],\n"
+        "  clear: true,\n"
+        "}).catch(e => {\n"
+        "  // Say so rather than leaving an empty box: a bracket that failed to\n"
+        "  // draw looks exactly like a tournament with no matches.\n"
+        "  document.querySelector('.brackets-viewer').textContent =\n"
+        "    'The bracket could not be drawn: ' + e.message;\n"
+        "});\n"
+        "</script>")
+
     return _shell(head + _nav(is_admin, can_host) + _error(error)
                   + ("<p><a class='btn sec' href='/manage/tournaments'>"
                      "All tournaments</a></p>" if can_host else "")
-                  + "<div class=bracket>" + "".join(blocks) + "</div>"
-                  + rename)
+                  + viewer + forms + rename, head=_VIEWER_HEAD)

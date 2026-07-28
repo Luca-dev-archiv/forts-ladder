@@ -99,7 +99,7 @@ intended default: the ladder counts nothing until someone says it should.
 | **Open ladder** | A second, always-playable rating with re-tuned constants — never mixed with the first |
 | **Results that accumulate** | A finished series is reported to the server, and the shared ranking is recomputed from every reported series — so the standings grow with what is played |
 | **Map & commander draft** | Symmetric veto with blind commander picks, a turn timer, and after-the-fact verification against the log |
-| **Tournaments** | Single elimination with byes, seeded by rating, by the listed order or by draw; Bo1 to Bo7; persisted in SQLite |
+| **Tournaments** | Single elimination with byes, seeded by rating, by the listed order or by draw; Bo1 to Bo7; drawn as a real bracket with [brackets-viewer.js](https://github.com/Drarig29/brackets-viewer.js); persisted in SQLite |
 | **Live matches** | See what is being played and ask the host for a spectator slot |
 | **Slot management** | Nine clients, spectators included — planned correctly instead of discovered at the tournament |
 | **Rule checks** | Map pools, monthly quotas, opponent eligibility, commander reuse |
@@ -336,6 +336,18 @@ Issues and pull requests welcome. Two house rules:
    worth more than a description of the loop.
 
 ---
+
+## Third-party code
+
+[brackets-viewer.js](https://github.com/Drarig29/brackets-viewer.js) (MIT) is
+vendored under `server/static/` and draws the tournament brackets. It is served
+from the ladder itself rather than from a CDN: an instance reachable through a
+tunnel should not stop drawing brackets because someone else's CDN is
+unreachable, and a vendored copy cannot change version underneath us. Its
+licence sits next to it.
+
+The tournament *logic* is not borrowed — seeding, byes and results stay in
+`ladder/tournament.py`, which knows this league's rules. Only the drawing is.
 
 ## License
 

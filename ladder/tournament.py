@@ -91,6 +91,16 @@ class Tournament:
     name: str
     participants: list[Participant]
     mode: Mode = TOURNAMENT_1V1
+    #: How the entrants are ordered into seeds.
+    #:
+    #: "rating" is the default and the right answer for a league event. The
+    #: other two exist because a host often knows the bracket they want:
+    #: "listed" takes the order they were typed in, which makes the pairings
+    #: exactly what the list says, and "random" is a draw.
+    seeding: str = "rating"
+    #: Overrides the mode's series length. A mode says Bo5 because that is what
+    #: it usually is, not because a host may never run a Bo3 cup.
+    best_of: int | None = None
 
     rounds: list[list[Match]] = field(init=False, default_factory=list)
 
@@ -100,8 +110,24 @@ class Tournament:
         self._build()
 
     # ----------------------------------------------------------- Building
+    def series_length(self) -> int:
+        """What a match in this tournament is played as."""
+        return self.best_of or self.mode.best_of
+
+    def _seeded(self) -> list[Participant]:
+        if self.seeding == "listed":
+            return list(self.participants)
+        if self.seeding == "random":
+            # Seeded from the names, so the same entrants always produce the
+            # same draw: a bracket that reshuffled every time it was rebuilt
+            # from storage would not be the same tournament.
+            import hashlib
+            return sorted(self.participants, key=lambda p: hashlib.sha256(
+                f"{self.name}|{p.name}".encode()).hexdigest())
+        return sorted(self.participants, key=lambda p: -p.rating)
+
     def _build(self) -> None:
-        ordered = sorted(self.participants, key=lambda p: -p.rating)
+        ordered = self._seeded()
         size = 2 ** math.ceil(math.log2(len(ordered)))
         # Seed -> entrant; missing seats stay empty and become byes.
         by_seed: dict[int, Participant | None] = {
@@ -188,16 +214,41 @@ class Tournament:
                 f"{winner_name!r} does not play in {match_id} "
                 f"({m.a.name} vs {m.b.name})")
         if score is not None:
-            needed = self.mode.best_of // 2 + 1
+            needed = self.series_length() // 2 + 1
             if max(score) < needed:
                 raise ValueError(
                     f"{score[0]}:{score[1]} does not decide a "
-                    f"Bo{self.mode.best_of} — {needed} wins are needed")
+                    f"Bo{self.series_length()} — {needed} wins are needed")
         m.winner = winner
         m.score = score
         m.match_keys = match_keys or []
         self._propagate()
         return m
+
+    def rename(self, seat: int, name: str) -> None:
+        """Correct an entrant's name.
+
+        Only before anything has been reported: from the first result on, the
+        pairings and the stored results both refer to these names, and changing
+        one would silently detach a result from the player who earned it.
+        """
+        if any(m.winner is not None and not m.bye
+               for r in self.rounds for m in r):
+            raise ValueError("a result has been reported — names are fixed now")
+        name = name.strip()
+        if not name:
+            raise ValueError("an entrant needs a name")
+        if not 0 <= seat < len(self.participants):
+            raise KeyError(f"no entrant {seat}")
+        if any(p.name == name for i, p in enumerate(self.participants)
+               if i != seat):
+            raise ValueError(f"{name!r} is already in this tournament")
+        old = self.participants[seat]
+        old.name = name
+        if old.members == [old.members[0]] and len(old.members) == 1:
+            old.members = [name]
+        self.rounds = []
+        self._build()
 
     # ------------------------------------------------------------- Queries
     def match(self, match_id: str) -> Match:

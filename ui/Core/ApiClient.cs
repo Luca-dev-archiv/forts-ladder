@@ -385,11 +385,25 @@ public sealed class MeDto
     public bool Verified { get; set; }
     public bool Tracking_Consent { get; set; }
 
+    /// <summary>A ladder name waiting for an admin to confirm it.</summary>
+    public string? Ufer_Claim { get; set; }
+
+    /// <summary>Steam display name as the server last heard it.</summary>
+    public string? Steam_Name { get; set; }
+
     /// <summary>
     /// Own grants — "tournament_host", "referee", … A host is usually a
     /// player by rank, so the role alone does not say what they may open.
     /// </summary>
     public List<string> Grants { get; set; } = new();
+}
+
+public sealed class NameClaimDto
+{
+    /// <summary>True when it took effect; false when a human has to confirm.</summary>
+    public bool Applied { get; set; }
+    public string? Ufer_Name { get; set; }
+    public string? Pending { get; set; }
 }
 
 public sealed class ReportResultDto

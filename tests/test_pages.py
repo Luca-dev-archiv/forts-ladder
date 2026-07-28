@@ -308,6 +308,96 @@ def test_no_other_persons_steam_id_reaches_a_players_page():
     assert me.steam_id in w.client.get("/", headers=plain).text
 
 
+# ------------------------------------------------ Held names and bracket setup
+def test_a_held_ladder_name_is_shown_and_can_be_confirmed():
+    """The route somebody listed under a different name needs. Refusing the
+    claim used to throw it away, so there was nothing for an admin to see."""
+    w = World()
+    _, owner = w.person("Owner", Role.OWNER)
+    player, ph = w.person("Player")
+
+    r = w.client.post("/me/ufer_name", headers=ph, json={"name": "TopSeed"})
+    assert r.status_code == 200 and r.json()["applied"] is False
+    assert r.json()["pending"] == "TopSeed"
+
+    body = w.client.get("/admin", headers=owner).text
+    assert "TopSeed" in body and "Confirm" in body
+
+    r = w.client.post("/admin/name", headers=owner, follow_redirects=False,
+                      data={"account": player.id, "decision": "confirm"})
+    assert r.status_code == 303
+    assert app_mod.store.load_accounts()[player.id].ufer_name == "TopSeed"
+
+
+def test_rejecting_a_held_name_leaves_the_account_without_one():
+    w = World()
+    _, owner = w.person("Owner", Role.OWNER)
+    player, ph = w.person("Player")
+    w.client.post("/me/ufer_name", headers=ph, json={"name": "Someone"})
+    w.client.post("/admin/name", headers=owner,
+                  data={"account": player.id, "decision": "reject"})
+    stored = app_mod.store.load_accounts()[player.id]
+    assert stored.ufer_name is None and stored.ufer_claim is None
+
+
+def test_a_matching_name_needs_no_admin():
+    w = World()
+    acc, h = w.person("Dranistian")
+    r = w.client.post("/me/ufer_name", headers=h, json={"name": "Dranistian"})
+    assert r.json()["applied"] is True
+    assert app_mod.store.load_accounts()[acc.id].ufer_name == "Dranistian"
+
+
+def test_the_admin_page_shows_a_steam_name_rather_than_the_id():
+    w = World()
+    acc, h = w.person("Owner", Role.OWNER)
+    w.client.put("/me/steam_name", headers=h, json={"name": "local_player"})
+    body = w.client.get("/admin", headers=h).text
+    assert "local_player" in body
+    assert app_mod.store.load_accounts()[acc.id].steam_name == "local_player"
+
+
+def test_a_bracket_can_be_seeded_by_the_listed_order():
+    w = World()
+    _, host = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    r = w.client.post("/manage/tournaments", headers=host,
+                      follow_redirects=False,
+                      data={"name": "Listed", "mode": "tournament_1v1",
+                            "seeding": "listed", "best_of": "3",
+                            "entrants": "Dave, 900\nAlice, 2000"})
+    tid = r.headers["location"].rsplit("/", 1)[1]
+    t = app_mod.store.load_tournament(tid)
+    assert t.seeding == "listed" and t.best_of == 3
+    assert t.match("R1M1").a.name == "Dave", "the ratings decided anyway"
+    # And it survives being rebuilt from storage.
+    assert app_mod.store.load_tournament(tid).series_length() == 3
+
+
+def test_an_entrant_can_be_renamed_from_the_page():
+    w = World()
+    _, host = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, host)
+    r = w.client.post(f"/manage/tournaments/{tid}/rename", headers=host,
+                      follow_redirects=False, data={"seat": "0", "name": "Alicia"})
+    assert r.status_code == 303, r.text[:200]
+    names = [p.name for p in app_mod.store.load_tournament(tid).participants]
+    assert "Alicia" in names and "Alice" not in names
+
+
+def test_renaming_is_refused_once_a_result_is_in():
+    w = World()
+    _, host = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, host)
+    m = app_mod.store.load_tournament(tid).playable()[0]
+    w.client.post(f"/manage/tournaments/{tid}/report", headers=host,
+                  data={"match": m.id, "winner": m.a.name, "score": "3:0"})
+    r = w.client.post(f"/manage/tournaments/{tid}/rename", headers=host,
+                      data={"seat": "0", "name": "Nope"})
+    assert r.status_code == 200 and "result has been reported" in r.text
+    names = [p.name for p in app_mod.store.load_tournament(tid).participants]
+    assert "Nope" not in names
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

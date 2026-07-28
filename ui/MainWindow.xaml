@@ -171,8 +171,11 @@
                     HorizontalContentAlignment="Left" Margin="0,0,0,4"
                     Padding="12,7" Background="Transparent" Click="NavLive_Click"/>
             <Button x:Name="NavTour" Content="{core:T nav.tournaments}" Style="{StaticResource Btn}"
-                    HorizontalContentAlignment="Left"
+                    HorizontalContentAlignment="Left" Margin="0,0,0,4"
                     Padding="12,7" Background="Transparent" Click="NavTour_Click"/>
+            <Button x:Name="NavSettings" Content="{core:T nav.settings}" Style="{StaticResource Btn}"
+                    HorizontalContentAlignment="Left"
+                    Padding="12,7" Background="Transparent" Click="NavSettings_Click"/>
           </StackPanel>
         </StackPanel>
 
@@ -443,6 +446,103 @@
                      Margin="0,2,0,0"/>
         </StackPanel>
       </DockPanel>
+
+      <DockPanel Grid.Row="0" Margin="0,0,0,16" x:Name="HeaderSettings"
+                 Visibility="Collapsed">
+        <StackPanel>
+          <TextBlock Text="{core:T settings.headline}" FontSize="21" FontWeight="Bold"/>
+          <TextBlock Text="{core:T settings.sub}"
+                     Foreground="{StaticResource TextMid}" FontSize="12"
+                     Margin="0,2,0,0" TextWrapping="Wrap"/>
+        </StackPanel>
+      </DockPanel>
+
+      <!-- ============ Settings ============ -->
+      <!--
+        One place for the things that were spread over three views: the server
+        address lived in Live, the language in the sidebar, and the ladder name
+        behind a dialog that only appeared once. None of them are things you
+        look for where they were.
+      -->
+      <Border Grid.Row="1" x:Name="ViewSettings" Style="{StaticResource Card}"
+              Visibility="Collapsed" Padding="0">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="22,20">
+          <StackPanel MaxWidth="620" HorizontalAlignment="Left">
+
+            <TextBlock Text="{core:T settings.identity}" Style="{StaticResource Label}"/>
+            <TextBlock Text="{core:T settings.identity_sub}"
+                       Style="{StaticResource Label}" TextWrapping="Wrap"
+                       Margin="0,4,0,8"/>
+            <DockPanel Margin="0,0,0,4">
+              <Button x:Name="BtnClaimName" DockPanel.Dock="Right"
+                      Content="{core:T settings.claim}"
+                      Style="{StaticResource BtnAccent}" Margin="8,0,0,0"
+                      Click="BtnClaimName_Click"/>
+              <TextBox x:Name="LadderNameBox"/>
+            </DockPanel>
+            <TextBlock x:Name="NameStatus" Style="{StaticResource Label}"
+                       TextWrapping="Wrap" Margin="0,0,0,20"/>
+
+            <TextBlock Text="{core:T settings.account}" Style="{StaticResource Label}"/>
+            <TextBlock x:Name="SettingsAccount" Margin="0,4,0,8"
+                       TextWrapping="Wrap" FontSize="13"/>
+            <WrapPanel Margin="0,0,0,20">
+              <Button x:Name="BtnSettingsLogin" Content="{core:T settings.sign_in}"
+                      Style="{StaticResource Btn}" Margin="0,0,8,8"
+                      Click="BtnSettingsLogin_Click"/>
+              <Button x:Name="BtnSettingsSteam" Content="{core:T queue.link_steam}"
+                      Style="{StaticResource Btn}" Margin="0,0,8,8"
+                      Click="BtnLinkSteam_Click"/>
+              <Button x:Name="BtnSettingsConsent" Content="{core:T settings.consent}"
+                      Style="{StaticResource Btn}" Margin="0,0,8,8"
+                      Click="BtnSettingsConsent_Click"/>
+              <Button x:Name="BtnSettingsSite" Content="{core:T queue.open_site}"
+                      Style="{StaticResource Btn}" Margin="0,0,8,8"
+                      Click="BtnWebsite_Click"/>
+            </WrapPanel>
+
+            <TextBlock Text="{core:T settings.server}" Style="{StaticResource Label}"/>
+            <TextBlock Text="{core:T settings.server_sub}"
+                       Style="{StaticResource Label}" TextWrapping="Wrap"
+                       Margin="0,4,0,8"/>
+            <DockPanel Margin="0,0,0,4">
+              <Button x:Name="BtnSettingsConnect" DockPanel.Dock="Right"
+                      Content="{core:T settings.connect}"
+                      Style="{StaticResource Btn}" Margin="8,0,0,0"
+                      Click="BtnSettingsConnect_Click"/>
+              <Button x:Name="BtnSettingsDefault" DockPanel.Dock="Right"
+                      Content="{core:T settings.default_server}"
+                      Style="{StaticResource Btn}" Margin="8,0,0,0"
+                      Click="BtnSettingsDefault_Click"/>
+              <TextBox x:Name="SettingsServerBox"/>
+            </DockPanel>
+            <TextBlock x:Name="ServerStatus" Style="{StaticResource Label}"
+                       TextWrapping="Wrap" Margin="0,0,0,20"/>
+
+            <TextBlock Text="{core:T settings.language}" Style="{StaticResource Label}"/>
+            <ComboBox x:Name="SettingsLangBox" Margin="0,4,0,4" Width="200"
+                      HorizontalAlignment="Left"
+                      SelectionChanged="LangBox_SelectionChanged"/>
+            <TextBlock Text="{core:T sidebar.language_restart}"
+                       Style="{StaticResource Label}" TextWrapping="Wrap"
+                       Margin="0,0,0,20"/>
+
+            <TextBlock Text="{core:T settings.game}" Style="{StaticResource Label}"/>
+            <TextBlock x:Name="SettingsFortsPath" Margin="0,4,0,8" FontSize="12"
+                       Foreground="{StaticResource TextMid}" TextWrapping="Wrap"/>
+            <WrapPanel Margin="0,0,0,20">
+              <Button x:Name="BtnOpenFortsDir" Content="{core:T settings.open_folder}"
+                      Style="{StaticResource Btn}" Margin="0,0,8,8"
+                      Click="BtnOpenFortsDir_Click"/>
+              <Button x:Name="BtnCheckUpdate" Content="{core:T settings.check_update}"
+                      Style="{StaticResource Btn}" Margin="0,0,8,8"
+                      Click="BtnCheckUpdate_Click"/>
+            </WrapPanel>
+
+            <TextBlock x:Name="SettingsVersion" Style="{StaticResource Label}"/>
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
 
       <Grid Grid.Row="1" x:Name="ViewDraft" Visibility="Collapsed">
         <Grid.ColumnDefinitions>

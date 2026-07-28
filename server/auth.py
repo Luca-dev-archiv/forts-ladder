@@ -139,7 +139,15 @@ class Account:
     discord_id: str | None = None
     discord_name: str | None = None
     steam_id: str | None = None
+    #: Steam display name, as this account's own client read it out of the game
+    #: log. Held so people are shown by name instead of by a 17-digit number;
+    #: it proves nothing on its own, which is why the id stays the identity.
+    steam_name: str | None = None
     ufer_name: str | None = None
+    #: A ladder name that needs a human to confirm it. Before this existed the
+    #: claim was refused and thrown away, so anyone listed on the spreadsheet
+    #: under a different name than their Discord had no way in at all.
+    ufer_claim: str | None = None
     role: Role = Role.PLAYER
     grants: set[Grant] = field(default_factory=set)
     created_at: float = field(default_factory=time.time)
@@ -285,24 +293,61 @@ class AuthService:
         account.steam_id = steam_id
 
     def claim_ufer_name(self, account: Account, ufer_name: str,
-                        by_admin: bool = False) -> None:
-        """Claim a ladder name.
+                        by_admin: bool = False) -> bool:
+        """Claim a ladder name. True if it applied, False if a human must look.
 
-        With a Discord login this is more than a claim: the sheet lists
-        Discord names, so a matching login name proves it. If they differ an
-        admin must confirm — plenty of people are listed under something else.
+        With a Discord login a matching name is proof in itself: the sheet
+        lists Discord names. When they differ the claim is **held** rather than
+        refused — plenty of people are listed under something else, and
+        refusing outright threw the claim away and left them no route at all.
         """
+        ufer_name = ufer_name.strip()
+        if not ufer_name:
+            raise AuthError("a ladder name cannot be empty")
         taken = next((a for a in self.accounts.values()
                       if a.ufer_name == ufer_name and a.id != account.id), None)
         if taken is not None:
             raise AuthError(f"{ufer_name!r} already belongs to another account")
         matches_discord = (account.discord_name or "").casefold() == \
             ufer_name.casefold()
-        if not matches_discord and not by_admin:
-            raise AuthError(
-                f"Your Discord name ({account.discord_name}) is not "
-                f"{ufer_name!r}. An admin can confirm the link.")
-        account.ufer_name = ufer_name
+        if matches_discord or by_admin:
+            account.ufer_name = ufer_name
+            account.ufer_claim = None
+            return True
+        account.ufer_claim = ufer_name
+        return False
+
+    def pending_claims(self) -> list[Account]:
+        """Accounts waiting for someone to confirm their ladder name."""
+        return [a for a in self.accounts.values() if a.ufer_claim]
+
+    def confirm_ufer_name(self, actor: Account, target: Account) -> str:
+        """Approve a held claim.
+
+        Admin, and a person: the name decides which row of the community
+        spreadsheet an account is, and getting it wrong hands someone else's
+        rating to the wrong player.
+        """
+        actor.require("link_other_account")
+        if not target.ufer_claim:
+            raise AuthError("that account has nothing pending")
+        name = target.ufer_claim
+        self.claim_ufer_name(target, name, by_admin=True)
+        return name
+
+    def reject_ufer_name(self, actor: Account, target: Account) -> None:
+        actor.require("link_other_account")
+        target.ufer_claim = None
+
+    def set_steam_name(self, account: Account, name: str) -> None:
+        """Remember the Steam display name this account plays under.
+
+        Sent by the account's own client, which reads it out of the game log.
+        Cosmetic on purpose: it is what gets shown instead of a 17-digit id,
+        and nothing is decided by it — a display name can be changed to
+        anybody else's, so the id stays the identity.
+        """
+        account.steam_name = (name or "").strip()[:64] or None
 
     # -------------------------------------------------------------- Consent
     def set_tracking_consent(self, account: Account, value: bool) -> None:

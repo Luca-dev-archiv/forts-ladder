@@ -213,6 +213,90 @@ def test_without_a_time_limit_nothing_resolves_itself():
     assert not d.done
 
 
+# ------------------------------------------------------- Host's own settings
+def test_seeding_by_the_listed_order_ignores_the_ratings():
+    """A host often knows the bracket they want. Then the list is the seeding
+    and the numbers are noise."""
+    people = [Participant("D", 900), Participant("A", 2000),
+              Participant("C", 1200), Participant("B", 1500)]
+    by_rating = Tournament("R", list(people))
+    as_listed = Tournament("L", list(people), seeding="listed")
+
+    assert [p.name for p in by_rating._seeded()] == ["A", "B", "C", "D"]
+    assert [p.name for p in as_listed._seeded()] == ["D", "A", "C", "B"]
+    # Seed 1 plays seed 8/last, so the first match differs between the two.
+    assert by_rating.rounds[0][0].a.name == "A"
+    assert as_listed.rounds[0][0].a.name == "D"
+
+
+def test_a_random_draw_is_the_same_draw_every_time():
+    """Stored as entrants and rebuilt on load, so a draw that reshuffled would
+    not be the same tournament after a restart."""
+    people = [Participant(n) for n in "ABCDEFGH"]
+    first = Tournament("Cup", list(people), seeding="random")
+    again = Tournament("Cup", list(people), seeding="random")
+    assert [p.name for p in first._seeded()] == [p.name for p in again._seeded()]
+    # And it is actually a draw rather than the listed order.
+    plain = Tournament("Cup", list(people), seeding="listed")
+    assert [p.name for p in first._seeded()] != [p.name for p in plain._seeded()]
+
+
+def test_a_different_draw_for_a_different_tournament():
+    people = [Participant(n) for n in "ABCDEFGH"]
+    a = Tournament("Spring", list(people), seeding="random")
+    b = Tournament("Autumn", list(people), seeding="random")
+    assert [p.name for p in a._seeded()] != [p.name for p in b._seeded()]
+
+
+def test_the_host_can_override_the_modes_series_length():
+    t = Tournament("Cup", [Participant("A"), Participant("B")], best_of=3)
+    assert t.mode.best_of == 5 and t.series_length() == 3
+    try:
+        t.report("R1M1", "A", (3, 0))
+    except ValueError:
+        raise AssertionError("a 3-0 was refused for a Bo3")
+    t2 = Tournament("Cup", [Participant("A"), Participant("B")], best_of=7)
+    try:
+        t2.report("R1M1", "A", (3, 0))
+    except ValueError as e:
+        assert "Bo7" in str(e), str(e)
+    else:
+        raise AssertionError("a 3-0 decided a Bo7")
+
+
+# ------------------------------------------------------------------ Renaming
+def test_an_entrant_can_be_renamed_before_anything_is_reported():
+    """A typo is the commonest thing to fix, and it used to mean building the
+    bracket again."""
+    t = Tournament("Cup", [Participant("Alcie", 1500), Participant("Bob", 1200)])
+    t.rename(0, "Alice")
+    assert [p.name for p in t.participants] == ["Alice", "Bob"]
+    assert t.match("R1M1").a.name == "Alice"
+
+
+def test_renaming_stops_once_a_result_exists():
+    """The stored results refer to these names: changing one afterwards would
+    quietly detach a result from the player who earned it."""
+    t = Tournament("Cup", [Participant("A", 1500), Participant("B", 1200)])
+    t.report("R1M1", "A", (3, 0))
+    try:
+        t.rename(0, "Something else")
+    except ValueError as e:
+        assert "result" in str(e), str(e)
+    else:
+        raise AssertionError("an entrant was renamed after a reported result")
+
+
+def test_renaming_to_a_name_already_in_the_bracket_is_refused():
+    t = Tournament("Cup", [Participant("A"), Participant("B")])
+    try:
+        t.rename(0, "B")
+    except ValueError as e:
+        assert "already" in str(e), str(e)
+    else:
+        raise AssertionError("two entrants ended up with the same name")
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

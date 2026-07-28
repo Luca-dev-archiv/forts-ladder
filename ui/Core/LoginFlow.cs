@@ -106,6 +106,25 @@ public sealed class LoginFlow
             replays = replays.ToList(),
         });
 
+    /// <summary>
+    /// Claim a ladder name. Applied straight away when it matches the Discord
+    /// login (the spreadsheet lists Discord names, so that *is* the proof) and
+    /// otherwise held for an admin instead of refused.
+    /// </summary>
+    public Task<NameClaimDto?> ClaimUferNameAsync(string name) =>
+        _api.PostAsync<NameClaimDto>("/me/ufer_name", new { name });
+
+    /// <summary>
+    /// Tell the server the Steam display name this account plays under.
+    ///
+    /// Read out of the game log by this client, because the server has no way
+    /// to know it. Purely so people are shown by name rather than by a
+    /// 17-digit id — the id stays the identity, since a display name can be
+    /// changed to anybody else's.
+    /// </summary>
+    public Task<object?> SetSteamNameAsync(string name) =>
+        _api.PutAsync<object>("/me/steam_name", new { name });
+
     public async Task<bool> GrantConsentAsync() =>
         await _api.PostAsync<MeDto>("/me/consent") is not null;
 

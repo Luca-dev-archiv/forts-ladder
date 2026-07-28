@@ -233,17 +233,49 @@ def test_a_matching_discord_name_proves_the_ufer_claim():
     assert a.ufer_name == "SecondSeed"
 
 
-def test_a_different_name_needs_an_admin():
+def test_a_different_name_is_held_for_an_admin_not_applied():
+    """A name that does not match the Discord login must not take effect on its
+    own — but it must not be thrown away either. Refusing outright left anyone
+    listed on the spreadsheet under another name with no route in at all, so
+    the claim is held and an admin decides."""
     auth = AuthService()
     a = auth.login_discord("42", "someone-else")
-    try:
-        auth.claim_ufer_name(a, "TopSeed")
-    except AuthError as e:
-        assert "admin" in str(e).lower()
-    else:
-        raise AssertionError("foreign ladder name accepted without a check")
-    auth.claim_ufer_name(a, "TopSeed", by_admin=True)
+
+    assert auth.claim_ufer_name(a, "TopSeed") is False
+    assert a.ufer_name is None, "a foreign name was applied without a check"
+    assert a.ufer_claim == "TopSeed", "the claim was thrown away"
+    assert a in auth.pending_claims()
+
+    admin = auth.login_discord("1", "Boss")
+    admin.role = Role.ADMIN
+    assert auth.confirm_ufer_name(admin, a) == "TopSeed"
     assert a.ufer_name == "TopSeed"
+    assert a.ufer_claim is None
+    assert auth.pending_claims() == []
+
+
+def test_only_an_admin_can_confirm_a_held_name():
+    auth = AuthService()
+    a = auth.login_discord("42", "someone-else")
+    auth.claim_ufer_name(a, "TopSeed")
+    nobody = auth.login_discord("7", "Nobody")
+    try:
+        auth.confirm_ufer_name(nobody, a)
+    except AuthError as e:
+        assert "link_other_account" in str(e), str(e)
+    else:
+        raise AssertionError("a player confirmed their own identity claim")
+    assert a.ufer_name is None
+
+
+def test_a_matching_name_needs_nobody():
+    """The spreadsheet lists Discord names, so a matching login *is* the
+    proof — asking an admin to confirm it would be theatre."""
+    auth = AuthService()
+    a = auth.login_discord("9", "Dranistian")
+    assert auth.claim_ufer_name(a, "Dranistian") is True
+    assert a.ufer_name == "Dranistian"
+    assert a.ufer_claim is None
 
 
 def test_a_name_cannot_be_claimed_twice():

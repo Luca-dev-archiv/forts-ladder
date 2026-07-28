@@ -49,6 +49,15 @@ ol { padding-left: 20px; color: #A7B0C0; font-size: 14px; }
 li { margin: 6px 0; }
 select, textarea, input { font: inherit; color: #F2F4F8; background: #262B36;
         border: 1px solid #2A2F3A; border-radius: 6px; padding: 9px; }
+/* A bracket read as a bracket: rounds side by side, matches spread down the
+   column so it is visible who can meet whom. Scrolls sideways rather than
+   wrapping, because a wrapped bracket is not one. */
+.bracket { display: flex; gap: 14px; align-items: stretch;
+           overflow-x: auto; padding-bottom: 8px; }
+.round { display: flex; flex-direction: column; justify-content: space-around;
+         min-width: 240px; flex: 1; }
+.round .card { margin-bottom: 10px; }
+@media (max-width: 700px) { .bracket { display: block; } }
 select { min-width: 180px; }
 a { color: #FF9E6B; }
 p { margin: 10px 0; }
@@ -85,7 +94,8 @@ def signed_out(login_url: str) -> str:
 def signed_in(*, discord: str | None, ufer_name: str | None,
               steam_id: str | None, consent: bool, role: str,
               steam_url: str, code: str | None,
-              is_admin: bool = False, can_host: bool = False) -> str:
+              is_admin: bool = False, can_host: bool = False,
+              pending_name: str | None = None) -> str:
     def row(label: str, value: str, cls: str = "") -> str:
         return (f"<div class=row><span class=muted>{html.escape(label)}</span>"
                 f"<span class='val {cls}'>{value}</span></div>")
@@ -94,8 +104,11 @@ def signed_in(*, discord: str | None, ufer_name: str | None,
         "<div class=card>"
         "<p class=label>Your account</p>"
         + row("Discord", html.escape(discord or "—"))
-        + row("Ladder name", html.escape(ufer_name or "not set"),
-              "" if ufer_name else "warn")
+        + row("Ladder name",
+              html.escape(ufer_name) if ufer_name
+              else f"<span class=warn>{html.escape(pending_name)} — waiting "
+                   "for an admin</span>" if pending_name
+              else "<span class=warn>not set</span>")
         + row("Steam", f"<code>{html.escape(steam_id)}</code>" if steam_id
               else "<span class=warn>not linked</span>")
         + row("Role", html.escape(role))
@@ -191,7 +204,7 @@ def _input(name: str, placeholder: str = "", value: str = "",
 
 def admin(*, accounts: list[dict], grants: list[str], my_id: str,
           pools: dict, ranking_count: int, may_set_roles: bool = True,
-          error: str = "") -> str:
+          error: str = "", claims: list[dict] | None = None) -> str:
     """Accounts, roles and grants.
 
     A list, because the whole job is "who may do what". Each row submits on its
@@ -226,8 +239,11 @@ def admin(*, accounts: list[dict], grants: list[str], my_id: str,
             f"<div class=row><span class=muted>ladder name</span>"
             f"<span>{html.escape(a['ufer_name'] or '—')}</span></div>"
             "<div class=row><span class=muted>Steam</span>"
-            + (f"<code>{html.escape(a['steam_id'])}</code>" if a["steam_id"]
-               else "<span class=warn>not linked</span>")
+            # The display name, with the id only as a tooltip: a 17-digit
+            # number tells a human nothing, and this list is read by a human.
+            + (f"<span title='{html.escape(a['steam_id'])}'>"
+               + html.escape(a.get("steam_name") or a["steam_id"]) + "</span>"
+               if a["steam_id"] else "<span class=warn>not linked</span>")
             + "</div><div class=row><span class=muted>tracked</span>"
             + ("<span class=ok>yes</span>" if a["tracked"]
                else "<span class=warn>no</span>")
@@ -251,10 +267,32 @@ def admin(*, accounts: list[dict], grants: list[str], my_id: str,
                "<button class='btn sec'>Re-read the ranking file</button>"
                "</form></div>")
 
+    # Held ladder-name claims, first: somebody is waiting on each of these.
+    pending = ""
+    for c in (claims or []):
+        pending += (
+            "<div class=card>"
+            f"<div class=row><span class=val>{html.escape(c['claim'])}</span>"
+            "<span class=muted>claimed by "
+            f"{html.escape(c['discord'] or '?')}</span></div>"
+            "<div class=row><span class=muted>Steam</span><span>"
+            + html.escape(c.get("steam_name") or c.get("steam_id") or "—")
+            + "</span></div>"
+            "<p class=sub>The spreadsheet lists Discord names and this one "
+            "differs — which is common, and why it takes a person.</p>"
+            "<form method=post action='/admin/name'>"
+            f"<input type=hidden name=account value='{html.escape(c['id'])}'>"
+            "<button name=decision value=confirm>Confirm</button> "
+            "<button class='btn sec' name=decision value=reject>Reject</button>"
+            "</form></div>")
+    if pending:
+        pending = ("<p class=label>Ladder names waiting for confirmation</p>"
+                   + pending)
+
     return _shell(
         "<h1>Admin</h1>"
         "<p class=sub>Who may do what, and whether this server is set up.</p>"
-        + _nav(True, True) + _error(error) + setup
+        + _nav(True, True) + _error(error) + pending + setup
         + f"<p class=label>{len(accounts)} account(s)</p>"
         + ("".join(rows) or
            "<div class=card><p>Nobody has signed in yet.</p></div>"))
@@ -292,17 +330,31 @@ def tournaments(*, listing: list[dict], is_admin: bool,
         + ("<div class=card><p class=label>New tournament</p>"
           "<form method=post action='/manage/tournaments'>"
           "<p>" + _input("name", "Name", name) + "</p>"
-          f"<p><select name=mode>{options}</select></p>"
+          f"<p><select name=mode>{options}</select>"
+          " <select name=best_of>"
+          "<option value=''>series length from the mode</option>"
+          "<option value='1'>Bo1</option>"
+          "<option value='3'>Bo3</option>"
+          "<option value='5'>Bo5</option>"
+          "<option value='7'>Bo7</option>"
+          "</select>"
+          " <select name=seeding>"
+          "<option value='rating'>seed by rating</option>"
+          "<option value='listed'>seed in the order listed</option>"
+          "<option value='random'>seed at random</option>"
+          "</select></p>"
           "<p class=label>Entrants — one per line, "
           "optionally <code>name, rating</code></p>"
           "<p><textarea name=entrants rows=8 style='width:100%;padding:9px;"
           "border-radius:6px;border:1px solid #2A2F3A;background:#262B36;"
           "color:#F2F4F8;font:inherit;font-family:Consolas,monospace'>"
           + html.escape(entrants) + "</textarea></p>"
-          "<p class=sub style='margin:0 0 12px'>Ratings decide the seeding; "
-          "leave one off and it counts as 1000. A bracket cannot be changed "
-          "once it exists, because entrants are already seeded against each "
-          "other.</p>"
+          "<p class=sub style='margin:0 0 12px'>Byes go to the top seeds, and "
+          "seeds 1 and 2 can only meet in the final. Seeding by rating uses "
+          "the numbers you type here (a missing one counts as 1000); seeding "
+          "in the listed order ignores them, which is what you want when you "
+          "already know the pairings you intend. Entrants can be renamed until "
+          "the first result is reported.</p>"
           "<button>Create</button></form></div>" if can_create else "")
         + (f"<p class=label>{len(listing)} tournament(s)</p>" + rows if listing
            else "<div class=card><p>None yet.</p></div>"))
@@ -310,11 +362,18 @@ def tournaments(*, listing: list[dict], is_admin: bool,
 
 def bracket(*, name: str, mode: str, rounds: list[dict], champion: str | None,
             tid: str, is_admin: bool, best_of: int, error: str = "",
-            can_report: bool = True, can_host: bool = True) -> str:
-    """The bracket, with a result form on each match that can be played.
+            can_report: bool = True, can_host: bool = True,
+            entrants: list[dict] | None = None, editable: bool = False) -> str:
+    """The bracket, drawn as one, with a result form on each open match.
 
-    Readable by anyone with an account — an entrant wants to see the bracket
-    they are in. Only a referee or host gets the report form.
+    Rounds are columns and each match is a box, because that is what a bracket
+    is — a list of rounds one under the other made it impossible to see who
+    would meet whom, which is the only thing a bracket is for.
+
+    Readable by anyone with an account: an entrant wants to see the bracket
+    they are in. Only a host or referee gets the report forms, and renaming
+    stops the moment a result is in — the pairings are already built on the
+    names.
     """
     blocks = []
     for r in rounds:
@@ -356,15 +415,34 @@ def bracket(*, name: str, mode: str, rounds: list[dict], champion: str | None,
                 f"<span>{state}</span></div>"
                 + (f"<div style='margin-top:12px'>{form}</div>" if form else "")
                 + "</div>")
-        blocks.append(f"<p class=label>{html.escape(r['round'])}</p>"
-                      + "".join(cards))
+        blocks.append("<div class=round>"
+                      f"<p class=label>{html.escape(r['round'])}</p>"
+                      + "".join(cards) + "</div>")
 
     head = (f"<h1>{html.escape(name)}</h1>"
             f"<p class=sub>{html.escape(mode)} · Bo{best_of}"
             + (f" · <span class=ok>won by {html.escape(champion)}</span>"
                if champion else "")
             + "</p>")
+
+    # Renaming, while it is still harmless. A typo in an entrant's name is the
+    # commonest thing to fix and used to mean rebuilding the whole bracket.
+    rename = ""
+    if editable and entrants:
+        rows = "".join(
+            "<div class=row>"
+            f"<span class=muted>seed {e['seed']}</span>"
+            "<span><form method=post action='/manage/tournaments/"
+            f"{html.escape(tid)}/rename' style='display:inline'>"
+            f"<input type=hidden name=seat value='{e['seat']}'>"
+            + _input("name", "", e["name"], width="220px")
+            + " <button class='btn sec'>Rename</button></form></span></div>"
+            for e in entrants)
+        rename = ("<div class=card><p class=label>Entrants</p>" + rows
+                  + "<p class=sub>Possible until the first result is reported: "
+                    "after that the pairings rest on these names.</p></div>")
     return _shell(head + _nav(is_admin, can_host) + _error(error)
                   + ("<p><a class='btn sec' href='/manage/tournaments'>"
                      "All tournaments</a></p>" if can_host else "")
-                  + "".join(blocks))
+                  + "<div class=bracket>" + "".join(blocks) + "</div>"
+                  + rename)

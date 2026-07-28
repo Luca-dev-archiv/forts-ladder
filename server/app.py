@@ -300,12 +300,52 @@ def me(ladder_session: str | None = Cookie(None),
         return {"logged_in": False}
     return {"logged_in": True, "discord": acc.discord_name,
             "ufer_name": acc.ufer_name, "steam_id": acc.steam_id,
+            # What is waiting on a human, so the client can say so rather than
+            # showing "not set" as if nothing had been tried.
+            "ufer_claim": acc.ufer_claim,
+            "steam_name": acc.steam_name,
             "role": acc.role.label, "verified": acc.verified,
             # Own grants only: the client offers the tournament pages to a host
             # who is not an admin, and the rank alone does not say so.
             "grants": sorted(g.value for g in acc.grants),
             "tracking_consent": acc.tracking_consent,
             "consent_since": acc.consent_since}
+
+
+class NameBody(BaseModel):
+    name: str
+
+
+@app.post("/me/ufer_name")
+def claim_name(body: NameBody, ladder_session: str | None = Cookie(None),
+               authorization: str | None = Header(None)):
+    """Claim a ladder name.
+
+    A name matching the Discord login is proof in itself, because the
+    spreadsheet lists Discord names. Anything else is held for an admin instead
+    of refused — being listed under a different name is common, and refusing
+    outright left those people with no route at all.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    applied = guard(auth.claim_ufer_name, acc, body.name)
+    store.save_account(acc)
+    return {"applied": applied, "ufer_name": acc.ufer_name,
+            "pending": acc.ufer_claim}
+
+
+@app.put("/me/steam_name")
+def set_steam_name(body: NameBody, ladder_session: str | None = Cookie(None),
+                   authorization: str | None = Header(None)):
+    """The Steam display name this account plays under.
+
+    Sent by the account's own client, which reads it out of the game log. It is
+    shown instead of a 17-digit id and decides nothing — the id remains the
+    identity, because a display name can be changed to anyone else's.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    auth.set_steam_name(acc, body.name)
+    store.save_account(acc)
+    return {"steam_name": acc.steam_name}
 
 
 # ------------------------------------------------------------------- Consent
@@ -484,6 +524,11 @@ def join(request_id: str, ladder_session: str | None = Cookie(None),
 
 # ------------------------------------------------------------- Tournaments
 class TournamentBody(BaseModel):
+    #: Same three options the page offers. Kept in step deliberately: two ways
+    #: in that build different brackets from the same list would be worse than
+    #: one way in.
+    seeding: str = "rating"
+    best_of: int | None = None
     name: str
     mode_key: str = "tournament_1v1"
     #: [{"name": "...", "rating": 1800, "members": ["..."]}, ...]
@@ -514,7 +559,10 @@ def tournament_create(body: TournamentBody,
         t = Tournament(body.name, [
             Participant(p["name"], float(p.get("rating", 1000)),
                         p.get("members", []))
-            for p in body.participants], mode=mode)
+            for p in body.participants], mode=mode,
+            seeding=body.seeding if body.seeding in
+            ("rating", "listed", "random") else "rating",
+            best_of=body.best_of if body.best_of in (1, 3, 5, 7) else None)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     tid = secrets.token_hex(6)
@@ -529,6 +577,7 @@ def tournament_show(tid: str):
     except KeyError as e:
         raise HTTPException(404, str(e)) from e
     return {"name": t.name, "mode": t.mode.label, "bracket": t.bracket(),
+            "best_of": t.series_length(), "seeding": t.seeding,
             "playable": [m.id for m in t.playable()],
             "champion": t.champion.name if t.champion else None}
 
@@ -808,7 +857,8 @@ def index(ladder_session: str | None = Cookie(None),
         steam_id=acc.steam_id, consent=acc.tracking_consent,
         role=acc.role.label, steam_url="/auth/steam/start", code=None,
         is_admin=acc.may("link_other_account"),
-        can_host=acc.may("create_tournament") or acc.may("run_tournament"))
+        can_host=acc.may("create_tournament") or acc.may("run_tournament"),
+        pending_name=acc.ufer_claim)
 
 
 @app.post("/auth/pair/page", response_class=HTMLResponse)
@@ -826,7 +876,8 @@ def pair_from_page(ladder_session: str | None = Cookie(None),
         steam_id=acc.steam_id, consent=acc.tracking_consent,
         role=acc.role.label, steam_url="/auth/steam/start", code=code,
         is_admin=acc.may("link_other_account"),
-        can_host=acc.may("create_tournament") or acc.may("run_tournament"))
+        can_host=acc.may("create_tournament") or acc.may("run_tournament"),
+        pending_name=acc.ufer_claim)
 
 
 @app.post("/me/consent/on")
@@ -879,6 +930,7 @@ def _roster_rows() -> list[dict]:
     """Accounts as the admin page wants them: highest rank first."""
     return [{"id": a.id, "discord": a.discord_name, "role": a.role.label,
              "ufer_name": a.ufer_name, "steam_id": a.steam_id,
+             "steam_name": a.steam_name, "claim": a.ufer_claim,
              "tracked": a.trackable,
              "grants": sorted(g.value for g in a.grants)}
             for a in sorted(auth.accounts.values(),
@@ -887,10 +939,40 @@ def _roster_rows() -> list[dict]:
 
 
 def _admin_page(acc, error: str = "") -> HTMLResponse:
+    claims = [{"id": a.id, "discord": a.discord_name, "claim": a.ufer_claim,
+               "steam_id": a.steam_id, "steam_name": a.steam_name}
+              for a in auth.pending_claims()]
     return HTMLResponse(page.admin(
         accounts=_roster_rows(), grants=[g.value for g in Grant],
         my_id=acc.id, pools=queue_pools(), ranking_count=len(ranking.players),
-        may_set_roles=acc.may("grant_role"), error=error))
+        may_set_roles=acc.may("grant_role"), error=error, claims=claims))
+
+
+@app.post("/admin/name", response_class=HTMLResponse)
+async def admin_name(request: Request,
+                     ladder_session: str | None = Cookie(None),
+                     authorization: str | None = Header(None)):
+    """Confirm or reject a held ladder name.
+
+    An identity statement, so it takes an admin and a person: the name decides
+    which row of the community spreadsheet an account is, and getting it wrong
+    hands someone else's rating to the wrong player.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    guard(acc.require, "link_other_account")
+    form = await request.form()
+    target = auth.accounts.get(str(form.get("account") or ""))
+    if target is None:
+        raise HTTPException(404, "unknown account")
+    try:
+        if str(form.get("decision")) == "confirm":
+            auth.confirm_ufer_name(acc, target)
+        else:
+            auth.reject_ufer_name(acc, target)
+    except AuthError as e:
+        return _admin_page(acc, str(e))
+    store.save_account(target, granted_by=acc.id)
+    return RedirectResponse("/admin", status_code=303)
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -1008,6 +1090,12 @@ async def tournaments_page_create(request: Request,
     name = str(form.get("name") or "").strip()
     entrants = str(form.get("entrants") or "")
     mode = BY_KEY.get(str(form.get("mode") or "")) or BY_KEY["tournament_1v1"]
+    seeding = str(form.get("seeding") or "rating")
+    if seeding not in ("rating", "listed", "random"):
+        seeding = "rating"
+    raw_bo = str(form.get("best_of") or "").strip()
+    best_of = int(raw_bo) if raw_bo.isdigit() and int(raw_bo) in (1, 3, 5, 7) \
+        else None
 
     def again(msg: str) -> HTMLResponse:
         return HTMLResponse(page.tournaments(
@@ -1018,7 +1106,8 @@ async def tournaments_page_create(request: Request,
     if not name:
         return again("Give the tournament a name.")
     try:
-        t = Tournament(name, _parse_entrants(entrants), mode=mode)
+        t = Tournament(name, _parse_entrants(entrants), mode=mode,
+                       seeding=seeding, best_of=best_of)
     except ValueError as e:
         return again(str(e))
     tid = secrets.token_hex(6)
@@ -1031,13 +1120,20 @@ def _bracket_page(acc, tid: str, error: str = "") -> HTMLResponse:
         t = store.load_tournament(tid)
     except KeyError as e:
         raise HTTPException(404, str(e)) from e
+    # Renaming stops at the first reported result: from then on the pairings
+    # and the stored results both rest on these names.
+    started = any(m["winner"] and not m["bye"]
+                  for r in t.bracket() for m in r["matches"])
     return HTMLResponse(page.bracket(
-        name=t.name, mode=t.mode.label, best_of=t.mode.best_of,
+        name=t.name, mode=t.mode.label, best_of=t.series_length(),
         rounds=t.bracket(), tid=tid,
         champion=t.champion.name if t.champion else None,
         is_admin=acc.may("link_other_account"),
         can_report=acc.may("run_tournament"),
         can_host=acc.may("create_tournament") or acc.may("run_tournament"),
+        entrants=[{"seat": i, "seed": i + 1, "name": p.name}
+                  for i, p in enumerate(t.participants)],
+        editable=acc.may("create_tournament") and not started,
         error=error))
 
 
@@ -1050,6 +1146,35 @@ def bracket_page(tid: str, ladder_session: str | None = Cookie(None),
     if acc is None:
         return _login_first(f"/manage/tournaments/{tid}")
     return _bracket_page(acc, tid)
+
+
+@app.post("/manage/tournaments/{tid}/rename", response_class=HTMLResponse)
+async def bracket_page_rename(tid: str, request: Request,
+                              ladder_session: str | None = Cookie(None),
+                              authorization: str | None = Header(None)):
+    """Correct an entrant's name while that is still harmless.
+
+    A typo is the commonest thing to fix and used to mean building the bracket
+    again from scratch. The engine refuses once a result exists, because the
+    stored results refer to these names.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    guard(acc.require, "create_tournament")
+    form = await request.form()
+    try:
+        seat = int(str(form.get("seat")))
+    except ValueError as e:
+        raise HTTPException(400, "seat must be a number") from e
+    name = str(form.get("name") or "")
+    try:
+        t = store.load_tournament(tid)
+        t.rename(seat, name)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        return _bracket_page(acc, tid, str(e))
+    store.rename_participant(tid, seat, name.strip())
+    return RedirectResponse(f"/manage/tournaments/{tid}", status_code=303)
 
 
 @app.post("/manage/tournaments/{tid}/report", response_class=HTMLResponse)

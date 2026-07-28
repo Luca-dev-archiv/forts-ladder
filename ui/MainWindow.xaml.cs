@@ -455,6 +455,7 @@ public partial class MainWindow : Window
         Set(ViewDraft, HeaderDraft, NavDraft, which == "draft");
         Set(ViewLive, HeaderLive, NavLive, which == "live");
         Set(ViewTour, HeaderTour, NavTour, which == "tour");
+        Set(ViewSettings, HeaderSettings, NavSettings, which == "settings");
     }
 
     private void ReloadTable() => _ = ReloadTableAsync();

@@ -206,6 +206,10 @@ spreadsheet and verified against four real rows, which
 [`tests/test_ratings.py`](tests/test_ratings.py) keeps as golden tests. If one
 of them fails, the ladder is incompatible — no matter how clean the rest is.
 
+The person who maintains the spreadsheet has since confirmed the
+reconstruction is correct, so the numbers below are the real ones rather than
+a best guess.
+
 | | UFER (compatible) | Open ladder |
 |---|---|---|
 | Expected score | Elo logistic, scale **500** (1v1) / 600 (team) | same |

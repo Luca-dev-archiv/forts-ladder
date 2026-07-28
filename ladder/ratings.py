@@ -9,6 +9,13 @@ The formula was never written down anywhere. It was reconstructed from the
 spreadsheet and verified against four real rows, which tests/test_ratings.py
 keeps as golden tests.
 
+The reconstruction has since been confirmed by the person who maintains the
+sheet: "Regarding the variables for elo calculation … you got it right. What
+you already have is correct." (2026-07-28). The sheet has a "Variables" tab
+that holds the same constants; it was hidden at the time this was worked out.
+So these numbers are no longer an inference — but the golden tests stay,
+because that is what would catch a change to them.
+
 The system in short:
 
 1. Elo logistic, but flatter: E = 1 / (1 + 10^((R_opponent - R_own) / S)),

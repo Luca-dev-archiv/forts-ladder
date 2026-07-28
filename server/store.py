@@ -190,6 +190,15 @@ class Store:
         "accounts": [
             ("tracking_consent", "INTEGER NOT NULL DEFAULT 0"),
             ("consent_since", "TEXT"),
+            ("steam_name", "TEXT"),
+            ("ufer_claim", "TEXT"),
+        ],
+        "tournaments": [
+            # How the host wanted it seeded and how long a series is. Without
+            # these a restored tournament re-seeds by rating and reverts to the
+            # mode's series length, quietly changing the event.
+            ("seeding", "TEXT NOT NULL DEFAULT 'rating'"),
+            ("best_of", "INTEGER"),
         ],
         "drafts": [
             # The handoff and the walk-away. Both have to survive a restart:
@@ -221,8 +230,9 @@ class Store:
         self.db.execute(
             """INSERT INTO accounts
                    (id, discord_id, discord_name, steam_id, ufer_name, role,
-                    created_at, tracking_consent, consent_since)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, tracking_consent, consent_since,
+                    steam_name, ufer_claim)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    discord_id=excluded.discord_id,
                    discord_name=excluded.discord_name,
@@ -230,10 +240,13 @@ class Store:
                    ufer_name=excluded.ufer_name,
                    role=excluded.role,
                    tracking_consent=excluded.tracking_consent,
-                   consent_since=excluded.consent_since""",
+                   consent_since=excluded.consent_since,
+                   steam_name=excluded.steam_name,
+                   ufer_claim=excluded.ufer_claim""",
             (a.id, a.discord_id, a.discord_name, a.steam_id, a.ufer_name,
              int(a.role), a.created_at,
-             int(a.tracking_consent), a.consent_since))
+             int(a.tracking_consent), a.consent_since,
+             a.steam_name, a.ufer_claim))
         # Reconcile grants: revoked ones have to actually disappear.
         self.db.execute("DELETE FROM account_grants WHERE account_id = ?", (a.id,))
         self.db.executemany(
@@ -250,7 +263,9 @@ class Store:
                 ufer_name=row["ufer_name"], role=Role(row["role"]),
                 created_at=row["created_at"],
                 tracking_consent=bool(row["tracking_consent"]),
-                consent_since=row["consent_since"])
+                consent_since=row["consent_since"],
+                steam_name=row["steam_name"],
+                ufer_claim=row["ufer_claim"])
         for row in self.db.execute("SELECT * FROM account_grants"):
             acc = out.get(row["account_id"])
             if acc is None:
@@ -417,12 +432,21 @@ class Store:
                           created_by: str | None = None) -> None:
         self.db.execute(
             "INSERT INTO tournaments (id, name, mode_key, created_by, "
-            "created_at, finished) VALUES (?, ?, ?, ?, ?, 0)",
-            (tid, t.name, t.mode.key, created_by, time.time()))
+            "created_at, finished, seeding, best_of) "
+            "VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+            (tid, t.name, t.mode.key, created_by, time.time(),
+             t.seeding, t.best_of))
         self.db.executemany(
             "INSERT INTO tournament_participants VALUES (?, ?, ?, ?, ?)",
             [(tid, i, p.name, p.rating, json.dumps(p.members))
              for i, p in enumerate(t.participants)])
+        self.db.commit()
+
+    def rename_participant(self, tid: str, seat: int, name: str) -> None:
+        self.db.execute(
+            "UPDATE tournament_participants SET name = ?, members = ? "
+            "WHERE tournament_id = ? AND seat = ?",
+            (name, json.dumps([name]), tid, seat))
         self.db.commit()
 
     def record_result(self, tid: str, match_id: str, winner: str,
@@ -453,7 +477,9 @@ class Store:
                 "SELECT * FROM tournament_participants WHERE tournament_id = ? "
                 "ORDER BY seat", (tid,))]
 
-        t = Tournament(row["name"], participants, mode=mode)
+        t = Tournament(row["name"], participants, mode=mode,
+                       seeding=row["seeding"] or "rating",
+                       best_of=row["best_of"])
 
         # Apply results in report order; the bracket rebuilds itself.
         for r in self.db.execute(

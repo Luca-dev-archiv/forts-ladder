@@ -52,10 +52,17 @@ jobs:
       - name: Scan tracked files
         run: |
           echo "Checking tracked files for Steam IDs and email addresses..."
-          hits=$(git grep -nIE '7656119[0-9]{10}|[a-zA-Z0-9._%+-]+@(gmail|gmx|web|outlook|hotmail|yahoo)\.[a-z]+' \
-                 -- . ':!*.md' || true)
-          if [ -n "$hits" ]; then
-            echo "$hits"
+          # Test fixtures are structurally valid SteamID64s, so matching the
+          # shape alone flags every one of them. A real account id essentially
+          # never contains a run of five zeros, while every fabricated one here
+          # does — so that run is what separates fixture from leak.
+          hits=$(git grep -nIE '7656119[0-9]{10}' -- . ':!*.md' \
+                 | grep -vE '7656119[0-9]?0{5,}' || true)
+          mails=$(git grep -nIE '[a-zA-Z0-9._%+-]+@(gmail|gmx|web|outlook|hotmail|yahoo)\.[a-z]+' \
+                  -- . ':!*.md' || true)
+          if [ -n "$hits$mails" ]; then
+            [ -n "$hits" ] && echo "$hits"
+            [ -n "$mails" ] && echo "$mails"
             echo "::error::Found what looks like a real Steam ID or private email address."
             exit 1
           fi

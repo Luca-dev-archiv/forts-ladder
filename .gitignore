@@ -24,8 +24,8 @@ matches/
 # Backups lobby_config.py writes
 *.backup_*
 
-# Spieldaten gehoeren nicht ins Repo (fremdes Urheberrecht). Pools und
-# Konstanten werden zur Laufzeit aus der lokalen Installation gelesen.
+# Game data stays out of the repository (someone else's copyright). Pools and
+# constants are read from the local installation at runtime.
 *.fwe
 *.fwr
 *.fwc
@@ -33,11 +33,16 @@ constants*.lua
 log.txt
 log*.dat
 
-# Secrets gehoeren nie ins Repo
+# Secrets never belong in the repository
 .env
 .env.*
 
-# .NET-Buildartefakte -- 32 Dateien, die bei jedem Build neu entstehen
+# .NET build artefacts, regenerated on every build
 ui/bin/
 ui/obj/
 *.user
+
+# Deployment for one specific host. The server exists only as a sync backend
+# for the client, so how it is hosted is nobody else's business and belongs
+# nowhere near a public repository.
+deploy/

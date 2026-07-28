@@ -139,12 +139,22 @@ Desktop client:
 cd ui && dotnet run
 ```
 
-Server (optional — needed for live matches and tournaments):
+### The server is optional, and it is not a website
+
+Everything above works with no server at all: the recorder, the ranking, the
+draft and the report line are local. The API exists so that **clients can
+agree with each other** — who opted in, and which lobby was set up for a
+ladder match. It serves JSON to the client and has no pages to browse.
+
+Run one if you want live matches and tournaments:
 
 ```bash
 pip install fastapi uvicorn
 uvicorn server.app:app
 ```
+
+Then point the client at it in the Live view. Whoever runs it decides where it
+lives and who can reach it; nothing about that belongs in this repository.
 
 See [docs/setup.md](docs/setup.md) for Discord and Steam login.
 

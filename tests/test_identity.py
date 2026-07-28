@@ -101,10 +101,10 @@ def test_persona_rename_keeps_the_link_and_adds_an_alias():
     """The Steam ID is the identity; the name is only an alias."""
     reg = _registry_with({"76561199000000008": ["TopSeed"]})
     match_names(reg, ["TopSeed"])
-    reg.observed["76561199000000008"].note("klau_neu", "2026-08-01")
+    reg.observed["76561199000000008"].note("TopSeed_v2", "2026-08-01")
     match_names(reg, ["TopSeed"])
     assert reg.ufer_name_for("76561199000000008") == "TopSeed"
-    assert "klau_neu" in reg.observed["76561199000000008"].names
+    assert "TopSeed_v2" in reg.observed["76561199000000008"].names
 
 
 def test_automatic_run_never_downgrades_a_manual_confirmation():
@@ -162,9 +162,9 @@ def test_self_declaration_cannot_claim_someone_elses_name():
 def test_self_declaration_replaces_ones_own_earlier_choice():
     reg = Registry()
     self_declare(reg, "76561199000000012", "Mistyped")
-    self_declare(reg, "76561199000000013", "Egal")      # anderer Account
-    self_declare(reg, "76561199000000012", "Richtig")
-    assert reg.ufer_name_for("76561199000000012") == "Richtig"
+    self_declare(reg, "76561199000000013", "Unrelated")   # a different account
+    self_declare(reg, "76561199000000012", "Corrected")
+    assert reg.ufer_name_for("76561199000000012") == "Corrected"
     assert reg.steam_ids_for("Mistyped") == []
 
 

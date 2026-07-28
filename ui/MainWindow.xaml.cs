@@ -30,6 +30,8 @@ public partial class MainWindow : Window
 
         _login = new LoginFlow(_api);
         InitLanguagePicker();
+        TitleVersion.Text = "v" + Updater.CurrentVersion();
+        StateChanged += (_, _) => OnWindowStateChanged();
         _queue = new ServerQueue(_api);
         InitQueue();
 
@@ -82,6 +84,31 @@ public partial class MainWindow : Window
             MessageBox.Show(this, ex.Message, Loc.T("update.failed"),
                             MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+
+    // -------------------------------------------------------------- Title bar
+    private void BtnMin_Click(object sender, RoutedEventArgs e)
+        => WindowState = WindowState.Minimized;
+
+    private void BtnMax_Click(object sender, RoutedEventArgs e)
+        => WindowState = WindowState == WindowState.Maximized
+            ? WindowState.Normal : WindowState.Maximized;
+
+    private void BtnClose_Click(object sender, RoutedEventArgs e) => Close();
+
+    /// <summary>
+    /// Swap the maximise glyph, and pad for the taskbar.
+    ///
+    /// A maximised window with a custom chrome extends under the taskbar unless
+    /// something compensates, which hides the bottom row of whatever is on
+    /// screen.
+    /// </summary>
+    private void OnWindowStateChanged()
+    {
+        var max = WindowState == WindowState.Maximized;
+        BtnMax.Content = max ? "" : "";
+        BtnMax.ToolTip = Loc.T(max ? "window.restore" : "window.maximise");
+        BorderThickness = new Thickness(max ? 7 : 0);
     }
 
     // --------------------------------------------------------------- Language

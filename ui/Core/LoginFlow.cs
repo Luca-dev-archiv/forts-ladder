@@ -76,4 +76,65 @@ public sealed class LoginFlow
 
     /// <summary>Where to log in when the app route did not work.</summary>
     public string BrowserLoginUrl() => $"{_api.BaseUrl}/auth/discord/start";
+
+    /// <summary>The account page — the only page the server serves a human.</summary>
+    public string WebsiteUrl() => $"{_api.BaseUrl}/";
+
+    public Task<MeDto?> MeAsync() => _api.GetAsync<MeDto>("/me");
+
+    public async Task<bool> GrantConsentAsync() =>
+        await _api.PostAsync<MeDto>("/me/consent") is not null;
+
+    public async Task<bool> WithdrawConsentAsync() =>
+        await _api.DeleteAsync("/me/consent");
+
+    /// <summary>
+    /// Link Steam without asking the user to type anything.
+    ///
+    /// Steam's own login is the only thing that can prove a Steam ID, and it is
+    /// a web redirect — there is no local equivalent of Discord's pipe. What can
+    /// be removed is the copying: the browser is opened on the right page and
+    /// this polls until the ID appears, so the only step left is pressing
+    /// "Sign in" at Steam.
+    ///
+    /// Asking for a Steam password in our own window would be the alternative,
+    /// and that is precisely what a phishing tool looks like. It is not on the
+    /// table.
+    /// </summary>
+    public async Task<bool> LinkSteamAsync(IProgress<string>? status = null,
+                                           CancellationToken ct = default)
+    {
+        // A ticket, not the session token: this URL goes into a browser, and
+        // browsers keep URLs in history. The ticket authorises one thing —
+        // attaching a Steam ID to this account — and expires.
+        var t = await _api.PostAsync<SteamTicketDto>("/auth/steam/ticket");
+        if (t is null || string.IsNullOrWhiteSpace(t.Url))
+        {
+            status?.Report(_api.LastError ?? "?");
+            return false;
+        }
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(t.Url)
+                { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            status?.Report(ex.Message);
+            return false;
+        }
+
+        // Poll rather than run a local listener: the callback lands on the
+        // server, not here, so there is nothing for a listener to catch.
+        for (var i = 0; i < 90 && !ct.IsCancellationRequested; i++)
+        {
+            await Task.Delay(2000, ct);
+            var me = await MeAsync();
+            if (me?.Steam_Id is { Length: > 0 }) return true;
+        }
+        return false;
+    }
+
+    public Task<QueueModesDto?> ModesAsync() => _api.GetAsync<QueueModesDto>("/queue/modes");
 }

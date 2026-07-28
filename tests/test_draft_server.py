@@ -284,6 +284,91 @@ def test_two_accepting_players_get_one_shared_draft():
     assert {x.side for x in s.seats.values()} == {Side.A, Side.B}
 
 
+# ----------------------------------------------------------------- Modes
+def queue_with(*players):
+    auth = AuthService()
+    out = []
+    for i, name in enumerate(players, start=1):
+        a = auth.login_discord(str(i), name)
+        a.role = Role.PLAYER
+        auth.attach_steam(a, f"7656119900000{i:04d}")
+        auth.set_tracking_consent(a, True)
+        out.append(a)
+    clock = [0.0]
+    drafts = DraftService(now=lambda: clock[0])
+    q = QueueService(auth, drafts, now=lambda: clock[0])
+    q.configure(MAPS, CMDS)
+    return q, clock, out
+
+
+def test_two_modes_never_pair_with_each_other():
+    """One shared queue would hand a 1v1 player a 2v2 draft nobody asked for."""
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500, "ranked_1v1")
+    q.join(b, 1500, "unranked_1v1")
+    clock[0] += 5
+    assert q.status(a)["proposal"] is None
+    assert q.status(b)["proposal"] is None
+    assert q.status(a)["mode"] == "ranked_1v1"
+    assert q.status(b)["mode"] == "unranked_1v1"
+
+
+def test_the_same_mode_does_pair():
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500, "ranked_1v1")
+    q.join(b, 1500, "ranked_1v1")
+    clock[0] += 5
+    q.status(a)
+    assert q.status(a)["proposal"] is not None
+
+
+def test_switching_mode_leaves_the_previous_queue():
+    """Standing in two queues means one offer lapses and earns a penalty for
+    nothing."""
+    q, clock, (a,) = queue_with("A")
+    q.join(a, 1500, "ranked_1v1")
+    q.join(a, 1500, "unranked_1v1")
+    # `Queue.leave` marks the entry LEFT rather than deleting it, so the thing
+    # to assert is that it is no longer *searchable* — checking the dict would
+    # pass or fail for reasons unrelated to whether a pairing can happen.
+    searching = {e.player for e in q.queues["ranked_1v1"].searching(clock[0])}
+    assert a.id not in searching, "still searchable in the mode that was left"
+    assert a.id in {e.player for e in q.queues["unranked_1v1"].searching(clock[0])}
+    assert q.status(a)["mode"] == "unranked_1v1"
+
+
+def test_a_team_mode_is_refused_with_a_reason():
+    """Pairing a team mode needs whole sides matched, not two individuals — a
+    queue that silently never resolves would be worse than a refusal."""
+    q, clock, (a,) = queue_with("A")
+    try:
+        q.join(a, 1500, "ranked_2v2")
+    except AuthError as e:
+        assert "whole sides" in str(e), str(e)
+    else:
+        raise AssertionError("a team mode was queued")
+
+
+def test_the_mode_list_marks_what_cannot_be_used():
+    q, clock, (a,) = queue_with("A")
+    modes = {m["key"]: m for m in q.modes()}
+    assert modes["ranked_1v1"]["available"]
+    assert not modes["ranked_2v2"]["available"]
+    assert not any(k.startswith("tournament") for k in modes),         "tournament modes are entered through a bracket, not a queue"
+
+
+def test_the_draft_uses_the_modes_best_of():
+    """A Bo1 mode must not produce a Bo3 draft."""
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500, "unranked_1v1")
+    q.join(b, 1500, "unranked_1v1")
+    clock[0] += 5
+    q.status(a); q.accept(a)
+    st = q.accept(b)
+    assert st["draft_id"]
+    assert q.drafts.get(st["draft_id"]).draft.best_of == 1
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

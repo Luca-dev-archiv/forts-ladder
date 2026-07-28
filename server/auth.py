@@ -215,6 +215,9 @@ class AuthService:
         #: code -> (account id, expiry). Not persisted: a pairing code that
         #: survived a restart would outlive the screen it was shown on.
         self._pairings: dict[str, tuple[str, float]] = {}
+        #: ticket -> (account id, expiry), for linking Steam from a browser that
+        #: has no session of its own.
+        self._steam_tickets: dict[str, tuple[str, float]] = {}
 
     # ---------------------------------------------------------- Login flow
     def begin_login(self, provider: str, return_to: str = "/") -> PendingLogin:
@@ -378,6 +381,34 @@ class AuthService:
         if account is None:
             raise AuthError("the account behind this code is gone")
         return self.start_session(account)
+
+    # ------------------------------------------------- Linking Steam by ticket
+    def begin_steam_link(self, account: Account) -> str:
+        """A single-use ticket authorising one Steam attachment.
+
+        The Steam callback arrives in a browser, and the desktop client's session
+        lives in a bearer token that no browser has. Rather than put that token
+        in a URL — URLs end up in history and logs — the client asks for a
+        ticket that can do exactly one thing: attach a Steam ID to this account.
+
+        It travels inside `openid.return_to`, which Steam signs, so it cannot be
+        swapped for another one without breaking verification.
+        """
+        ticket = secrets.token_urlsafe(24)
+        self._steam_tickets[ticket] = (account.id, self._now() + PAIRING_TTL_S)
+        return ticket
+
+    def claim_steam_ticket(self, ticket: str) -> Account:
+        entry = self._steam_tickets.pop(ticket, None)
+        if entry is None:
+            raise AuthError("unknown or already used Steam link ticket")
+        account_id, expires = entry
+        if self._now() > expires:
+            raise AuthError("this Steam link ticket has expired")
+        account = self.accounts.get(account_id)
+        if account is None:
+            raise AuthError("the account behind this ticket is gone")
+        return account
 
     def account_for(self, token: str | None) -> Account | None:
         """Account for a session token, or None when not logged in.

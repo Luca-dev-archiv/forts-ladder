@@ -39,6 +39,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 CONSENT_FILE = REPO / "data" / "consent.json"
 
+#: The shared instance. A ladder only works if everyone asks the same server,
+#: so there is a default rather than a blank that each person has to fill in.
+DEFAULT_SERVER = "https://ubuntu.tail5b0dc3.ts.net"
+
 
 @dataclass
 class Verdict:
@@ -468,7 +472,8 @@ def main() -> int:
                    help=f"seconds the declaration stays valid "
                         f"(default {int(ARM_TTL_S)})")
     p = sub.add_parser("sync", help="pull roster and lobbies from the server")
-    p.add_argument("--url", default="http://localhost:8000")
+    p.add_argument("--url", default=DEFAULT_SERVER,
+                   help=f"ladder server (default {DEFAULT_SERVER})")
     args = ap.parse_args()
     return {"status": cmd_status, "opt-in": cmd_opt_in,
             "withdraw": cmd_withdraw, "sanction": cmd_sanction,

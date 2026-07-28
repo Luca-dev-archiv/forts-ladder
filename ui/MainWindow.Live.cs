@@ -20,7 +20,7 @@ public partial class MainWindow
 
     private void InitServerViews()
     {
-        ServerBox.Text = _api.BaseUrl ?? "http://localhost:8000";
+        ServerBox.Text = _api.BaseUrl ?? ApiClient.DefaultBaseUrl;
     }
 
     // ------------------------------------------------------------ Navigation

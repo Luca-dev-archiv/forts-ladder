@@ -3,11 +3,59 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:core="clr-namespace:FortsLadder.Core"
         Title="Forts Ladder" Height="760" Width="1180"
-        MinHeight="560" MinWidth="900"
+        MinHeight="560" MinWidth="960"
         Background="{StaticResource BgDeep}"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None" AllowsTransparency="False"
+        ResizeMode="CanResize">
+
+  <!-- Own title bar. WindowChrome keeps what the operating system does well —
+       resizing from the edges, snapping, the Aero shortcuts — while replacing
+       only the bar itself, which is what looked out of place. Doing it with
+       WindowStyle=None alone loses all of that and has to be rebuilt badly. -->
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="38" ResizeBorderThickness="6"
+                  GlassFrameThickness="0" CornerRadius="0"
+                  UseAeroCaptionButtons="False"/>
+  </WindowChrome.WindowChrome>
 
   <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="38"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+
+    <!-- Title bar -->
+    <Border Grid.Row="0" Background="#12141A"
+            BorderBrush="{StaticResource Stroke}" BorderThickness="0,0,0,1">
+      <DockPanel>
+        <!-- WindowChrome.IsHitTestVisibleInChrome: without it these are part of
+             the drag area and never receive a click. -->
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                    WindowChrome.IsHitTestVisibleInChrome="True">
+          <Button x:Name="BtnMin" Style="{StaticResource TitleBtn}"
+                  Content="&#xE921;" Click="BtnMin_Click"
+                  ToolTip="{core:T window.minimise}"/>
+          <Button x:Name="BtnMax" Style="{StaticResource TitleBtn}"
+                  Content="&#xE922;" Click="BtnMax_Click"
+                  ToolTip="{core:T window.maximise}"/>
+          <Button x:Name="BtnClose" Style="{StaticResource TitleBtnClose}"
+                  Content="&#xE8BB;" Click="BtnClose_Click"
+                  ToolTip="{core:T window.close}"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Margin="14,0,0,0"
+                    VerticalAlignment="Center">
+          <Border Width="16" Height="16" CornerRadius="4"
+                  Background="{StaticResource Accent}"/>
+          <TextBlock Text="{core:T app.title}" Margin="8,0,0,0" FontSize="12"
+                     FontWeight="SemiBold" VerticalAlignment="Center"/>
+          <TextBlock x:Name="TitleVersion" Margin="8,0,0,0"
+                     Style="{StaticResource Label}" VerticalAlignment="Center"/>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <Grid Grid.Row="1">
     <Grid.ColumnDefinitions>
       <ColumnDefinition Width="270"/>
       <ColumnDefinition Width="*"/>
@@ -234,8 +282,22 @@
                 </StackPanel>
               </StackPanel>
 
+              <!-- Mode. One queue per mode server-side, so this is not a
+                   filter: it decides which queue you stand in. -->
+              <StackPanel x:Name="ModePanel" Margin="0,24,0,0"
+                          HorizontalAlignment="Center">
+                <TextBlock Text="{core:T queue.mode}" Style="{StaticResource Label}"
+                           HorizontalAlignment="Center" Margin="0,0,0,6"/>
+                <ComboBox x:Name="ModeBox" MinWidth="280"
+                          SelectionChanged="ModeBox_SelectionChanged"/>
+                <TextBlock x:Name="ModeNote" Style="{StaticResource Label}"
+                           Foreground="{StaticResource Warn}" TextWrapping="Wrap"
+                           MaxWidth="300" TextAlignment="Center"
+                           Margin="0,6,0,0" Visibility="Collapsed"/>
+              </StackPanel>
+
               <Button x:Name="BtnQueueToggle" Height="48" MinWidth="230"
-                      Margin="0,26,0,0" FontSize="15" FontWeight="Bold"
+                      Margin="0,20,0,0" FontSize="15" FontWeight="Bold"
                       Style="{StaticResource BtnAccent}"
                       Content="{core:T queue.find}" Click="BtnQueueToggle_Click"/>
 
@@ -250,14 +312,42 @@
                          Margin="0,16,0,0"/>
             </StackPanel>
 
-            <!-- What the queue will and will not do, stated where someone is
-                 waiting anyway. Both are rules people otherwise discover by
-                 being surprised. -->
-            <Border Grid.Row="1" Background="{StaticResource BgPanel}"
-                    CornerRadius="0,0,10,10" Padding="20,14">
-              <TextBlock Text="{core:T queue.rules}" TextWrapping="Wrap"
-                         FontSize="11" Foreground="{StaticResource TextLow}"/>
-            </Border>
+            <StackPanel Grid.Row="1">
+              <!-- Account state, with the fix beside each gap. Queueing needs a
+                   proven Steam ID and consent, and being told "not allowed"
+                   without being told what is missing is a dead end. -->
+              <Border Background="{StaticResource BgPanel}" Padding="20,12">
+                <DockPanel>
+                  <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button x:Name="BtnLinkSteam" Content="{core:T queue.link_steam}"
+                            Style="{StaticResource Btn}" Padding="12,6"
+                            FontSize="12" Visibility="Collapsed"
+                            Click="BtnLinkSteam_Click"/>
+                    <Button x:Name="BtnConsent" Content="{core:T queue.allow_tracking}"
+                            Style="{StaticResource Btn}" Padding="12,6"
+                            FontSize="12" Margin="6,0,0,0" Visibility="Collapsed"
+                            Click="BtnConsent_Click"/>
+                    <Button x:Name="BtnWebsite" Content="{core:T queue.open_site}"
+                            Style="{StaticResource Btn}" Padding="12,6"
+                            FontSize="12" Margin="6,0,0,0"
+                            Click="BtnWebsite_Click"/>
+                  </StackPanel>
+                  <TextBlock x:Name="AccountLine" VerticalAlignment="Center"
+                             FontSize="12" Foreground="{StaticResource TextMid}"
+                             TextTrimming="CharacterEllipsis"/>
+                </DockPanel>
+              </Border>
+
+              <!-- What the queue will and will not do, stated where someone is
+                   waiting anyway. Both are rules people otherwise discover by
+                   being surprised. -->
+              <Border Background="{StaticResource BgPanel}"
+                      CornerRadius="0,0,10,10" Padding="20,12"
+                      BorderBrush="{StaticResource Stroke}" BorderThickness="0,1,0,0">
+                <TextBlock Text="{core:T queue.rules}" TextWrapping="Wrap"
+                           FontSize="11" Foreground="{StaticResource TextLow}"/>
+              </Border>
+            </StackPanel>
           </Grid>
         </Border>
       </Grid>
@@ -950,6 +1040,7 @@
           </ListBox>
         </DockPanel>
       </Border>
+    </Grid>
     </Grid>
   </Grid>
 </Window>

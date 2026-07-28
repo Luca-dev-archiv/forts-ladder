@@ -141,12 +141,30 @@ def discord_callback(code: str, state: str, response: Response):
 
 
 @app.get("/auth/steam/start")
-def steam_start(return_to: str = "/", json: int = 0):
+def steam_start(return_to: str = "/", json: int = 0, ticket: str | None = None):
+    """Send the browser to Steam.
+
+    `ticket` is how the desktop client links Steam: it holds a bearer token that
+    no browser has, so it asks for a single-use ticket and passes it here. The
+    ticket rides inside `openid.return_to`, which Steam signs.
+    """
     guard(auth.begin_login, "steam", return_to)
-    url = steam_openid_url(f"{BASE_URL}/auth/steam/callback", BASE_URL)
+    callback = f"{BASE_URL}/auth/steam/callback"
+    if ticket:
+        callback += f"?ticket={ticket}"
+    url = steam_openid_url(callback, BASE_URL)
     if json:
         return {"url": url}
     return RedirectResponse(url, status_code=303)
+
+
+@app.post("/auth/steam/ticket")
+def steam_ticket(ladder_session: str | None = Cookie(None),
+                 authorization: str | None = Header(None)):
+    acc = require(session_token(ladder_session, authorization))
+    ticket = auth.begin_steam_link(acc)
+    return {"ticket": ticket,
+            "url": f"{BASE_URL}/auth/steam/start?ticket={ticket}"}
 
 
 @app.get("/auth/steam/callback")
@@ -158,8 +176,13 @@ def steam_callback(request: Request, ladder_session: str | None = Cookie(None),
     ranking*. Requiring the session here is what binds the two together —
     without it, a verified Steam ID would arrive with nobody to attach it to.
     """
-    acc = require(session_token(ladder_session, authorization))
-    steam_id = guard(verify_steam_openid, dict(request.query_params))
+    params = dict(request.query_params)
+    # Verify first, always. Whether the account comes from a cookie or a ticket
+    # is irrelevant if Steam did not actually sign this response.
+    steam_id = guard(verify_steam_openid, params)
+    ticket = params.get("ticket")
+    acc = (guard(auth.claim_steam_ticket, ticket) if ticket
+           else require(session_token(ladder_session, authorization)))
     guard(auth.attach_steam, acc, steam_id)
     store.save_account(acc)
     return RedirectResponse("/", status_code=303)
@@ -627,13 +650,24 @@ def draft_apply(draft_id: str, body: DraftMove,
 # --------------------------------------------------------------------- Queue
 class QueueJoin(BaseModel):
     rating: float = 1000.0
+    mode: str = "ranked_1v1"
+
+
+@app.get("/queue/modes")
+def queue_modes():
+    """What can be queued, and how many are waiting in each.
+
+    Public: the number waiting is what tells someone whether it is worth
+    starting a search, and it says nothing about who they are.
+    """
+    return {"modes": queue.modes()}
 
 
 @app.post("/queue")
 def queue_join(body: QueueJoin, ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):
     acc = require(session_token(ladder_session, authorization))
-    return guard(queue.join, acc, body.rating)
+    return guard(queue.join, acc, body.rating, body.mode)
 
 
 @app.delete("/queue")

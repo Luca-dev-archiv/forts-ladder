@@ -38,9 +38,10 @@ public sealed class ServerQueue : IDisposable
         _timer.Tick += async (_, _) => await RefreshAsync();
     }
 
-    public async Task<bool> JoinAsync(double rating)
+    public async Task<bool> JoinAsync(double rating, string mode = "ranked_1v1")
     {
-        var s = await _api.PostAsync<QueueStatusDto>("/queue", new { rating });
+        var s = await _api.PostAsync<QueueStatusDto>("/queue",
+                                                     new { rating, mode });
         if (s is null) { LastError = _api.LastError; Changed?.Invoke(); return false; }
         Apply(s);
         _timer.Start();
@@ -108,6 +109,7 @@ public sealed class QueueStatusDto
     public int Waited_S { get; set; }
     public int Queue_Size { get; set; }
     public ProposalDto? Proposal { get; set; }
+    public string? Mode { get; set; }
     public string? Draft_Id { get; set; }
     public int Penalised_Until { get; set; }
 

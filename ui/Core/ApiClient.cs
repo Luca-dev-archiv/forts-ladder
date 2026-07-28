@@ -56,9 +56,19 @@ public sealed class ApiClient
         Path.Combine(Path.GetDirectoryName(IdentityStore.DefaultPath())
                      ?? AppContext.BaseDirectory, "session.txt");
 
+    /// <summary>
+    /// The instance clients use unless told otherwise.
+    ///
+    /// A ladder is only a ladder if everyone is on the same one, so shipping
+    /// without a default would mean every player had to run a server to play
+    /// against anyone. Overridable in the Live view, and whatever is set there
+    /// wins — anyone can run their own.
+    /// </summary>
+    public const string DefaultBaseUrl = "https://ubuntu.tail5b0dc3.ts.net";
+
     public ApiClient()
     {
-        BaseUrl = Load();
+        BaseUrl = Load() ?? DefaultBaseUrl;
         Token = LoadToken();
     }
 
@@ -298,6 +308,44 @@ public sealed class PairClaimDto
     public string? Ufer_Name { get; set; }
     public string? Steam_Id { get; set; }
     public bool Tracking_Consent { get; set; }
+}
+
+public sealed class MeDto
+{
+    public bool Logged_In { get; set; }
+    public string? Discord { get; set; }
+    public string? Ufer_Name { get; set; }
+    public string? Steam_Id { get; set; }
+    public string? Role { get; set; }
+    public bool Verified { get; set; }
+    public bool Tracking_Consent { get; set; }
+}
+
+public sealed class SteamTicketDto
+{
+    public string Ticket { get; set; } = "";
+    public string Url { get; set; } = "";
+}
+
+public sealed class QueueModeDto
+{
+    public string Key { get; set; } = "";
+    public string Label { get; set; } = "";
+    public int Best_Of { get; set; }
+    public bool Rated { get; set; }
+    public int Team_Size { get; set; }
+    public bool Available { get; set; }
+    public int Waiting { get; set; }
+
+    /// <summary>What the picker shows. Bo and waiting count matter at a glance.</summary>
+    public override string ToString() =>
+        Available ? $"{Label}  ·  Bo{Best_Of}  ·  {Waiting} waiting"
+                  : $"{Label}  (not yet)";
+}
+
+public sealed class QueueModesDto
+{
+    public List<QueueModeDto> Modes { get; set; } = new();
 }
 
 public sealed class LiveMatchDto

@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using FortsLadder.Core;
 
@@ -16,6 +17,9 @@ public partial class MainWindow
 {
     private readonly ServerQueue _queue;
 
+    private List<QueueModeDto> _modes = new();
+    private bool _modesReady;
+
     private void InitQueue()
     {
         _queue.Changed += RefreshQueue;
@@ -27,9 +31,113 @@ public partial class MainWindow
             ShowView("draft");
         };
         RefreshQueue();
+        _ = LoadModesAsync();
     }
 
-    private void NavQueue_Click(object sender, RoutedEventArgs e) => ShowView("queue");
+    /// <summary>
+    /// Fetch the modes the server offers. Unavailable ones are listed rather
+    /// than hidden — "2v2 exists but cannot be queued yet" is information, and
+    /// hiding it just prompts the question.
+    /// </summary>
+    private async Task LoadModesAsync()
+    {
+        var res = await _login.ModesAsync();
+        _modes = res?.Modes ?? new List<QueueModeDto>();
+        ModeBox.ItemsSource = _modes;
+        var first = _modes.FirstOrDefault(m => m.Available) ?? _modes.FirstOrDefault();
+        ModeBox.SelectedItem = first;
+        _modesReady = true;
+        ShowModeNote();
+    }
+
+    private QueueModeDto? SelectedMode => ModeBox.SelectedItem as QueueModeDto;
+
+    private void ModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_modesReady) ShowModeNote();
+    }
+
+    private void ShowModeNote()
+    {
+        var m = SelectedMode;
+        var blocked = m is not null && !m.Available;
+        ModeNote.Text = blocked ? Loc.T("queue.mode_unavailable") : "";
+        ModeNote.Visibility = blocked ? Visibility.Visible : Visibility.Collapsed;
+        BtnQueueToggle.IsEnabled = m is null || m.Available || _queue.InQueue;
+    }
+
+    private void NavQueue_Click(object sender, RoutedEventArgs e)
+    {
+        ShowView("queue");
+        _ = RefreshAccountAsync();
+    }
+
+    // ---------------------------------------------------------------- Account
+    /// <summary>
+    /// Show what is still missing before results can count, with the fix next
+    /// to it. Being told "not allowed" without being told what is absent is a
+    /// dead end.
+    /// </summary>
+    private async Task RefreshAccountAsync()
+    {
+        if (!_api.LoggedIn)
+        {
+            AccountLine.Text = Loc.T("queue.not_signed_in");
+            BtnLinkSteam.Visibility = Visibility.Collapsed;
+            BtnConsent.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var me = await _login.MeAsync();
+        if (me is null || !me.Logged_In)
+        {
+            AccountLine.Text = Loc.T("queue.not_signed_in");
+            BtnLinkSteam.Visibility = Visibility.Collapsed;
+            BtnConsent.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var missing = new List<string>();
+        if (string.IsNullOrEmpty(me.Steam_Id)) missing.Add(Loc.T("queue.no_steam"));
+        if (!me.Tracking_Consent) missing.Add(Loc.T("queue.no_consent"));
+
+        AccountLine.Text = missing.Count == 0
+            ? Loc.T("queue.account_ready", me.Discord ?? "?")
+            : Loc.T("queue.account_missing", me.Discord ?? "?",
+                    string.Join(" · ", missing));
+
+        BtnLinkSteam.Visibility = string.IsNullOrEmpty(me.Steam_Id)
+            ? Visibility.Visible : Visibility.Collapsed;
+        BtnConsent.Visibility = me.Tracking_Consent
+            ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private async void BtnLinkSteam_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await EnsureReadyAsync()) return;
+        QueueError.Text = Loc.T("queue.steam_waiting");
+        var ok = await _login.LinkSteamAsync();
+        QueueError.Text = ok ? "" : Loc.T("queue.steam_failed");
+        await RefreshAccountAsync();
+    }
+
+    private async void BtnConsent_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await EnsureReadyAsync()) return;
+        if (!await _login.GrantConsentAsync())
+            QueueError.Text = _api.LastError ?? "?";
+        await RefreshAccountAsync();
+    }
+
+    private void BtnWebsite_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(_login.WebsiteUrl())
+                { UseShellExecute = true });
+        }
+        catch (Exception ex) { QueueError.Text = ex.Message; }
+    }
 
     private async void BtnQueueToggle_Click(object sender, RoutedEventArgs e)
     {
@@ -49,8 +157,10 @@ public partial class MainWindow
         // Your own open-ladder rating if the table knows it, so the first
         // pairing is not against someone hundreds of points away.
         var rating = _table.Me?.OpenRating ?? _table.Me?.UferRating ?? 1000.0;
-        if (!await _queue.JoinAsync(rating))
+        var mode = SelectedMode?.Key ?? "ranked_1v1";
+        if (!await _queue.JoinAsync(rating, mode))
             QueueError.Text = _queue.LastError ?? "?";
+        await RefreshAccountAsync();
     }
 
     private async void BtnAccept_Click(object sender, RoutedEventArgs e)

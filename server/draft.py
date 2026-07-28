@@ -23,7 +23,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 
-from ladder.draft import Action, Draft, Side, display_name
+from ladder.draft import Action, Draft, Side
 
 from .auth import Account, AuthError
 
@@ -45,6 +45,10 @@ class DraftSession:
     #: Set once, from the queue or a tournament match, so a report can be tied
     #: back to the draft that authorised it.
     series_id: str | None = None
+    #: The pool as it was handed in. `Draft` removes the neutrally struck map
+    #: from its own copy, so saving that one and rebuilding from it would strike
+    #: a second map and change the board under the players.
+    original_map_pool: list[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------ Seats
     def seat_of(self, account: Account) -> Seat:
@@ -97,13 +101,18 @@ class DraftSession:
             "waiting_on": waiting_on,
             "action": step.action.value if step else None,
             "game": step.game if step else None,
-            "seconds_left": d.seconds_left(),
+            # Not asked while a seat is empty: reading it starts the clock.
+            "seconds_left": d.seconds_left() if self.full() else None,
             "map_pool": list(d.map_pool),
             "neutral_strike": d.neutral_strike,
             "banned_maps": d.banned_maps(),
             "picked_maps": {str(k): v for k, v in d.picked_maps().items()},
             "banned_commanders": d.banned_commanders(),
-            "commander_names": {c: display_name(c) for c in d.commander_pool},
+            # Ids only. Display names live in the game's own language files, and
+            # the server has no Forts installation — computing them here
+            # produced "Overclocker" for what the game calls Overdrive. The
+            # client has the game and resolves them.
+            "commander_pool": list(d.commander_pool),
             "locked_in": locked,
             "your_pending_pick": mine,
             "options": (d.legal_options(seat.side) if seat and step else []),
@@ -132,7 +141,15 @@ class DraftSession:
 
     def tick(self) -> list[str]:
         """Resolve anything the clock decided. Called on every request, so a
-        client that stops polling cannot freeze the draft for the other."""
+        client that stops polling cannot freeze the draft for the other.
+
+        Does nothing while a seat is empty. `deadline()` starts the clock the
+        first time it is asked, so merely *looking* at a draft that was waiting
+        for an opponent started the timer and steps were then drawn by lot with
+        nobody there to make them.
+        """
+        if not self.full():
+            return []
         return self.draft.tick()
 
 
@@ -164,7 +181,8 @@ class DraftService:
         s = DraftSession(id=secrets.token_hex(6),
                          join_code=secrets.token_hex(3).upper(),
                          draft=draft, series_id=series_id,
-                         created_at=self._now())
+                         created_at=self._now(),
+                         original_map_pool=list(map_pool))
         s.seats[host.id] = Seat(Side.A, host.id, _name(host))
         self.sessions[s.id] = s
         return s
@@ -180,6 +198,9 @@ class DraftService:
         if s.full():
             raise AuthError("this draft already has two players")
         s.seats[account.id] = Seat(Side.B, account.id, _name(account))
+        # The first step gets its whole window from here, not from whenever
+        # someone last looked at the lobby.
+        s.draft._step_started = None
         return s
 
     def get(self, session_id: str) -> DraftSession:
@@ -187,6 +208,45 @@ class DraftService:
         if s is None:
             raise AuthError("unknown draft")
         return s
+
+    def restore(self, rows: list[dict]) -> int:
+        """Rebuild drafts from stored setup and moves.
+
+        The moves are replayed through the engine rather than a state being
+        loaded, so a restored draft can only be something the engine would have
+        produced itself. A move the rules now reject stops the replay for that
+        draft instead of forcing it in — better a short board than an impossible
+        one.
+        """
+        restored = 0
+        for row in rows:
+            try:
+                draft = Draft(map_pool=list(row["map_pool"]),
+                              commander_pool=list(row["commander_pool"]),
+                              best_of=row["best_of"],
+                              commander_bans_per_side=row["bans_per_side"],
+                              strike_seed=row["strike_seed"],
+                              step_seconds=row["step_seconds"])
+            except ValueError:
+                continue
+            s = DraftSession(id=row["id"], join_code=row["join_code"],
+                             draft=draft, series_id=row.get("series_id"),
+                             created_at=row["created_at"],
+                             original_map_pool=list(row["map_pool"]))
+            for seat in row["seats"]:
+                s.seats[seat["account_id"]] = Seat(
+                    Side(seat["side"]), seat["account_id"], seat["display"])
+            for c in row["choices"]:
+                try:
+                    draft.apply(c["value"], Side(c["side"]) if c["side"] else None)
+                except (ValueError, KeyError):
+                    break
+            # A restored draft starts its current step fresh: the players were
+            # not looking at a deadline that ran while the server was down.
+            draft._step_started = None
+            self.sessions[s.id] = s
+            restored += 1
+        return restored
 
     def prune(self, max_age_s: float = 6 * 3600) -> list[str]:
         """Drop stale sessions. A draft nobody finished should not sit in

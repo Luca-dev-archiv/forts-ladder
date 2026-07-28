@@ -220,6 +220,42 @@ def test_an_unknown_join_code_is_refused():
 
 
 # --------------------------------------------------------------------- Clock
+def test_the_clock_does_not_run_before_an_opponent_joins():
+    """The bug this exists for: `deadline()` starts the clock the first time it
+    is asked, and `public_state` asked it. So watching a lobby while waiting for
+    an opponent started the timer, and steps were then drawn by lot with nobody
+    there to make them."""
+    auth, a, b = two_players()
+    clock = [1000.0]
+    svc = DraftService(now=lambda: clock[0])
+    s = svc.create(a, MAPS, CMDS, best_of=3, step_seconds=10)
+    s.draft._now = lambda: clock[0]
+
+    for _ in range(5):
+        view = s.public_state(a)
+        assert view["seconds_left"] is None, "the clock is running with one seat"
+        clock[0] += 30
+        assert s.tick() == [], "a step resolved itself with no opponent"
+    assert s.draft.step_index == 0, "the draft advanced while waiting"
+    assert not s.draft.banned_maps(), "a map was banned with nobody playing"
+
+
+def test_the_first_step_gets_a_full_window_after_the_join():
+    """Otherwise the clock someone started by looking at the lobby would eat
+    into the first real decision."""
+    auth, a, b = two_players()
+    clock = [1000.0]
+    svc = DraftService(now=lambda: clock[0])
+    s = svc.create(a, MAPS, CMDS, best_of=3, step_seconds=10)
+    s.draft._now = lambda: clock[0]
+    s.public_state(a)          # would have started it before
+    clock[0] += 300            # a long wait for the opponent
+    svc.join(b, s.join_code)
+    left = s.public_state(b)["seconds_left"]
+    assert left is not None and left > 9, f"only {left}s left on the first step"
+
+
+
 def test_the_deadline_is_evaluated_on_the_server():
     """A client that stops polling must not be able to freeze the draft."""
     svc, s, a, b = started(step_seconds=10)

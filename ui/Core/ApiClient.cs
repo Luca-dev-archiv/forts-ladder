@@ -264,7 +264,7 @@ public sealed class DraftStateDto
     public List<string> Banned_Maps { get; set; } = new();
     public Dictionary<string, string> Picked_Maps { get; set; } = new();
     public List<string> Banned_Commanders { get; set; } = new();
-    public Dictionary<string, string> Commander_Names { get; set; } = new();
+    public List<string> Commander_Pool { get; set; } = new();
     public List<string> Locked_In { get; set; } = new();
     public string? Your_Pending_Pick { get; set; }
     public List<string> Options { get; set; } = new();
@@ -280,8 +280,16 @@ public sealed class DraftStateDto
     public bool IsMapStep =>
         Action is "ban_map" or "pick_map";
 
+    /// <summary>
+    /// Commander display name, resolved from the game on this machine.
+    ///
+    /// The server sends ids only, on purpose: display names live in the game's
+    /// language files and a server with no Forts installation can only guess
+    /// from the id — which produced "Overclocker" for what the game calls
+    /// Overdrive.
+    /// </summary>
     public string Display(string commanderId) =>
-        Commander_Names.TryGetValue(commanderId, out var n) ? n : commanderId;
+        CommanderNames.Display(commanderId);
 }
 
 public sealed class PlannedGameDto

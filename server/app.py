@@ -63,6 +63,9 @@ store = Store(os.environ.get("LADDER_DB", "data/ladder.sqlite"))
 auth = store.restore_auth(AuthService())
 live = LiveService()
 drafts = DraftService()
+# Restored at startup: a draft that only survived while the process did would
+# not survive the thing persistence is for — a redeploy mid-tournament.
+drafts.restore(store.load_drafts())
 queue = QueueService(auth, drafts)
 ranking = Ranking()
 
@@ -613,6 +616,7 @@ def draft_create(body: DraftCreate, ladder_session: str | None = Cookie(None),
     acc = require(session_token(ladder_session, authorization))
     s = guard(drafts.create, acc, body.map_pool, body.commander_pool,
               body.best_of, body.commander_bans_per_side, body.step_seconds)
+    store.save_draft(s)
     return {"id": s.id, "join_code": s.join_code,
             "state": s.public_state(acc)}
 
@@ -622,6 +626,7 @@ def draft_join(join_code: str, ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):
     acc = require(session_token(ladder_session, authorization))
     s = guard(drafts.join, acc, join_code)
+    store.save_draft(s)
     return {"id": s.id, "state": s.public_state(acc)}
 
 
@@ -632,7 +637,10 @@ def draft_state(draft_id: str, ladder_session: str | None = Cookie(None),
     s = guard(drafts.get, draft_id)
     # Ticked on read: whoever polls first advances an expired step, so one
     # side going quiet cannot stall the other.
-    s.tick()
+    if s.tick():
+        # The clock changed the draft, so what is now in memory has to be
+        # written down as well.
+        store.save_draft(s)
     return guard(s.public_state, acc)
 
 
@@ -646,7 +654,11 @@ def draft_apply(draft_id: str, body: DraftMove,
         authorization: str | None = Header(None)):
     acc = require(session_token(ladder_session, authorization))
     s = guard(drafts.get, draft_id)
-    return guard(s.apply, acc, body.value)
+    state = guard(s.apply, acc, body.value)
+    # After every move, not at the end: a draft that only persisted once
+    # finished would lose exactly the case this is for.
+    store.save_draft(s)
+    return state
 
 
 # --------------------------------------------------------------------- Queue

@@ -69,6 +69,44 @@ CREATE TABLE IF NOT EXISTS sanctioned_lobbies (
     created_at  REAL NOT NULL
 );
 
+-- Drafts are stored the same way tournaments are: the setup plus the moves,
+-- not a serialised object. Replaying the moves through the engine means a
+-- restored draft can only ever be a state the engine would produce itself, and
+-- the rules stay in one place.
+CREATE TABLE IF NOT EXISTS drafts (
+    id            TEXT PRIMARY KEY,
+    join_code     TEXT NOT NULL,
+    map_pool      TEXT NOT NULL,          -- JSON list
+    commander_pool TEXT NOT NULL,         -- JSON list
+    best_of       INTEGER NOT NULL,
+    bans_per_side INTEGER NOT NULL,
+    step_seconds  REAL,
+    -- Kept so the neutral strike is reproducible: without it a restored draft
+    -- would strike a different map and the board would change under the
+    -- players.
+    strike_seed   INTEGER,
+    series_id     TEXT,
+    created_at    REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS draft_seats (
+    draft_id   TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+    side       TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    display    TEXT NOT NULL,
+    PRIMARY KEY (draft_id, side)
+);
+
+CREATE TABLE IF NOT EXISTS draft_choices (
+    draft_id TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+    seq      INTEGER NOT NULL,            -- replay order; the rules depend on it
+    side     TEXT NOT NULL,
+    action   TEXT NOT NULL,
+    value    TEXT NOT NULL,
+    game     INTEGER,
+    PRIMARY KEY (draft_id, seq)
+);
+
 CREATE TABLE IF NOT EXISTS tournaments (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
@@ -221,6 +259,74 @@ class Store:
     def sanctioned_lobbies(self) -> list[int]:
         return [r["lobby_id"] for r in self.db.execute(
             "SELECT lobby_id FROM sanctioned_lobbies ORDER BY created_at DESC")]
+
+    # ------------------------------------------------------------- Drafts
+    def save_draft(self, session) -> None:
+        """Write setup, seats and every move so far.
+
+        Called after each move rather than at the end: a draft that only
+        survived once finished would not survive the thing persistence is for.
+        """
+        d = session.draft
+        self.db.execute(
+            """INSERT INTO drafts (id, join_code, map_pool, commander_pool,
+                    best_of, bans_per_side, step_seconds, strike_seed,
+                    series_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET join_code=excluded.join_code""",
+            (session.id, session.join_code,
+             json.dumps(session.original_map_pool or d.map_pool),
+             json.dumps(d.commander_pool), d.best_of,
+             d.commander_bans_per_side, d.step_seconds, d.strike_seed,
+             session.series_id, session.created_at))
+
+        self.db.execute("DELETE FROM draft_seats WHERE draft_id = ?", (session.id,))
+        self.db.executemany(
+            "INSERT INTO draft_seats VALUES (?, ?, ?, ?)",
+            [(session.id, s.side.value, s.account_id, s.display)
+             for s in session.seats.values()])
+
+        # Rewritten wholesale: the move list only grows, and comparing is more
+        # code than replacing a handful of rows.
+        self.db.execute("DELETE FROM draft_choices WHERE draft_id = ?", (session.id,))
+        self.db.executemany(
+            "INSERT INTO draft_choices VALUES (?, ?, ?, ?, ?, ?)",
+            [(session.id, i, c.side.value if c.side else "", c.action.value,
+              c.value, c.game) for i, c in enumerate(d.choices)])
+        self.db.commit()
+
+    def load_drafts(self, max_age_s: float = 24 * 3600) -> list[dict]:
+        """Rows for drafts worth restoring.
+
+        Anything older than a day is left behind: a draft nobody finished
+        yesterday is not something to resume, and restoring it would put a stale
+        board in front of whoever logs in next.
+        """
+        cutoff = time.time() - max_age_s
+        out = []
+        for r in self.db.execute(
+                "SELECT * FROM drafts WHERE created_at > ? ORDER BY created_at",
+                (cutoff,)):
+            out.append({
+                "id": r["id"], "join_code": r["join_code"],
+                "map_pool": json.loads(r["map_pool"]),
+                "commander_pool": json.loads(r["commander_pool"]),
+                "best_of": r["best_of"], "bans_per_side": r["bans_per_side"],
+                "step_seconds": r["step_seconds"],
+                "strike_seed": r["strike_seed"],
+                "series_id": r["series_id"], "created_at": r["created_at"],
+                "seats": [dict(s) for s in self.db.execute(
+                    "SELECT side, account_id, display FROM draft_seats "
+                    "WHERE draft_id = ?", (r["id"],))],
+                "choices": [dict(c) for c in self.db.execute(
+                    "SELECT side, action, value, game FROM draft_choices "
+                    "WHERE draft_id = ? ORDER BY seq", (r["id"],))],
+            })
+        return out
+
+    def delete_draft(self, draft_id: str) -> None:
+        self.db.execute("DELETE FROM drafts WHERE id = ?", (draft_id,))
+        self.db.commit()
 
     # -------------------------------------------------------- Tournaments
     def create_tournament(self, tid: str, t: Tournament,

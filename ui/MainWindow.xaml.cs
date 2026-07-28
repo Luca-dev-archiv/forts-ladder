@@ -674,7 +674,7 @@ public partial class MainWindow : Window
         var inPlan = s.Plan
             .SelectMany(g => new[] { g.Commander_A, g.Commander_B })
             .Where(c => c is not null).ToHashSet();
-        CommanderTiles.ItemsSource = s.Commander_Names.Keys.Select(c =>
+        CommanderTiles.ItemsSource = s.Commander_Pool.Select(c =>
         {
             var banned = s.Banned_Commanders.Contains(c);
             var chosen = inPlan.Contains(c) || s.Your_Pending_Pick == c;

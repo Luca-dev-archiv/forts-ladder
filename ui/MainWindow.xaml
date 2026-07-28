@@ -1,0 +1,702 @@
+<Window x:Class="FortsLadder.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:core="clr-namespace:FortsLadder.Core"
+        Title="Forts Ladder" Height="760" Width="1180"
+        MinHeight="560" MinWidth="900"
+        Background="{StaticResource BgDeep}"
+        WindowStartupLocation="CenterScreen">
+
+  <Grid>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="270"/>
+      <ColumnDefinition Width="*"/>
+    </Grid.ColumnDefinitions>
+
+    <!-- ============ Seitenleiste ============ -->
+    <Border Grid.Column="0" Background="{StaticResource BgPanel}">
+      <DockPanel Margin="20,22,20,18">
+
+        <StackPanel DockPanel.Dock="Top">
+          <StackPanel Orientation="Horizontal">
+            <Border Width="30" Height="30" CornerRadius="7"
+                    Background="{StaticResource Accent}">
+              <TextBlock Text="FL" FontWeight="Bold" FontSize="13"
+                         Foreground="#160B04" HorizontalAlignment="Center"
+                         VerticalAlignment="Center"/>
+            </Border>
+            <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+              <TextBlock Text="{core:T app.title}" FontWeight="Bold" FontSize="13"/>
+              <TextBlock Text="{core:T app.subtitle}" Style="{StaticResource Label}"/>
+            </StackPanel>
+          </StackPanel>
+
+          <!-- Statuskarte -->
+          <Border Style="{StaticResource Card}" Margin="0,22,0,0" Padding="14,12">
+            <StackPanel>
+              <StackPanel Orientation="Horizontal">
+                <Ellipse x:Name="StatusDot" Width="8" Height="8"
+                         Fill="{StaticResource TextLow}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="StatusText" Text="{core:T status.starting}" Margin="8,0,0,0"
+                           FontSize="12" FontWeight="SemiBold"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+              <Rectangle Height="1" Fill="{StaticResource Stroke}" Margin="0,11"/>
+              <TextBlock Text="{core:T sidebar.account}" Style="{StaticResource Label}"/>
+              <TextBlock x:Name="AccountName" Text="—" FontSize="13" Margin="0,2,0,0"
+                         TextTrimming="CharacterEllipsis"/>
+              <TextBlock x:Name="AccountId" Text="" Style="{StaticResource Label}"
+                         Margin="0,1,0,0"/>
+              <TextBlock Text="{core:T sidebar.ufer_name}" Style="{StaticResource Label}" Margin="0,10,0,0"/>
+              <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="UferName" Text="{core:T sidebar.unassigned}" FontSize="13"
+                           Foreground="{StaticResource Warn}" Margin="0,2,0,0"/>
+                <Button x:Name="BtnSetup" Content="{core:T sidebar.change}" Style="{StaticResource Btn}"
+                        Padding="7,2" FontSize="11" Margin="8,1,0,0"
+                        Click="BtnSetup_Click"/>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}" Margin="0,12,0,0" Padding="14,12">
+            <StackPanel>
+              <TextBlock Text="{core:T sidebar.recorded}" Style="{StaticResource Label}"/>
+              <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                <TextBlock x:Name="StatSeries" Text="0" FontSize="26"
+                           FontWeight="Bold"/>
+                <TextBlock Text="{core:T sidebar.series}" Foreground="{StaticResource TextMid}"
+                           VerticalAlignment="Bottom" Margin="7,0,0,5" FontSize="12"/>
+                <TextBlock x:Name="StatMatches" Text="0" FontSize="26"
+                           FontWeight="Bold" Margin="18,0,0,0"/>
+                <TextBlock Text="{core:T sidebar.matches}" Foreground="{StaticResource TextMid}"
+                           VerticalAlignment="Bottom" Margin="7,0,0,5" FontSize="12"/>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+          <StackPanel Margin="0,16,0,0">
+            <TextBlock Text="{core:T nav.section}" Style="{StaticResource Label}" Margin="0,0,0,6"/>
+            <Button x:Name="NavSeries" Content="{core:T nav.series}" Style="{StaticResource Btn}"
+                    HorizontalContentAlignment="Left" Margin="0,0,0,4"
+                    Background="{StaticResource BgHover}" Click="NavSeries_Click"/>
+            <Button x:Name="NavTable" Content="{core:T nav.table}" Style="{StaticResource Btn}"
+                    HorizontalContentAlignment="Left" Margin="0,0,0,4"
+                    Background="Transparent" Click="NavTable_Click"/>
+            <Button x:Name="NavDraft" Content="{core:T nav.draft}" Style="{StaticResource Btn}"
+                    HorizontalContentAlignment="Left" Margin="0,0,0,4"
+                    Background="Transparent" Click="NavDraft_Click"/>
+            <Button x:Name="NavLive" Content="{core:T nav.live}" Style="{StaticResource Btn}"
+                    HorizontalContentAlignment="Left" Margin="0,0,0,4"
+                    Background="Transparent" Click="NavLive_Click"/>
+            <Button x:Name="NavTour" Content="{core:T nav.tournaments}" Style="{StaticResource Btn}"
+                    HorizontalContentAlignment="Left"
+                    Background="Transparent" Click="NavTour_Click"/>
+          </StackPanel>
+        </StackPanel>
+
+        <StackPanel DockPanel.Dock="Bottom">
+          <TextBlock Style="{StaticResource Label}" TextWrapping="Wrap"
+                     Text="{core:T app.disclaimer}"/>
+        </StackPanel>
+
+        <Grid/>
+      </DockPanel>
+    </Border>
+
+    <!-- ============ Hauptbereich ============ -->
+    <Grid Grid.Column="1" Margin="26,22,26,20">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+      </Grid.RowDefinitions>
+
+      <DockPanel Grid.Row="0" Margin="0,0,0,16" x:Name="HeaderSeries">
+        <Button DockPanel.Dock="Right" x:Name="BtnRescan" Content="{core:T series.rescan}"
+                Style="{StaticResource Btn}" Click="BtnRescan_Click"/>
+        <StackPanel>
+          <TextBlock Text="{core:T series.headline}" FontSize="21" FontWeight="Bold"/>
+          <TextBlock Text="{core:T series.sub}"
+                     Foreground="{StaticResource TextMid}" FontSize="12"
+                     Margin="0,2,0,0"/>
+        </StackPanel>
+      </DockPanel>
+
+      <DockPanel Grid.Row="0" Margin="0,0,0,16" x:Name="HeaderTable"
+                 Visibility="Collapsed">
+        <Button DockPanel.Dock="Right" x:Name="BtnReloadTable" Content="{core:T table.reload}"
+                Style="{StaticResource Btn}" Click="BtnReloadTable_Click"/>
+        <StackPanel>
+          <TextBlock Text="{core:T table.headline}" FontSize="21" FontWeight="Bold"/>
+          <TextBlock x:Name="TableSubtitle"
+                     Text="{core:T table.sub}"
+                     Foreground="{StaticResource TextMid}" FontSize="12"
+                     Margin="0,2,0,0"/>
+        </StackPanel>
+      </DockPanel>
+
+      <DockPanel Grid.Row="0" Margin="0,0,0,16" x:Name="HeaderDraft"
+                 Visibility="Collapsed">
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <ComboBox x:Name="DraftFormat" Width="90" Margin="0,0,8,0"
+                    SelectedIndex="1" VerticalContentAlignment="Center">
+            <ComboBoxItem Content="Bo1"/>
+            <ComboBoxItem Content="Bo3"/>
+            <ComboBoxItem Content="Bo5"/>
+          </ComboBox>
+          <Button x:Name="BtnNewDraft" Content="{core:T draft.new}"
+                  Style="{StaticResource BtnAccent}" Click="BtnNewDraft_Click"/>
+        </StackPanel>
+        <StackPanel>
+          <TextBlock Text="{core:T draft.headline}" FontSize="21" FontWeight="Bold"/>
+          <TextBlock x:Name="DraftSubtitle" Foreground="{StaticResource TextMid}"
+                     FontSize="12" Margin="0,2,0,0"
+                     Text="{core:T draft.sub}"/>
+        </StackPanel>
+      </DockPanel>
+
+
+      <DockPanel Grid.Row="0" Margin="0,0,0,16" x:Name="HeaderLive"
+                 Visibility="Collapsed">
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <Border Background="{StaticResource BgPanel}" CornerRadius="6"
+                  BorderBrush="{StaticResource Stroke}" BorderThickness="1"
+                  Padding="10,6" Width="200" Margin="0,0,8,0">
+            <TextBox x:Name="ServerBox" Background="Transparent" BorderThickness="0"
+                     Foreground="{StaticResource TextHi}" FontSize="12"
+                     CaretBrush="{StaticResource Accent}"/>
+          </Border>
+          <Button x:Name="BtnConnect" Content="{core:T live.connect}"
+                  Style="{StaticResource Btn}" Margin="0,0,8,0"
+                  Click="BtnConnect_Click"/>
+          <Button Content="{core:T live.refresh}" Style="{StaticResource BtnAccent}"
+                  Click="BtnRefreshLive_Click"/>
+        </StackPanel>
+        <StackPanel>
+          <TextBlock Text="{core:T live.headline}" FontSize="21" FontWeight="Bold"/>
+          <TextBlock x:Name="LiveSubtitle" Text="{core:T live.sub}"
+                     Foreground="{StaticResource TextMid}" FontSize="12"
+                     Margin="0,2,0,0"/>
+        </StackPanel>
+      </DockPanel>
+
+      <DockPanel Grid.Row="0" Margin="0,0,0,16" x:Name="HeaderTour"
+                 Visibility="Collapsed">
+        <Button DockPanel.Dock="Right" Content="{core:T live.refresh}"
+                Style="{StaticResource Btn}" Click="BtnRefreshTour_Click"/>
+        <StackPanel>
+          <TextBlock Text="{core:T tour.headline}" FontSize="21" FontWeight="Bold"/>
+          <TextBlock x:Name="TourSubtitle" Text="{core:T tour.sub}"
+                     Foreground="{StaticResource TextMid}" FontSize="12"
+                     Margin="0,2,0,0"/>
+        </StackPanel>
+      </DockPanel>
+
+      <Grid Grid.Row="1" x:Name="ViewDraft" Visibility="Collapsed">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="330"/>
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Style="{StaticResource Card}" Padding="20">
+          <DockPanel>
+            <!-- Whose turn it is -->
+            <Border DockPanel.Dock="Top" CornerRadius="8" Padding="16,13"
+                    Background="{StaticResource BgPanel}"
+                    BorderBrush="{StaticResource Accent}" BorderThickness="2,0,0,0">
+              <DockPanel>
+                <TextBlock DockPanel.Dock="Right" x:Name="DraftProgress"
+                           Foreground="{StaticResource TextLow}" FontSize="12"
+                           VerticalAlignment="Center"/>
+                <StackPanel>
+                  <TextBlock x:Name="DraftStepText" FontSize="15" FontWeight="SemiBold"
+                             Text="{core:T draft.none}"/>
+                  <TextBlock x:Name="DraftHint" Style="{StaticResource Label}"
+                             Margin="0,3,0,0"
+                             Text="{core:T draft.hint_start}"/>
+                </StackPanel>
+              </DockPanel>
+            </Border>
+
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,16,0,0">
+              <StackPanel>
+                <TextBlock Text="{core:T draft.maps}" Style="{StaticResource Label}"
+                           Margin="0,0,0,8"/>
+                <ItemsControl x:Name="MapTiles">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Button Style="{StaticResource Btn}" Margin="0,0,8,8"
+                              Width="150" Height="52"
+                              Background="{Binding Background}"
+                              IsEnabled="{Binding Enabled}"
+                              Tag="{Binding Id}" Click="Tile_Click">
+                        <StackPanel>
+                          <TextBlock Text="{Binding Label}" FontSize="13"
+                                     Foreground="{Binding Foreground}"
+                                     TextTrimming="CharacterEllipsis"/>
+                          <TextBlock Text="{Binding State}" FontSize="10"
+                                     Foreground="{Binding StateBrush}"/>
+                        </StackPanel>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <TextBlock Text="{core:T draft.commanders}" Style="{StaticResource Label}"
+                           Margin="0,14,0,8"/>
+                <ItemsControl x:Name="CommanderTiles">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Button Style="{StaticResource Btn}" Margin="0,0,8,8"
+                              Width="126" Height="52"
+                              Background="{Binding Background}"
+                              IsEnabled="{Binding Enabled}"
+                              Tag="{Binding Id}" Click="Tile_Click">
+                        <StackPanel>
+                          <TextBlock Text="{Binding Label}" FontSize="13"
+                                     Foreground="{Binding Foreground}"
+                                     TextTrimming="CharacterEllipsis"/>
+                          <TextBlock Text="{Binding State}" FontSize="10"
+                                     Foreground="{Binding StateBrush}"/>
+                        </StackPanel>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+
+        <!-- Ergebnis -->
+        <Border Grid.Column="1" Style="{StaticResource Card}" Margin="14,0,0,0"
+                Padding="18">
+          <DockPanel>
+            <StackPanel DockPanel.Dock="Top">
+              <TextBlock Text="{core:T draft.result}" Style="{StaticResource Label}"/>
+              <TextBlock x:Name="DraftStrike" Style="{StaticResource Label}"
+                         Foreground="{StaticResource Warn}" TextWrapping="Wrap"
+                         Margin="0,6,0,0"/>
+              <TextBlock x:Name="DraftFairness" Style="{StaticResource Label}"
+                         Foreground="{StaticResource Win}" Margin="0,4,0,10"/>
+            </StackPanel>
+            <ItemsControl x:Name="PlanList">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border Background="{StaticResource BgPanel}" CornerRadius="6"
+                          Padding="12,10" Margin="0,0,0,6">
+                    <StackPanel>
+                      <DockPanel>
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding Tag}"
+                                   Style="{StaticResource Label}"/>
+                        <TextBlock Text="{Binding Title}" FontSize="13"
+                                   FontWeight="SemiBold"/>
+                      </DockPanel>
+                      <TextBlock Text="{Binding Commanders}" FontSize="12"
+                                 Foreground="{StaticResource TextMid}"
+                                 Margin="0,3,0,0"/>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </DockPanel>
+        </Border>
+      </Grid>
+
+
+      <!-- ============ Live matches ============ -->
+      <Grid Grid.Row="1" x:Name="ViewLive" Visibility="Collapsed">
+        <Border Style="{StaticResource Card}" Padding="6">
+          <Grid>
+            <TextBlock x:Name="LiveEmpty" Margin="16" TextWrapping="Wrap"
+                       Foreground="{StaticResource TextMid}" FontSize="12"
+                       VerticalAlignment="Top"/>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+              <ItemsControl x:Name="LiveList" Margin="4">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border Background="{StaticResource BgPanel}" CornerRadius="7"
+                            Padding="16,13" Margin="4,4,4,6">
+                      <DockPanel>
+                        <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center"
+                                    MinWidth="150">
+                          <TextBlock Text="{Binding Slots}" FontSize="12"
+                                     Foreground="{Binding SlotBrush}"
+                                     HorizontalAlignment="Right"/>
+                          <Button Content="{Binding ActionLabel}" Margin="0,7,0,0"
+                                  Style="{StaticResource BtnAccent}"
+                                  IsEnabled="{Binding CanRequest}"
+                                  Tag="{Binding Id}" Click="BtnObserve_Click"/>
+                        </StackPanel>
+                        <StackPanel>
+                          <TextBlock Text="{Binding Title}" FontSize="15"
+                                     FontWeight="SemiBold"/>
+                          <TextBlock Text="{Binding Sub}" Style="{StaticResource Label}"
+                                     Margin="0,4,0,0"/>
+                          <TextBlock Text="{Binding Extra}" FontSize="12"
+                                     Foreground="{StaticResource Accent}"
+                                     Margin="0,3,0,0"/>
+                        </StackPanel>
+                      </DockPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- ============ Tournaments ============ -->
+      <Grid Grid.Row="1" x:Name="ViewTour" Visibility="Collapsed">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="300"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Style="{StaticResource Card}" Padding="6">
+          <Grid>
+            <TextBlock x:Name="TourEmpty" Margin="14" TextWrapping="Wrap"
+                       Foreground="{StaticResource TextMid}" FontSize="12"
+                       VerticalAlignment="Top"/>
+            <ListBox x:Name="TourList" Background="Transparent" BorderThickness="0"
+                     SelectionChanged="TourList_SelectionChanged">
+              <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                  <Setter Property="Padding" Value="0"/>
+                  <Setter Property="Margin" Value="0,0,0,6"/>
+                  <Setter Property="Template">
+                    <Setter.Value>
+                      <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="b" Background="Transparent" CornerRadius="6"
+                                Padding="12,10">
+                          <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="b" Property="Background"
+                                    Value="{StaticResource BgHover}"/>
+                          </Trigger>
+                          <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="b" Property="Background"
+                                    Value="{StaticResource BgHover}"/>
+                            <Setter TargetName="b" Property="BorderBrush"
+                                    Value="{StaticResource Accent}"/>
+                            <Setter TargetName="b" Property="BorderThickness"
+                                    Value="2,0,0,0"/>
+                          </Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </Setter.Value>
+                  </Setter>
+                </Style>
+              </ListBox.ItemContainerStyle>
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <StackPanel>
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"/>
+                    <TextBlock Text="{Binding Sub}" Style="{StaticResource Label}"
+                               Margin="0,3,0,0"/>
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </Border>
+
+        <Border Grid.Column="1" Style="{StaticResource Card}" Margin="14,0,0,0"
+                Padding="20">
+          <ScrollViewer VerticalScrollBarVisibility="Auto"
+                        HorizontalScrollBarVisibility="Auto">
+            <StackPanel>
+              <TextBlock x:Name="TourPlaceholder" Text="{core:T tour.select}"
+                         FontSize="13" Foreground="{StaticResource TextMid}"/>
+              <TextBlock x:Name="TourChampion" FontSize="16" FontWeight="Bold"
+                         Foreground="{StaticResource Win}" Margin="0,0,0,12"/>
+              <ItemsControl x:Name="BracketList">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <StackPanel Orientation="Horizontal"/>
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <StackPanel Margin="0,0,14,0" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Round}" Style="{StaticResource Label}"
+                                 Margin="0,0,0,8"/>
+                      <ItemsControl ItemsSource="{Binding Matches}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <Border Background="{StaticResource BgPanel}" CornerRadius="6"
+                                    Padding="12,9" Margin="0,0,0,8" Width="230"
+                                    BorderBrush="{Binding Accent}" BorderThickness="2,0,0,0">
+                              <StackPanel>
+                                <TextBlock Text="{Binding Label}" FontSize="13"
+                                           TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{Binding State}"
+                                           Style="{StaticResource Label}"
+                                           Foreground="{Binding Accent}"/>
+                              </StackPanel>
+                            </Border>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </ScrollViewer>
+        </Border>
+      </Grid>
+
+      <Grid Grid.Row="1" x:Name="ViewSeries">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="330"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Serienliste -->
+        <Border Grid.Column="0" Style="{StaticResource Card}" Padding="6">
+          <Grid>
+            <TextBlock x:Name="EmptyHint" TextWrapping="Wrap" Margin="14"
+                       Foreground="{StaticResource TextMid}" FontSize="12"
+                       VerticalAlignment="Top"/>
+            <ListBox x:Name="SeriesList" Background="Transparent" BorderThickness="0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     SelectionChanged="SeriesList_SelectionChanged">
+              <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                  <Setter Property="Padding" Value="0"/>
+                  <Setter Property="Margin" Value="0,0,0,6"/>
+                  <Setter Property="Template">
+                    <Setter.Value>
+                      <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="b" Background="Transparent" CornerRadius="6"
+                                Padding="12,10">
+                          <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="b" Property="Background"
+                                    Value="{StaticResource BgHover}"/>
+                          </Trigger>
+                          <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="b" Property="Background"
+                                    Value="{StaticResource BgHover}"/>
+                            <Setter TargetName="b" Property="BorderBrush"
+                                    Value="{StaticResource Accent}"/>
+                            <Setter TargetName="b" Property="BorderThickness"
+                                    Value="2,0,0,0"/>
+                          </Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </Setter.Value>
+                  </Setter>
+                </Style>
+              </ListBox.ItemContainerStyle>
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <StackPanel>
+                    <DockPanel>
+                      <TextBlock DockPanel.Dock="Right" Text="{Binding ScoreText}"
+                                 FontWeight="Bold" FontSize="14"
+                                 Foreground="{Binding ScoreBrush}"/>
+                      <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
+                                 FontSize="13" TextTrimming="CharacterEllipsis"/>
+                    </DockPanel>
+                    <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Label}"
+                               Margin="0,3,0,0"/>
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </Border>
+
+        <!-- Detail -->
+        <Border Grid.Column="1" Style="{StaticResource Card}" Margin="14,0,0,0"
+                Padding="20">
+          <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="DetailPanel">
+              <TextBlock x:Name="DetailPlaceholder"
+                         Text="{core:T series.select}" FontSize="13"
+                         Foreground="{StaticResource TextMid}"/>
+
+              <StackPanel x:Name="DetailContent" Visibility="Collapsed">
+                <TextBlock x:Name="DetailTitle" FontSize="18" FontWeight="Bold"/>
+                <TextBlock x:Name="DetailWhen" Style="{StaticResource Label}"
+                           Margin="0,3,0,0"/>
+
+                <TextBlock Text="{core:T series.games}" Style="{StaticResource Label}"
+                           Margin="0,18,0,6"/>
+                <ItemsControl x:Name="GamesList">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border Background="{StaticResource BgPanel}" CornerRadius="6"
+                              Padding="12,9" Margin="0,0,0,5">
+                        <DockPanel>
+                          <TextBlock DockPanel.Dock="Right" Text="{Binding Result}"
+                                     FontWeight="SemiBold" FontSize="12"
+                                     Foreground="{Binding ResultBrush}"
+                                     VerticalAlignment="Center"/>
+                          <TextBlock DockPanel.Dock="Right" Text="{Binding Duration}"
+                                     Foreground="{StaticResource TextMid}"
+                                     FontSize="12" Margin="0,0,14,0"
+                                     VerticalAlignment="Center"/>
+                          <StackPanel>
+                            <TextBlock Text="{Binding Map}" FontSize="13"/>
+                            <TextBlock Text="{Binding Commanders}"
+                                       Style="{StaticResource Label}"/>
+                          </StackPanel>
+                        </DockPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <TextBlock Text="{core:T series.report_headline}"
+                           Style="{StaticResource Label}" Margin="0,20,0,6"/>
+                <Border Background="{StaticResource BgDeep}" CornerRadius="6"
+                        Padding="14,12" BorderBrush="{StaticResource Stroke}"
+                        BorderThickness="1">
+                  <TextBox x:Name="ReportLine" IsReadOnly="True"
+                           Background="Transparent" BorderThickness="0"
+                           Foreground="{StaticResource TextHi}"
+                           FontFamily="Consolas" FontSize="13"
+                           TextWrapping="Wrap"/>
+                </Border>
+
+                <ItemsControl x:Name="WarningsList" Margin="0,8,0,0">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding}" Foreground="{StaticResource Warn}"
+                                 FontSize="12" TextWrapping="Wrap" Margin="0,0,0,3"/>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                  <Button x:Name="BtnCopy" Content="{core:T series.copy}"
+                          Style="{StaticResource BtnAccent}" Click="BtnCopy_Click"/>
+                  <Button x:Name="BtnCollect" Content="{core:T series.collect}"
+                          Style="{StaticResource Btn}" Margin="8,0,0,0"
+                          Click="BtnCollect_Click"/>
+                </StackPanel>
+
+                <TextBlock x:Name="ReplayInfo" Style="{StaticResource Label}"
+                           Margin="0,10,0,0" TextWrapping="Wrap"/>
+              </StackPanel>
+            </StackPanel>
+          </ScrollViewer>
+        </Border>
+      </Grid>
+
+      <!-- ============ Rangliste ============ -->
+      <Border Grid.Row="1" x:Name="ViewTable" Style="{StaticResource Card}"
+              Padding="0" Visibility="Collapsed">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Background="{StaticResource BgPanel}"
+                  CornerRadius="8,8,0,0" Padding="16,12">
+            <DockPanel>
+              <Border DockPanel.Dock="Right" Background="{StaticResource BgDeep}"
+                      CornerRadius="6" BorderBrush="{StaticResource Stroke}"
+                      BorderThickness="1" Padding="10,6" Width="220">
+                <TextBox x:Name="TableSearch" Background="Transparent"
+                         BorderThickness="0" Foreground="{StaticResource TextHi}"
+                         CaretBrush="{StaticResource Accent}" FontSize="12"
+                         TextChanged="TableSearch_TextChanged"/>
+              </Border>
+              <TextBlock x:Name="MeLine" Foreground="{StaticResource TextMid}"
+                         FontSize="12" VerticalAlignment="Center"/>
+            </DockPanel>
+          </Border>
+
+          <Grid DockPanel.Dock="Top" Margin="16,10,16,6">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="52"/>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="140"/>
+              <ColumnDefinition Width="90"/>
+              <ColumnDefinition Width="90"/>
+              <ColumnDefinition Width="70"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="{core:T table.col_rank}" Style="{StaticResource Label}"/>
+            <TextBlock Grid.Column="1" Text="{core:T table.col_player}" Style="{StaticResource Label}"/>
+            <TextBlock Grid.Column="2" Text="{core:T table.col_title}" Style="{StaticResource Label}"/>
+            <TextBlock Grid.Column="3" Text="{core:T table.col_ufer}" Style="{StaticResource Label}"
+                       HorizontalAlignment="Right"/>
+            <TextBlock Grid.Column="4" Text="{core:T table.col_open}" Style="{StaticResource Label}"
+                       HorizontalAlignment="Right"/>
+            <TextBlock Grid.Column="5" Text="{core:T series.games}" Style="{StaticResource Label}"
+                       HorizontalAlignment="Right"/>
+          </Grid>
+
+          <TextBlock x:Name="TableEmpty" DockPanel.Dock="Top" Margin="16,10"
+                     Foreground="{StaticResource TextMid}" FontSize="12"
+                     TextWrapping="Wrap" Visibility="Collapsed"/>
+
+          <ListBox x:Name="TableList" Background="Transparent" BorderThickness="0"
+                   Margin="8,0,8,8"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemContainerStyle>
+              <Style TargetType="ListBoxItem">
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="Template">
+                  <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                      <Border x:Name="b" Background="Transparent" CornerRadius="5"
+                              Padding="8,7">
+                        <ContentPresenter/>
+                      </Border>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                          <Setter TargetName="b" Property="Background"
+                                  Value="{StaticResource BgHover}"/>
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </Setter.Value>
+                </Setter>
+              </Style>
+            </ListBox.ItemContainerStyle>
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="52"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="140"/>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="70"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="0" Text="{Binding Rank}"
+                             Foreground="{StaticResource TextLow}" FontSize="13"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13"
+                             TextTrimming="CharacterEllipsis"/>
+                  <TextBlock Grid.Column="2" Text="{Binding TitleText}"
+                             Foreground="{StaticResource TextMid}" FontSize="12"/>
+                  <TextBlock Grid.Column="3" Text="{Binding UferText}" FontSize="13"
+                             FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                  <TextBlock Grid.Column="4" Text="{Binding OpenText}" FontSize="13"
+                             FontWeight="SemiBold" HorizontalAlignment="Right"
+                             Foreground="{StaticResource Accent}"/>
+                  <TextBlock Grid.Column="5" Text="{Binding GamesText}"
+                             Foreground="{StaticResource TextLow}" FontSize="12"
+                             HorizontalAlignment="Right"/>
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>

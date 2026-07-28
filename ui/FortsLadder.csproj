@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>FortsLadder</AssemblyName>
+    <RootNamespace>FortsLadder</RootNamespace>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- Eine Datei zum Weitergeben: wer das Werkzeug ausprobieren soll, darf
+         nicht erst eine Laufzeitumgebung installieren muessen. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Translation catalogs ship next to the executable, so adding a
+         language means dropping in a file. No rebuild required. -->
+    <None Include="Locales\*.json" CopyToOutputDirectory="PreserveNewest"
+          Link="Locales\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

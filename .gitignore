@@ -1,0 +1,43 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.idea/
+.vscode/
+
+# A recorded match holds the Steam IDs of BOTH players. None of it belongs in
+# a public repo: publishing it would expose the match history of people who
+# never agreed to anything.
+data/recorded/
+# Observed Steam IDs and names. Not ours to publish.
+data/identity.json
+# Who agreed to be tracked — a list of real Steam IDs, so the same applies.
+data/consent.json
+# Any database, not just the default name: the sidecar -wal/-shm files are
+# just as revealing and easy to miss.
+data/*.sqlite*
+data/ratings.json
+data/seed/
+matches/
+
+# Backups lobby_config.py writes
+*.backup_*
+
+# Spieldaten gehoeren nicht ins Repo (fremdes Urheberrecht). Pools und
+# Konstanten werden zur Laufzeit aus der lokalen Installation gelesen.
+*.fwe
+*.fwr
+*.fwc
+constants*.lua
+log.txt
+log*.dat
+
+# Secrets gehoeren nie ins Repo
+.env
+.env.*
+
+# .NET-Buildartefakte -- 32 Dateien, die bei jedem Build neu entstehen
+ui/bin/
+ui/obj/
+*.user

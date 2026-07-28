@@ -1,0 +1,14 @@
+# Normalise line endings in the repository so a contributor on Linux or macOS
+# does not produce a diff that touches every line of a file they edited once.
+* text=auto eol=lf
+
+# Windows-only toolchain files that Visual Studio expects with CRLF.
+*.sln    text eol=crlf
+*.csproj text eol=crlf
+
+# Binary, never touch.
+*.png binary
+*.ico binary
+*.fwr binary
+*.xlsx binary
+*.sqlite binary

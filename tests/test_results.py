@@ -48,7 +48,7 @@ class World:
         self.results = ResultService(self.auth, self.store, self.ranking)
 
     def duel(self, a="Alice", b="Bob", *, games=3, score_low=2,
-             lobby=111, by=None, played_at="2026-07-28"):
+             lobby=111, by=None, played_at="2026-07-28T20:15:00"):
         return self.results.report(
             self.people[by or a],
             lobby_id=lobby,
@@ -136,6 +136,18 @@ def test_reporting_the_same_series_twice_changes_nothing():
     assert w.rating("Alice") == after_one
 
 
+def test_two_series_in_one_lobby_on_one_evening_stay_two():
+    """A Bo3 and then another Bo3 without leaving the lobby. Keyed by day alone
+    the second would have been swallowed as a duplicate of the first."""
+    w = World()
+    w.store.sanction_lobby(111)
+    w.duel(played_at="2026-07-28T20:15:00", score_low=2)
+    w.duel(played_at="2026-07-28T21:40:00", score_low=0)
+    assert len(w.store.load_results()) == 2,         [r.played_at for r in w.store.load_results()]
+    # And both were rated: two series, two rating changes.
+    assert len(w.results.events()) == 2
+
+
 # ----------------------------------------------------------------- Standings
 def test_withdrawing_consent_removes_the_past_too():
     """The rating is recomputed from the events every time, which is what makes
@@ -154,11 +166,11 @@ def test_a_win_and_a_loss_move_in_opposite_directions():
     w = World()
     w.store.sanction_lobby(111)
     w.store.sanction_lobby(222)
-    w.duel(lobby=111, score_low=3, games=3, played_at="2026-07-20")
+    w.duel(lobby=111, score_low=3, games=3, played_at="2026-07-20T19:00:00")
     high, low = w.rating("Alice"), w.rating("Bob")
     assert high > 1000 > low, (high, low)
 
-    w.duel(lobby=222, score_low=0, games=3, played_at="2026-07-21")
+    w.duel(lobby=222, score_low=0, games=3, played_at="2026-07-21T19:00:00")
     assert w.rating("Alice") < high, "a 0-3 did not cost the winner anything"
     assert w.rating("Bob") > low, "a 3-0 did not gain the loser anything"
 

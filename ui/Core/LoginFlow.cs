@@ -101,7 +101,10 @@ public sealed class LoginFlow
             sides,
             games,
             score_low = scoreLow,
-            played_at = playedAt.ToString("yyyy-MM-dd"),
+            // Full timestamp, not just the date: the server treats lobby plus
+            // kickoff as the identity of a series, and two Bo3s in the same
+            // lobby on one evening would otherwise collapse into one.
+            played_at = playedAt.ToString("yyyy-MM-ddTHH:mm:ss"),
             lobby_id = lobbyId?.ToString(),
             replays = replays.ToList(),
         });

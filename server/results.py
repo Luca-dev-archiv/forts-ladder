@@ -137,14 +137,22 @@ class ResultService:
                 continue
             names_a = [x.ufer_name or x.discord_name or x.id for x in a]  # type: ignore[union-attr]
             names_b = [x.ufer_name or x.discord_name or x.id for x in b]  # type: ignore[union-attr]
+            # The stored value is a full timestamp, because lobby plus kickoff
+            # is what makes two series in one lobby two series. The rating
+            # orders by day, so it gets the day.
+            date = r.played_at[:10]
             if len(names_a) == 1 and len(names_b) == 1:
-                out.append({"kind": "1v1", "date": r.played_at,
+                out.append({"kind": "1v1", "date": date,
                             "a": names_a[0], "b": names_b[0],
-                            "games": r.games, "score_a": r.score_low})
+                            "games": r.games, "score_a": r.score_low,
+                            # Ties the games of one series together for the
+                            # entry-rating rule, and orders same-day series.
+                            "event_id": r.id, "event": r.played_at})
             else:
-                out.append({"kind": "team", "date": r.played_at,
+                out.append({"kind": "team", "date": date,
                             "team_a": names_a, "team_b": names_b,
-                            "games": r.games, "score_a": r.score_low})
+                            "games": r.games, "score_a": r.score_low,
+                            "event_id": r.id, "event": r.played_at})
         return out
 
     def refresh_ranking(self) -> int:

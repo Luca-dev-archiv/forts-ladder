@@ -229,6 +229,7 @@
   "sidebar.name_unknown": "(name unknown)",
   "sidebar.recorded": "RECORDED",
   "sidebar.series": "series",
+  "sidebar.steam_tail": "Steam …{0}",
   "sidebar.ufer_name": "LADDER NAME",
   "sidebar.unassigned": "not assigned",
   "status.forts_missing": "Forts not found",

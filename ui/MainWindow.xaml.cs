@@ -153,7 +153,12 @@ public partial class MainWindow : Window
     private void OnAccount(string steamId, string persona)
     {
         AccountName.Text = string.IsNullOrEmpty(persona) ? Loc.T("sidebar.name_unknown") : persona;
-        AccountId.Text = steamId;
+        // The last four digits, not all seventeen. The name above is what
+        // identifies the account to a person; the tail is enough to tell two
+        // Forts accounts on one PC apart, and the whole id belongs in a
+        // screenshot as little as it belongs in a repository.
+        AccountId.Text = steamId.Length > 4
+            ? Loc.T("sidebar.steam_tail", steamId[^4..]) : steamId;
         RefreshUferName(steamId);
 
         // Ask once who owns this machine, then never again. A "no" is
@@ -1003,9 +1008,12 @@ public sealed class GameVm
     {
         Map = m.Map ?? "?";
         Duration = m.DurationSeconds is int d ? $"{d / 60}:{d % 60:00}" : "—";
+        // The game's own name for it, not the mod folder: the log says
+        // "commander-da-overclocker" and the game calls that Overdrive, so
+        // stripping the prefix printed something no player recognises.
         Commanders = string.Join("   ", m.Commanders
             .OrderBy(kv => kv.Key)
-            .Select(kv => $"S{kv.Key}: {kv.Value.Replace("commander-", "")}"));
+            .Select(kv => $"S{kv.Key}: {CommanderNames.Display(kv.Value)}"));
         (Result, ResultBrush) = m.Status switch
         {
             MatchStatus.Decided => (Loc.T("series.result_side", m.WinnerSide), w.BrushFor("Win")),

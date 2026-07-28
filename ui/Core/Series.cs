@@ -123,7 +123,10 @@ public sealed class Series
                 if (!burned.TryGetValue(side, out var used))
                     burned[side] = used = new HashSet<string>();
                 if (used.Contains(cmdr))
-                    warnings.Add(Loc.T("warn.commander_reuse", i, side, cmdr));
+                    // Named the way the game names it: a warning that says
+                    // "da-overclocker" makes the reader look it up.
+                    warnings.Add(Loc.T("warn.commander_reuse", i, side,
+                                       CommanderNames.Display(cmdr)));
                 if (m.Status == MatchStatus.Decided && m.WinnerSide == side)
                     used.Add(cmdr);
             }

@@ -354,6 +354,12 @@ public sealed class MeDto
     public string? Role { get; set; }
     public bool Verified { get; set; }
     public bool Tracking_Consent { get; set; }
+
+    /// <summary>
+    /// Own grants — "tournament_host", "referee", … A host is usually a
+    /// player by rank, so the role alone does not say what they may open.
+    /// </summary>
+    public List<string> Grants { get; set; } = new();
 }
 
 public sealed class PoolStatusDto

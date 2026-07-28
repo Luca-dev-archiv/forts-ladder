@@ -120,6 +120,7 @@
   "queue.idle_sub": "You will be paired with someone near your rating. The map veto and commander bans happen before the match starts.",
   "queue.idle_title": "Ready to play",
   "queue.link_steam": "Link Steam",
+  "queue.manage": "Manage",
   "queue.mode": "MODE",
   "queue.mode_unavailable": "Team modes need whole sides paired, not two individuals — not built yet, so it cannot be queued.",
   "queue.no_consent": "tracking not allowed",

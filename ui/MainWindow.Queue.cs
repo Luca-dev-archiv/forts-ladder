@@ -119,7 +119,19 @@ public partial class MainWindow
             ? Visibility.Visible : Visibility.Collapsed;
         if (pools?.Configured == false && !admin)
             QueueError.Text = Loc.T("queue.no_pools_yet");
+
+        // Managing accounts and building brackets happens in the browser, so
+        // this is a shortcut rather than a screen. Hidden for everyone who
+        // would only find a refusal behind it.
+        _managePath = admin ? "/admin"
+            : me.Grants.Contains("tournament_host") || me.Grants.Contains("referee")
+                ? "/manage/tournaments" : null;
+        BtnManage.Visibility = _managePath is null
+            ? Visibility.Collapsed : Visibility.Visible;
     }
+
+    /// <summary>Which management page this account may open, if any.</summary>
+    private string? _managePath;
 
     private async void BtnPublishPools_Click(object sender, RoutedEventArgs e)
     {
@@ -156,11 +168,17 @@ public partial class MainWindow
     }
 
     private void BtnWebsite_Click(object sender, RoutedEventArgs e)
+        => OpenInBrowser("/");
+
+    private void BtnManage_Click(object sender, RoutedEventArgs e)
+        => OpenInBrowser(_managePath ?? "/");
+
+    private void OpenInBrowser(string path)
     {
         try
         {
             System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo(_login.WebsiteUrl())
+                new System.Diagnostics.ProcessStartInfo(_login.WebsiteUrl(path))
                 { UseShellExecute = true });
         }
         catch (Exception ex) { QueueError.Text = ex.Message; }

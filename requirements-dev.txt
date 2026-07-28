@@ -1,0 +1,7 @@
+# Only needed to run the tests, never on the server.
+-r requirements.txt
+
+# tests/test_pages.py drives the routes through the real ASGI app;
+# fastapi.testclient needs httpx to do that. Without it that one file skips
+# itself rather than failing.
+httpx>=0.27

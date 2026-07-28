@@ -120,6 +120,7 @@
   "queue.idle_sub": "Du wirst mit jemandem in deiner Nähe gepaart. Karten-Veto und Commander-Banns laufen, bevor das Match startet.",
   "queue.idle_title": "Spielbereit",
   "queue.link_steam": "Steam verknüpfen",
+  "queue.manage": "Verwaltung",
   "queue.mode": "MODUS",
   "queue.mode_unavailable": "Teammodi brauchen ganze Seiten statt zwei Einzelspieler — noch nicht gebaut, also nicht wählbar.",
   "queue.no_consent": "Wertung nicht erlaubt",

@@ -69,6 +69,8 @@ DISCORD_CLIENT_ID=123456789012345678
 DISCORD_CLIENT_SECRET=your-secret-here
 LADDER_BASE_URL=http://localhost:8000
 LADDER_DB=data/ladder.sqlite
+# Your own Discord user id. Promoted to owner at startup — see step 5.
+LADDER_OWNER_DISCORD_ID=123456789012345678
 # optional, only for Steam profile lookups:
 STEAM_API_KEY=your-key-here
 ```
@@ -84,30 +86,39 @@ set DISCORD_CLIENT_ID=123456789012345678
 ## 4. Start it
 
 ```bash
-pip install fastapi uvicorn
+pip install -r requirements.txt
 python -m uvicorn server.app:app --reload
 ```
 
-Then <http://localhost:8000/docs> shows every endpoint with a try-it button.
-
 `GET /health` should answer `{"ok": true, ...}`.
+
+The interactive docs are off by default — publishing the full route list,
+admin routes included, hands anyone the map for free. `LADDER_DOCS=1` turns
+them back on at <http://localhost:8000/docs> while you are developing.
 
 ---
 
 ## 5. Make yourself the owner
 
-The first account is a normal player — there is no built-in super user,
-because a default administrator is a default way in.
-
-1. Log in once via Discord so the account exists.
-2. Promote yourself directly in the database, once:
+Every account starts as a player, and owner can only be granted by an owner —
+so on a fresh server nobody could ever become the first one. Name yourself in
+the environment instead:
 
 ```bash
-python -c "from server.store import Store; s=Store('data/ladder.sqlite'); import sys; s.db.execute('UPDATE accounts SET role=4 WHERE discord_name=?', ('YOUR_DISCORD_NAME',)); s.db.commit(); print(s.db.execute('SELECT discord_name, role FROM accounts').fetchall())"
+LADDER_OWNER_DISCORD_ID=123456789012345678
 ```
 
-Role `4` is owner. From then on you can hand out everything through the API
-and never need to touch the database again.
+That is your Discord **user** id, not the application id: in Discord, enable
+Developer Mode (Settings → Advanced), then right-click your own name → **Copy
+User ID**.
+
+Whoever controls the machine decides who the owner is. The alternative —
+"the first account to log in wins" — hands a public server to whichever
+stranger arrives first.
+
+It is applied at every startup, over accounts that already exist too, so it
+works whether you set it before or after your first login. Restart the server
+once after setting it, then open `/admin`.
 
 ---
 
@@ -128,6 +139,17 @@ moderation levels.
 | `caster` | observe even when the host closed requests |
 | `map_maker`, `mod_maker`, `content_creator` | nothing — recognition only |
 
+Hand them out on **`/admin`**: one row per account, one Save per person, so a
+mistake affects one person rather than the whole table. Only an owner sees the
+rank picker — an admin can grant permissions but not promote.
+
+A tournament host can then build brackets on **`/manage/tournaments`**: paste
+the entrants one per line, optionally `name, rating` to set the seeding, and
+report each result as it comes in. They still cannot read other people's
+accounts. That separation is the point.
+
+The same grant over the API, if you prefer:
+
 ```bash
 curl -X POST http://localhost:8000/admin/grant \
      -H "Content-Type: application/json" \
@@ -135,23 +157,23 @@ curl -X POST http://localhost:8000/admin/grant \
      --cookie "ladder_session=<your session>"
 ```
 
-A tournament host can create tournaments but cannot read other people's
-accounts. That separation is the point.
-
 ---
 
-## 7. What is still missing before this is live
+## 7. Checking the login actually works
 
-Two functions deliberately answer `501` instead of pretending to work:
+Both callbacks are implemented: the Discord `code` is exchanged for a token
+and `GET /users/@me` is called with it, and Steam's OpenID assertion is
+verified with a `check_authentication` call back to Steam. Neither trusts what
+the browser hands it — without that check, anyone could claim to be anyone.
 
-- **`/auth/discord/callback`** — the `code` still has to be exchanged for a
-  token and `GET /users/@me` called with it.
-- **`/auth/steam/callback`** — Steam OpenID requires a `check_authentication`
-  call back to Steam.
+Two things that fail quietly if the setup is wrong:
 
-Both are short, but shipping them unverified would mean anyone could claim to
-be anyone. A login where that is possible is worse than no login at all —
-which is why they refuse loudly rather than fail quietly.
+- Discord's edge answers **403** to a request without a `User-Agent`. One is
+  sent on every outbound call; if you see 403 on the token exchange, something
+  is stripping headers.
+- `LADDER_BASE_URL` has to match the redirect you registered exactly. It is
+  what the callback URL is built from, so a mismatch here looks like Discord
+  rejecting the app.
 
 ---
 

@@ -77,8 +77,10 @@ public sealed class LoginFlow
     /// <summary>Where to log in when the app route did not work.</summary>
     public string BrowserLoginUrl() => $"{_api.BaseUrl}/auth/discord/start";
 
-    /// <summary>The account page — the only page the server serves a human.</summary>
-    public string WebsiteUrl() => $"{_api.BaseUrl}/";
+    /// <summary>A page on the server: the account page, or one of the two
+    /// management pages. Everything a person edits rather than plays is a form,
+    /// and a browser is the right place for a form.</summary>
+    public string WebsiteUrl(string path = "/") => $"{_api.BaseUrl}{path}";
 
     public Task<MeDto?> MeAsync() => _api.GetAsync<MeDto>("/me");
 

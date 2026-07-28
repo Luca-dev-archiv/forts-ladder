@@ -219,8 +219,8 @@ public sealed class BracketMatchVm
 
     public BracketMatchVm(BracketMatchDto m, MainWindow w)
     {
-        // Compose the label locally too: "(Freilos)" came baked in from the
-        // server otherwise.
+        // Composed locally: the server's own label is language-neutral text
+        // that would otherwise arrive in English regardless of the client.
         Label = m.Bye
             ? Loc.T("tour.bye", m.A_Name ?? m.B_Name ?? Loc.T("common.none"))
             : $"{m.A_Name ?? Loc.T("common.none")} vs {m.B_Name ?? Loc.T("common.none")}"

@@ -296,6 +296,9 @@ def me(ladder_session: str | None = Cookie(None),
     return {"logged_in": True, "discord": acc.discord_name,
             "ufer_name": acc.ufer_name, "steam_id": acc.steam_id,
             "role": acc.role.label, "verified": acc.verified,
+            # Own grants only: the client offers the tournament pages to a host
+            # who is not an admin, and the rank alone does not say so.
+            "grants": sorted(g.value for g in acc.grants),
             "tracking_consent": acc.tracking_consent,
             "consent_since": acc.consent_since}
 
@@ -601,6 +604,9 @@ def set_role(target_id: str, role: str,
     except KeyError:
         raise HTTPException(400, f"unknown role {role!r}")
     guard(auth.grant_role, acc, target, wanted)
+    # Persisted, or the promotion lasts until the next restart — which is how
+    # long a role that was granted over the API used to survive.
+    store.save_account(target, granted_by=acc.id)
     return {"account": target.id, "role": target.role.label}
 
 
@@ -754,7 +760,9 @@ def index(ladder_session: str | None = Cookie(None),
     return page.signed_in(
         discord=acc.discord_name, ufer_name=acc.ufer_name,
         steam_id=acc.steam_id, consent=acc.tracking_consent,
-        role=acc.role.label, steam_url="/auth/steam/start", code=None)
+        role=acc.role.label, steam_url="/auth/steam/start", code=None,
+        is_admin=acc.may("link_other_account"),
+        can_host=acc.may("create_tournament"))
 
 
 @app.post("/auth/pair/page", response_class=HTMLResponse)
@@ -770,7 +778,9 @@ def pair_from_page(ladder_session: str | None = Cookie(None),
     return page.signed_in(
         discord=acc.discord_name, ufer_name=acc.ufer_name,
         steam_id=acc.steam_id, consent=acc.tracking_consent,
-        role=acc.role.label, steam_url="/auth/steam/start", code=code)
+        role=acc.role.label, steam_url="/auth/steam/start", code=code,
+        is_admin=acc.may("link_other_account"),
+        can_host=acc.may("create_tournament"))
 
 
 @app.post("/me/consent/on")
@@ -800,6 +810,227 @@ def logout_page(ladder_session: str | None = Cookie(None),
     r = RedirectResponse("/", status_code=303)
     r.delete_cookie(SESSION_COOKIE)
     return r
+
+
+# ------------------------------------------------------ Admin & host pages
+#
+# Both are forms — a list of accounts with roles, a list of entrants, a result
+# — and a form is what a browser is good at. They live here rather than in the
+# client because a WPF window would be a slower way to build the same thing,
+# and because the people who need them are not always at the machine that has
+# Forts installed. The client keeps what needs the game: queue, draft, live.
+#
+# Under /manage and not /tournaments/page, because /tournaments/{tid} is
+# already registered and would swallow "page" as an id.
+
+def _login_first(return_to: str) -> RedirectResponse:
+    """A page nobody is signed in for sends them to sign in, not to a 401."""
+    return RedirectResponse(f"/auth/discord/start?return_to={return_to}",
+                            status_code=303)
+
+
+def _roster_rows() -> list[dict]:
+    """Accounts as the admin page wants them: highest rank first."""
+    return [{"id": a.id, "discord": a.discord_name, "role": a.role.label,
+             "ufer_name": a.ufer_name, "steam_id": a.steam_id,
+             "tracked": a.trackable,
+             "grants": sorted(g.value for g in a.grants)}
+            for a in sorted(auth.accounts.values(),
+                            key=lambda x: (-int(x.role),
+                                           (x.discord_name or "").lower()))]
+
+
+def _admin_page(acc, error: str = "") -> HTMLResponse:
+    return HTMLResponse(page.admin(
+        accounts=_roster_rows(), grants=[g.value for g in Grant],
+        my_id=acc.id, pools=queue_pools(), ranking_count=len(ranking.players),
+        may_set_roles=acc.may("grant_role"), error=error))
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(ladder_session: str | None = Cookie(None),
+               authorization: str | None = Header(None)):
+    acc = current(session_token(ladder_session, authorization))
+    if acc is None:
+        return _login_first("/admin")
+    guard(acc.require, "link_other_account")
+    return _admin_page(acc)
+
+
+@app.post("/admin/save", response_class=HTMLResponse)
+async def admin_save(request: Request,
+                     ladder_session: str | None = Cookie(None),
+                     authorization: str | None = Header(None)):
+    """One row of the admin page: a role and a set of grants.
+
+    Everything is validated before anything is written, so a typo in one field
+    cannot leave an account half-changed.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    guard(acc.require, "grant_permission")
+    form = await request.form()
+    target = auth.accounts.get(str(form.get("account") or ""))
+    if target is None:
+        raise HTTPException(404, "unknown account")
+    if target.id == acc.id:
+        return _admin_page(acc, "You cannot change your own account here.")
+
+    role_name = str(form.get("role") or "")
+    try:
+        wanted_role = Role[role_name.upper()] if role_name else target.role
+        wanted_grants = {Grant(v) for v in form.getlist("grant")}
+    except (KeyError, ValueError):
+        return _admin_page(acc, "Unknown role or grant in the form.")
+
+    add = wanted_grants - target.grants
+    drop = target.grants - wanted_grants
+    try:
+        if wanted_role is not target.role:
+            auth.grant_role(acc, target, wanted_role)
+        for g in add:
+            auth.grant_permission(acc, target, g)
+        for g in drop:
+            auth.revoke_permission(acc, target, g)
+    except AuthError as e:
+        return _admin_page(acc, str(e))
+    store.save_account(target, granted_by=acc.id)
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/ranking/reload/page")
+def ranking_reload_page(ladder_session: str | None = Cookie(None),
+                        authorization: str | None = Header(None)):
+    acc = require(session_token(ladder_session, authorization))
+    guard(acc.require, "link_other_account")
+    ranking.reload()
+    return RedirectResponse("/admin", status_code=303)
+
+
+#: Tournament modes first in the picker — they are what an event uses — with
+#: the rest still available for a host who wants a different series length.
+def _mode_choices() -> list[tuple[str, str]]:
+    keys = sorted(BY_KEY, key=lambda k: (not k.startswith("tournament"), k))
+    return [(k, f"{BY_KEY[k].label} · Bo{BY_KEY[k].best_of}") for k in keys]
+
+
+def _parse_entrants(text: str) -> list[Participant]:
+    """One entrant per line, `name` or `name, rating`.
+
+    A textarea rather than a growing list of inputs: a host has the names in
+    a message or a spreadsheet already and pastes them.
+    """
+    out: list[Participant] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        name, _, rating = line.rpartition(",")
+        if not name:
+            out.append(Participant(line))
+            continue
+        try:
+            out.append(Participant(name.strip(), float(rating.strip())))
+        except ValueError:
+            # A comma that was part of the name, not a rating.
+            out.append(Participant(line))
+    return out
+
+
+@app.get("/manage/tournaments", response_class=HTMLResponse)
+def tournaments_page(ladder_session: str | None = Cookie(None),
+                     authorization: str | None = Header(None)):
+    acc = current(session_token(ladder_session, authorization))
+    if acc is None:
+        return _login_first("/manage/tournaments")
+    guard(acc.require, "create_tournament")
+    return HTMLResponse(page.tournaments(
+        listing=store.list_tournaments(), modes=_mode_choices(),
+        is_admin=acc.may("link_other_account")))
+
+
+@app.post("/manage/tournaments", response_class=HTMLResponse)
+async def tournaments_page_create(request: Request,
+                                  ladder_session: str | None = Cookie(None),
+                                  authorization: str | None = Header(None)):
+    acc = require(session_token(ladder_session, authorization))
+    guard(acc.require, "create_tournament")
+    form = await request.form()
+    name = str(form.get("name") or "").strip()
+    entrants = str(form.get("entrants") or "")
+    mode = BY_KEY.get(str(form.get("mode") or "")) or BY_KEY["tournament_1v1"]
+
+    def again(msg: str) -> HTMLResponse:
+        return HTMLResponse(page.tournaments(
+            listing=store.list_tournaments(), modes=_mode_choices(),
+            is_admin=acc.may("link_other_account"), error=msg,
+            name=name, entrants=entrants))
+
+    if not name:
+        return again("Give the tournament a name.")
+    try:
+        t = Tournament(name, _parse_entrants(entrants), mode=mode)
+    except ValueError as e:
+        return again(str(e))
+    tid = secrets.token_hex(6)
+    store.create_tournament(tid, t, created_by=acc.id)
+    return RedirectResponse(f"/manage/tournaments/{tid}", status_code=303)
+
+
+def _bracket_page(acc, tid: str, error: str = "") -> HTMLResponse:
+    try:
+        t = store.load_tournament(tid)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    return HTMLResponse(page.bracket(
+        name=t.name, mode=t.mode.label, best_of=t.mode.best_of,
+        rounds=t.bracket(), tid=tid,
+        champion=t.champion.name if t.champion else None,
+        is_admin=acc.may("link_other_account"),
+        can_report=acc.may("run_tournament"),
+        can_host=acc.may("create_tournament"), error=error))
+
+
+@app.get("/manage/tournaments/{tid}", response_class=HTMLResponse)
+def bracket_page(tid: str, ladder_session: str | None = Cookie(None),
+                 authorization: str | None = Header(None)):
+    """Readable by anyone signed in — an entrant wants to see their own
+    bracket. Only a host or referee gets the report forms."""
+    acc = current(session_token(ladder_session, authorization))
+    if acc is None:
+        return _login_first(f"/manage/tournaments/{tid}")
+    return _bracket_page(acc, tid)
+
+
+@app.post("/manage/tournaments/{tid}/report", response_class=HTMLResponse)
+async def bracket_page_report(tid: str, request: Request,
+                              ladder_session: str | None = Cookie(None),
+                              authorization: str | None = Header(None)):
+    acc = require(session_token(ladder_session, authorization))
+    guard(acc.require, "run_tournament")
+    form = await request.form()
+    match_id = str(form.get("match") or "")
+    winner = str(form.get("winner") or "")
+    raw = str(form.get("score") or "").strip()
+
+    score: tuple[int, int] | None = None
+    if raw:
+        parts = raw.replace("-", ":").split(":")
+        try:
+            score = (int(parts[0]), int(parts[1]))
+        except (IndexError, ValueError):
+            return _bracket_page(acc, tid,
+                                 f"{raw!r} is not a score — write it as 3:1.")
+    try:
+        t = store.load_tournament(tid)
+        t.report(match_id, winner, score)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        return _bracket_page(acc, tid, str(e))
+    store.record_result(tid, match_id, winner, score)
+    if t.finished:
+        store.mark_finished(tid)
+    return RedirectResponse(f"/manage/tournaments/{tid}", status_code=303)
 
 
 # ---------------------------------------------------------------- Ranking

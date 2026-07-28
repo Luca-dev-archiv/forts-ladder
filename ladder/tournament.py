@@ -64,7 +64,7 @@ class Match:
         a = self.a.name if self.a else "—"
         b = self.b.name if self.b else "—"
         if self.bye:
-            return f"{a} (Freilos)"
+            return f"{a} (bye)"
         s = f"  {self.score[0]}:{self.score[1]}" if self.score else ""
         return f"{a} vs {b}{s}"
 

@@ -174,12 +174,21 @@ cd ui && dotnet run
 Everything above works with no server at all: the recorder, the ranking, the
 draft and the report line are local. The API exists so that **clients can
 agree with each other** — who opted in, and which lobby was set up for a
-ladder match. It serves JSON to the client and has no pages to browse.
+ladder match. What it serves a human is three pages, all of them forms:
 
-Run one if you want live matches and tournaments:
+| Page | Who | What for |
+|---|---|---|
+| `/` | anyone signed in | Link Steam, agree to be tracked, get the code that connects the client |
+| `/admin` | admins | Roles and grants, and whether the map pool has been published |
+| `/manage/tournaments` | tournament hosts | Build a bracket from a pasted list of entrants, then report results |
+
+There is no ladder to browse and no profile to look up: the ranking lives in
+the client, and a bracket is only readable by someone signed in.
+
+Run a server if you want live matches and tournaments:
 
 ```bash
-pip install fastapi uvicorn
+pip install -r requirements.txt
 uvicorn server.app:app
 ```
 

@@ -57,6 +57,10 @@ class LiveMatch:
     slots_used: int
     slots_total: int
     lobby_id: int | None = None
+    #: The host's SteamID64. Steam's join URL needs the lobby owner's account —
+    #: without it the link does not join, which is how the drafted handoff
+    #: failed until it was passed properly.
+    host_steam: str | None = None
     password_protected: bool = True
     observers: list[str] = field(default_factory=list)
     accepting_requests: bool = True
@@ -109,6 +113,9 @@ class LiveService:
             mode_key=mode_key, mode_label=mode_label, players=list(players),
             slots_used=slots_used, slots_total=slots_total,
             lobby_id=lobby_id, tournament=tournament,
+            # Taken from the account rather than the request body: the host is
+            # whoever is logged in, and their Steam ID is already proven.
+            host_steam=host.steam_id,
             started_at=self._now(), last_seen=self._now())
         self.matches[m.id] = m
         return m
@@ -147,6 +154,41 @@ class LiveService:
         if m.host_account_id != actor.id and not actor.may("override_observer_lock"):
             raise AuthError("only the host can switch requests on or off")
         m.accepting_requests = value
+
+    def requests_for(self, account: Account) -> list[dict]:
+        """This account's own requests, with the answer.
+
+        Without it a spectator pressed "ask to watch" and never learned the
+        outcome: the only route was the host's inbox, which is somebody else's.
+        """
+        out = []
+        for r in self.requests.values():
+            if r.account_id != account.id:
+                continue
+            m = self.matches.get(r.match_id)
+            row = {"id": r.id, "match_id": r.match_id,
+                   "state": r.state.value, "reason": r.reason,
+                   "players": m.players if m else [],
+                   "mode": m.mode_label if m else None}
+            if r.state is RequestState.APPROVED and m is not None:
+                # The lobby id is the thing that lets someone in, so it appears
+                # only here and only once the host has said yes.
+                row["lobby_id"] = str(m.lobby_id) if m.lobby_id else None
+                row["join_url"] = self._join_url(m)
+            out.append(row)
+        return sorted(out, key=lambda x: x["id"])
+
+    @staticmethod
+    def _join_url(m: "LiveMatch") -> str | None:
+        """Steam's join link, with the lobby owner's account in it.
+
+        Leaving the owner out and letting Steam work it out does not join — the
+        drafted handoff proved that the hard way.
+        """
+        if not m.lobby_id:
+            return None
+        owner = m.host_steam or "0"
+        return f"steam://joinlobby/410900/{m.lobby_id}/{owner}"
 
     def request_observer(self, account: Account, match_id: str) -> ObserverRequest:
         account.require("request_observer")
@@ -225,9 +267,8 @@ class LiveService:
             raise AuthError(f"request is {r.state.value}, not admitted")
         m = self._match(r.match_id)
         return {
-            "lobby_id": m.lobby_id,
-            "join_url": (f"steam://joinlobby/410900/{m.lobby_id}"
-                         if m.lobby_id else None),
+            "lobby_id": str(m.lobby_id) if m.lobby_id else None,
+            "join_url": self._join_url(m),
             "password_protected": m.password_protected,
         }
 

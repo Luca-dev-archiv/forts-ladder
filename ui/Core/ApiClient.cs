@@ -437,6 +437,45 @@ public sealed class VoidRequestDto
     public string Reason { get; set; } = "";
 }
 
+public sealed class PublishedDto
+{
+    public string Match_Id { get; set; } = "";
+}
+
+public sealed class ObserverPendingDto
+{
+    public string Id { get; set; } = "";
+    public string Match_Id { get; set; } = "";
+    /// <summary>Ladder name of whoever is asking.</summary>
+    public string Who { get; set; } = "";
+}
+
+public sealed class ObserverInboxDto
+{
+    public List<ObserverPendingDto> Pending { get; set; } = new();
+}
+
+public sealed class ObserverRequestDto
+{
+    public string Id { get; set; } = "";
+    public string Match_Id { get; set; } = "";
+    /// <summary>"pending", "approved" or "declined".</summary>
+    public string State { get; set; } = "";
+    /// <summary>Why — "no room" is arithmetic, not a judgement, and the
+    /// difference has to reach the person who asked.</summary>
+    public string Reason { get; set; } = "";
+    public List<string> Players { get; set; } = new();
+    public string? Mode { get; set; }
+    /// <summary>Only present once admitted: it is what lets someone in.</summary>
+    public string? Lobby_Id { get; set; }
+    public string? Join_Url { get; set; }
+}
+
+public sealed class MyObserverRequestsDto
+{
+    public List<ObserverRequestDto> Requests { get; set; } = new();
+}
+
 public sealed class NameClaimDto
 {
     /// <summary>True when it took effect; false when a human has to confirm.</summary>

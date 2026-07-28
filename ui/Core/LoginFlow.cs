@@ -182,6 +182,45 @@ public sealed class LoginFlow
         return false;
     }
 
+    // ------------------------------------------------------------- Spectators
+    /// <summary>
+    /// Announce a running match so it can be watched.
+    ///
+    /// Nothing published one before, so the live list everybody polled was
+    /// always empty and the whole spectator flow was unreachable. The lobby id
+    /// travels with it and is handed on only to admitted spectators.
+    /// </summary>
+    public Task<PublishedDto?> PublishLiveAsync(string mode, string label,
+            List<string> players, int slotsUsed, string lobbyId) =>
+        _api.PostAsync<PublishedDto>("/live", new
+        {
+            mode_key = mode,
+            mode_label = label,
+            players,
+            slots_used = slotsUsed,
+            slots_total = 9,          // Forts' hard limit, spectators included
+            lobby_id = long.TryParse(lobbyId, out var l) ? l : (long?)null,
+        });
+
+    public Task<object?> HeartbeatLiveAsync(string matchId) =>
+        _api.PostAsync<object>($"/live/{matchId}/heartbeat");
+
+    public Task<bool> FinishLiveAsync(string matchId) =>
+        _api.DeleteAsync($"/live/{matchId}");
+
+    /// <summary>Who is asking to watch a match of mine.</summary>
+    public Task<ObserverInboxDto?> ObserverInboxAsync() =>
+        _api.GetAsync<ObserverInboxDto>("/observe/requests");
+
+    /// <summary>My own requests, and what became of them.</summary>
+    public Task<MyObserverRequestsDto?> MyObserverRequestsAsync() =>
+        _api.GetAsync<MyObserverRequestsDto>("/observe/mine");
+
+    public async Task<bool> AnswerObserverAsync(string requestId, bool approve) =>
+        await _api.PostAsync<object>(
+            $"/observe/{requestId}/answer?approve={(approve ? "true" : "false")}")
+        is not null;
+
     public Task<QueueModesDto?> ModesAsync() => _api.GetAsync<QueueModesDto>("/queue/modes");
 
     public Task<PoolStatusDto?> PoolsAsync() => _api.GetAsync<PoolStatusDto>("/queue/pools");

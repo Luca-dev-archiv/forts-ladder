@@ -510,10 +510,23 @@ def observe(match_id: str, ladder_session: str | None = Cookie(None),
 @app.get("/observe/requests")
 def my_requests(ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):
+    """The host's inbox: who is asking to watch a match of theirs."""
     acc = require(session_token(ladder_session, authorization))
     return {"pending": [
         {"id": r.id, "match_id": r.match_id, "who": r.display_name}
         for r in live.pending_for_host(acc)]}
+
+
+@app.get("/observe/mine")
+def my_own_requests(ladder_session: str | None = Cookie(None),
+                    authorization: str | None = Header(None)):
+    """Your own requests and what became of them.
+
+    The route above is somebody else's inbox, so without this a spectator asked
+    to watch and never found out the answer.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    return {"requests": live.requests_for(acc)}
 
 
 @app.post("/observe/{request_id}/answer")

@@ -187,10 +187,21 @@ public sealed class Series
     }
 
     // ---------------------------------------------------------------- Grouping
+    /// <summary>
+    /// Group matches into series.
+    ///
+    /// `sealedLobbies` are lobbies this ladder set up, and they are a hard
+    /// boundary: matches in one are that series and never merge with anything
+    /// else. Without it the host-crash rule below folds a genuinely new series
+    /// into the previous one whenever the same two people play again within a
+    /// few hours — which is what testing found.
+    /// </summary>
     public static List<Series> Group(IEnumerable<MatchRecord> matches,
                                      TimeSpan? gap = null,
-                                     string? mySteamId = null)
+                                     string? mySteamId = null,
+                                     IReadOnlySet<ulong>? sealedLobbies = null)
     {
+        sealedLobbies ??= new HashSet<ulong>();
         var maxGap = gap ?? TimeSpan.FromHours(3);
         var playable = matches
             .Where(m => m.Players.Values.Count(p => !string.IsNullOrEmpty(p.SteamId)) >= 2
@@ -245,15 +256,29 @@ public sealed class Series
         // Merging only happens for the same roster without a longer break.
         // Two separate duels between the same pairing on one evening do not
         // exist under the rules (one per calendar month).
+        // A series played in a lobby the ladder set up is sealed: its boundary
+        // is known rather than guessed, so it neither absorbs nor is absorbed.
+        bool Sealed(Series s) => s.Matches.Any(
+            m => m.LobbyId is not null && sealedLobbies.Contains(m.LobbyId.Value));
+        ulong? LobbyOf(Series s) => s.Matches
+            .Select(m => m.LobbyId).FirstOrDefault(x => x is not null);
+
         var merged = new List<Series>();
         foreach (var s in result.OrderBy(x => x.PlayedAt))
         {
             var prev = merged.LastOrDefault();
-            if (prev is not null &&
+            var wouldMerge = prev is not null &&
                 string.Join("+", prev.SteamIds) == string.Join("+", s.SteamIds) &&
-                s.Matches[0].PlayedAt - prev.Matches[^1].PlayedAt <= maxGap)
+                s.Matches[0].PlayedAt - prev.Matches[^1].PlayedAt <= maxGap;
+            // Two different lobbies, at least one of them drafted: that is two
+            // series, whatever the clock says.
+            if (wouldMerge && (Sealed(s) || Sealed(prev!))
+                && LobbyOf(s) != LobbyOf(prev!))
+                wouldMerge = false;
+
+            if (wouldMerge)
             {
-                prev.Matches.AddRange(s.Matches);
+                prev!.Matches.AddRange(s.Matches);
                 prev.Matches.Sort((a, b) => a.PlayedAt.CompareTo(b.PlayedAt));
             }
             else merged.Add(s);

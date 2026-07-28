@@ -12,6 +12,9 @@ public partial class MainWindow : Window
     private readonly LogWatcher _watcher;
     private System.Windows.Threading.DispatcherTimer? _lobbyFile;
     private readonly IdentityStore _identity = new();
+    /// <summary>Lobbies this ladder set up — hard boundaries for the series
+    /// grouping, so a new lobby is never folded into the previous series.</summary>
+    private readonly LadderLobbies _ladderLobbies = new();
     private readonly List<MatchRecord> _matches = new();
     private readonly HashSet<string> _seenKeys = new();
     private readonly ObservableCollection<SeriesVm> _series = new();
@@ -38,6 +41,7 @@ public partial class MainWindow : Window
         StateChanged += (_, _) => OnWindowStateChanged();
         _queue = new ServerQueue(_api);
         InitQueue();
+        InitObservers();
 
         _watcher = new LogWatcher(TimeSpan.FromSeconds(2));
         _watcher.StatusChanged += (s, ok) => Dispatcher.Invoke(() => SetStatus(s, ok));
@@ -63,6 +67,7 @@ public partial class MainWindow : Window
         Loaded += (_, _) => _ = CheckForUpdateAsync();
         Closed += (_, _) =>
         {
+            _observerPoll?.Stop();
             _lobbyFile?.Stop();
             _watcher.Dispose(); _draft.Dispose(); _queue.Dispose();
         };
@@ -289,7 +294,8 @@ public partial class MainWindow : Window
     private void RebuildSeries()
     {
         var selectedKey = _selected?.Matches.FirstOrDefault()?.Key;
-        var grouped = Series.Group(_matches, null, _watcher.CurrentAccount);
+        var grouped = Series.Group(_matches, null, _watcher.CurrentAccount,
+                                   _ladderLobbies.All);
         _series.Clear();
         foreach (var s in grouped) _series.Add(new SeriesVm(s, _identity));
 
@@ -740,6 +746,15 @@ public partial class MainWindow : Window
         }
         HandoffBar.Visibility = Visibility.Visible;
 
+        // Remembered on both sides, not just the host's: the guest groups the
+        // same matches into the same series and needs the same boundary.
+        if (s.Lobby_Id is { Length: > 0 } lid && ulong.TryParse(lid, out var lidNum)
+            && _ladderLobbies.Add(lidNum))
+            RebuildSeries();
+        // Announce it so it can be watched. Nothing published a live match
+        // before, so the list everyone polled was always empty.
+        _ = PublishSeriesAsync();
+
         var haveLobby = s.Lobby_Id is { Length: > 0 };
         var claimed = s.Lobby_Host is { Length: > 0 };
         var theirs = claimed && !s.YouHostLobby;
@@ -759,9 +774,22 @@ public partial class MainWindow : Window
                                           out var o) ? o : Loc.T("draft.them");
         if (haveLobby)
         {
-            HandoffTitle.Text = s.YouHostLobby
-                ? Loc.T("handoff.you_host") : Loc.T("handoff.ready_to_join");
-            HandoffSub.Text = Loc.T("handoff.lobby_is", s.Lobby_Id!);
+            // Whether *this* machine is in that lobby, which the guest could not
+            // tell before: only the host knew, because only the host had asked.
+            // Both have the id from the server and both have lobby.dat.
+            var here = LobbySettings.CurrentLobby() is ulong cur
+                       && cur.ToString() == s.Lobby_Id;
+            HandoffTitle.Text = here ? Loc.T("handoff.in_lobby")
+                : s.YouHostLobby ? Loc.T("handoff.you_host")
+                : Loc.T("handoff.ready_to_join");
+            HandoffTitle.Foreground = (Brush)FindResource(here ? "Win" : "TextHi");
+            HandoffSub.Text = here
+                ? Loc.T("handoff.in_lobby_sub", s.Plan.Count > 0
+                        ? s.Plan[Math.Min(s.Revealed_Through, s.Plan.Count) - 1]
+                            .Map ?? "?" : "?")
+                : Loc.T("handoff.lobby_is", s.Lobby_Id!);
+            // Nothing to join once you are in it.
+            if (here) BtnJoinLobby.Visibility = Visibility.Collapsed;
         }
         else if (theirs)
         {
@@ -869,11 +897,26 @@ public partial class MainWindow : Window
     /// </summary>
     private void PollLobbyFile()
     {
-        if (!_awaitingLobby) return;
-        if (LobbySettings.CurrentLobby() is not ulong id) return;
-        if (id == _lobbyBefore) return;
-        OnLobbySeen(id);
+        var s = _draft.State;
+        if (_awaitingLobby)
+        {
+            if (LobbySettings.CurrentLobby() is not ulong id) return;
+            if (id == _lobbyBefore) return;
+            OnLobbySeen(id);
+            return;
+        }
+        // Not only while waiting for one: the guest needs to notice when it has
+        // arrived in the series lobby, and that is the same file.
+        if (s is null || !s.Done || s.Lobby_Id is not { Length: > 0 }) return;
+        var now = LobbySettings.CurrentLobby()?.ToString();
+        if (now == _lastSeenLobby) return;
+        _lastSeenLobby = now;
+        RenderHandoff(s);
     }
+
+    /// <summary>Last lobby this machine was seen in, so the handoff panel is
+    /// only redrawn when that actually changes.</summary>
+    private string? _lastSeenLobby;
 
     private void BtnJoinLobby_Click(object sender, RoutedEventArgs e)
     {

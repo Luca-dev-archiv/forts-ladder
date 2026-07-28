@@ -283,7 +283,7 @@
                             FontWeight="Bold" Click="BtnAccept_Click"/>
                     <Button x:Name="BtnDecline" Content="{core:T queue.decline}"
                             Style="{StaticResource Btn}" Padding="18,9"
-                            Margin="8,0,0,0" Click="BtnDecline_Click"/>
+                            Margin="8,0,0,0" Click="BtnDeclineObserver_Click"/>
                   </StackPanel>
                 </StackPanel>
               </Border>
@@ -874,7 +874,72 @@
       <!-- ============ Live matches ============ -->
       <Grid Grid.Row="1" x:Name="ViewLive" Visibility="Collapsed">
         <Border Style="{StaticResource Card}" Padding="6">
-          <Grid>
+          <DockPanel>
+            <!-- The host's inbox. Hidden until somebody asks, because an empty
+                 box is noise. -->
+            <Border DockPanel.Dock="Top" x:Name="ObserverInboxBar"
+                    Visibility="Collapsed" Background="{StaticResource BgPanel}"
+                    Padding="16,12" Margin="0,0,0,10" CornerRadius="8">
+              <StackPanel>
+                <TextBlock Text="{core:T live.inbox}" Style="{StaticResource Label}"/>
+                <ItemsControl x:Name="ObserverInbox" Margin="0,6,0,0">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <DockPanel Margin="0,0,0,6">
+                        <WrapPanel DockPanel.Dock="Right">
+                          <Button Content="{core:T live.admit}"
+                                  Style="{StaticResource BtnAccent}"
+                                  Padding="12,5" FontSize="12"
+                                  Tag="{Binding Id}" Click="BtnAdmitObserver_Click"/>
+                          <Button Content="{core:T live.decline}"
+                                  Style="{StaticResource Btn}" Margin="6,0,0,0"
+                                  Padding="12,5" FontSize="12"
+                                  Tag="{Binding Id}" Click="BtnDeclineObserver_Click"/>
+                        </WrapPanel>
+                        <TextBlock Text="{Binding Who}" FontSize="13"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                      </DockPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+
+            <!-- What became of my own requests. Without this a spectator asked
+                 and never learned the answer. -->
+            <Border DockPanel.Dock="Top" x:Name="MyRequestsBar"
+                    Visibility="Collapsed" Background="{StaticResource BgPanel}"
+                    Padding="16,12" Margin="0,0,0,10" CornerRadius="8">
+              <StackPanel>
+                <TextBlock Text="{core:T live.my_requests}" Style="{StaticResource Label}"/>
+                <ItemsControl x:Name="MyRequests" Margin="0,6,0,0">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <DockPanel Margin="0,0,0,6">
+                        <Button DockPanel.Dock="Right"
+                                Content="{core:T live.join_as_observer}"
+                                Style="{StaticResource BtnAccent}"
+                                Padding="12,5" FontSize="12"
+                                Tag="{Binding JoinUrl}"
+                                Click="BtnJoinAsObserver_Click"
+                                Visibility="{Binding CanJoin,
+                                  Converter={StaticResource BoolToVisible}}"/>
+                        <StackPanel>
+                          <TextBlock Text="{Binding Title}" FontSize="13"
+                                     TextTrimming="CharacterEllipsis"/>
+                          <TextBlock Text="{Binding Note}" FontSize="12"
+                                     Foreground="{Binding Brush}"
+                                     TextWrapping="Wrap"/>
+                        </StackPanel>
+                      </DockPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+
+            <Grid>
             <TextBlock x:Name="LiveEmpty" Margin="16" TextWrapping="Wrap"
                        Foreground="{StaticResource TextMid}" FontSize="12"
                        VerticalAlignment="Top"/>
@@ -913,7 +978,8 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
             </ScrollViewer>
-          </Grid>
+            </Grid>
+          </DockPanel>
         </Border>
       </Grid>
 

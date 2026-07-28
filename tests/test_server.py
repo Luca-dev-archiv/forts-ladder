@@ -401,7 +401,11 @@ def test_an_approved_observer_gets_the_join_link():
     assert r.state is RequestState.PENDING
     live.answer(acc["Host"], r.id, approve=True)
     info = live.join_info(acc["Caster"], r.id)
-    assert info["join_url"].endswith(str(m.lobby_id))
+    # Lobby *and* owner. Steam needs the owner's account in the third field;
+    # a link that stopped at the lobby id did not join.
+    assert info["join_url"] == (f"steam://joinlobby/410900/{m.lobby_id}/"
+                                f"{acc['Host'].steam_id}"), info["join_url"]
+    assert info["lobby_id"] == str(m.lobby_id)
     assert m.slots_used == 3
 
 
@@ -431,7 +435,9 @@ def test_admins_get_in_even_when_requests_are_off():
     live.set_accepting(acc["Host"], m.id, False)
     r = live.request_observer(acc["Referee"], m.id)
     assert r.state is RequestState.APPROVED
-    assert live.join_info(acc["Referee"], r.id)["lobby_id"] == m.lobby_id
+    # A string, because a Steam lobby id does not survive being parsed as a
+    # JSON number.
+    assert live.join_info(acc["Referee"], r.id)["lobby_id"] == str(m.lobby_id)
 
 
 def test_even_an_admin_does_not_fit_into_a_full_lobby():
@@ -508,6 +514,70 @@ def test_a_pending_request_expires_with_its_match():
     clock.t += STALE_AFTER_S + 1
     live.prune()
     assert r.state is RequestState.EXPIRED
+
+
+# ------------------------------------------- What the person who asked can see
+def test_a_requester_can_find_out_what_happened():
+    """Before this route existed the only list was the host's inbox, so someone
+    pressed "ask to watch" and never learned the answer."""
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Caster", Role.PLAYER))
+    live = LiveService()
+    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1",
+                     ["Host", "Guest"], 2, 9, lobby_id=109775240000000001)
+
+    r = live.request_observer(acc["Caster"], m.id)
+    mine = live.requests_for(acc["Caster"])
+    assert len(mine) == 1 and mine[0]["state"] == "pending"
+    assert "lobby_id" not in mine[0], "the lobby id leaked before admission"
+
+    live.answer(acc["Host"], r.id, approve=True)
+    mine = live.requests_for(acc["Caster"])
+    assert mine[0]["state"] == "approved"
+    assert mine[0]["lobby_id"] == "109775240000000001"
+    assert mine[0]["join_url"].startswith("steam://joinlobby/410900/")
+
+
+def test_a_declined_requester_is_told_why():
+    """"No room" is arithmetic — nine clients including spectators — and reads
+    completely differently from "the host said no"."""
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Caster", Role.PLAYER))
+    live = LiveService()
+    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1",
+                     ["Host", "Guest"], 9, 9, lobby_id=1)
+    live.request_observer(acc["Caster"], m.id)
+    mine = live.requests_for(acc["Caster"])
+    assert mine[0]["state"] == "declined"
+    assert "nine clients" in mine[0]["reason"], mine[0]["reason"]
+    assert "lobby_id" not in mine[0]
+
+
+def test_only_your_own_requests_come_back():
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "One", Role.PLAYER),
+                             ("3", "Two", Role.PLAYER))
+    live = LiveService()
+    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1", ["a", "b"], 2, 9,
+                     lobby_id=1)
+    live.request_observer(acc["One"], m.id)
+    live.request_observer(acc["Two"], m.id)
+    assert len(live.requests_for(acc["One"])) == 1
+    assert len(live.requests_for(acc["Two"])) == 1
+
+
+def test_the_join_url_names_the_lobby_owner():
+    """Steam needs the owner's account in the third field; leaving it out and
+    letting Steam work it out does not join."""
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Caster", Role.PLAYER))
+    live = LiveService()
+    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1", ["a", "b"], 2, 9,
+                     lobby_id=42)
+    r = live.request_observer(acc["Caster"], m.id)
+    live.answer(acc["Host"], r.id, approve=True)
+    info = live.join_info(acc["Caster"], r.id)
+    assert info["join_url"] == f"steam://joinlobby/410900/42/{acc['Host'].steam_id}"
 
 
 def _run_all() -> int:

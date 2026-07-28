@@ -101,6 +101,36 @@ intended default: the ladder counts nothing until someone says it should.
 
 ---
 
+## Download, and why Windows warns about it
+
+The client is one `.exe` on the [releases
+page](https://github.com/Luca-dev-archiv/forts-ladder/releases). Nothing to
+install first.
+
+**It is not code-signed, so Windows SmartScreen will warn on first run.** That
+is worth stating plainly rather than leaving you to discover it: in a scene
+where people are rightly wary of third-party programs, an unexpected warning is
+exactly the wrong first impression. A certificate costs a few hundred euro a
+year and this is a free community tool, so there is no signature to show you.
+
+What there is instead is a checksum published with every release, which you can
+check before running anything:
+
+```powershell
+Get-FileHash .\FortsLadder-0.1.1-win-x64.exe -Algorithm SHA256
+```
+
+Compare it against `SHA256SUMS.txt` from the same release. If the two differ,
+do not run the file. The built-in updater performs exactly this check for you
+and refuses any download that does not match — a mismatch is reported, not
+retried.
+
+If you would rather not trust a binary at all, the client builds from source
+with `dotnet build ui/FortsLadder.csproj`, and the recorder and rating are
+plain Python you can read.
+
+---
+
 ## Requirements
 
 - Windows, Forts installed via Steam (found automatically, including second

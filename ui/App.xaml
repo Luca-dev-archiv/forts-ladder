@@ -79,19 +79,159 @@
         <Setter Property="FontWeight" Value="SemiBold"/>
       </Style>
 
-      <!-- The WPF default is a white box, which on a dark surface reads as
-           a rendering bug. -->
+      <!-- ComboBox and TextBox need full templates, not just setters.
+           Colouring a ComboBox does not colour its popup: the drop-down chrome
+           and the item backgrounds come from the system theme, so setting only
+           the foreground produced light text on a white popup — unreadable.
+           Same for TextBox, which was left entirely unstyled and rendered as a
+           white box in the middle of a dark window. -->
+
+      <Style x:Key="ComboItem" TargetType="ComboBoxItem">
+        <Setter Property="Foreground" Value="{StaticResource TextHi}"/>
+        <Setter Property="Padding" Value="10,7"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="ComboBoxItem">
+              <Border x:Name="Bd" Background="Transparent"
+                      Padding="{TemplateBinding Padding}"
+                      BorderThickness="2,0,0,0" BorderBrush="Transparent">
+                <ContentPresenter/>
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsHighlighted" Value="True">
+                  <Setter TargetName="Bd" Property="Background"
+                          Value="{StaticResource BgHover}"/>
+                  <!-- The accent edge marks the row the keyboard is on, which a
+                       fill alone does not once several rows look similar. -->
+                  <Setter TargetName="Bd" Property="BorderBrush"
+                          Value="{StaticResource Accent}"/>
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                  <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+                  <Setter Property="FontWeight" Value="SemiBold"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
+      <Style TargetType="ComboBoxItem" BasedOn="{StaticResource ComboItem}"/>
+
       <Style TargetType="ComboBox">
         <Setter Property="Foreground" Value="{StaticResource TextHi}"/>
         <Setter Property="Background" Value="{StaticResource BgHover}"/>
         <Setter Property="BorderBrush" Value="{StaticResource Stroke}"/>
-        <Setter Property="Padding" Value="10,7"/>
+        <Setter Property="Padding" Value="10,0"/>
         <Setter Property="FontSize" Value="13"/>
+        <Setter Property="MinHeight" Value="32"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="ItemContainerStyle" Value="{StaticResource ComboItem}"/>
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="ComboBox">
+              <Grid>
+                <ToggleButton x:Name="Toggle" Focusable="False"
+                              ClickMode="Press"
+                              IsChecked="{Binding IsDropDownOpen,
+                                          RelativeSource={RelativeSource TemplatedParent},
+                                          Mode=TwoWay}">
+                  <ToggleButton.Template>
+                    <ControlTemplate TargetType="ToggleButton">
+                      <Border x:Name="Chrome" CornerRadius="6"
+                              Background="{StaticResource BgHover}"
+                              BorderBrush="{StaticResource Stroke}"
+                              BorderThickness="1">
+                        <Grid>
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                          </Grid.ColumnDefinitions>
+                          <ContentPresenter Grid.Column="0"/>
+                          <Path Grid.Column="1" Margin="6,0,10,0"
+                                Data="M 0 0 L 4 4 L 8 0"
+                                Stroke="{StaticResource TextMid}"
+                                StrokeThickness="1.6"
+                                VerticalAlignment="Center"/>
+                        </Grid>
+                      </Border>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                          <Setter TargetName="Chrome" Property="BorderBrush"
+                                  Value="{StaticResource Accent}"/>
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </ToggleButton.Template>
+                </ToggleButton>
+
+                <ContentPresenter x:Name="Selection" IsHitTestVisible="False"
+                                  Margin="{TemplateBinding Padding}"
+                                  VerticalAlignment="Center"
+                                  HorizontalAlignment="Left"
+                                  Content="{TemplateBinding SelectionBoxItem}"
+                                  ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+
+                <Popup x:Name="Popup" AllowsTransparency="True"
+                       Placement="Bottom" Focusable="False"
+                       PopupAnimation="Fade"
+                       IsOpen="{TemplateBinding IsDropDownOpen}">
+                  <Border MinWidth="{TemplateBinding ActualWidth}"
+                          MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                          Margin="0,4,0,0" CornerRadius="6"
+                          Background="{StaticResource BgCard}"
+                          BorderBrush="{StaticResource Stroke}"
+                          BorderThickness="1">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  Padding="0,4">
+                      <ItemsPresenter/>
+                    </ScrollViewer>
+                  </Border>
+                </Popup>
+              </Grid>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                  <Setter TargetName="Selection" Property="Opacity" Value="0.45"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
       </Style>
-      <Style TargetType="ComboBoxItem">
+
+      <Style TargetType="TextBox">
         <Setter Property="Foreground" Value="{StaticResource TextHi}"/>
-        <Setter Property="Background" Value="{StaticResource BgCard}"/>
-        <Setter Property="Padding" Value="8,5"/>
+        <Setter Property="CaretBrush" Value="{StaticResource Accent}"/>
+        <Setter Property="SelectionBrush" Value="{StaticResource Accent}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Padding" Value="10,0"/>
+        <Setter Property="MinHeight" Value="32"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="TextBox">
+              <Border x:Name="Bd" CornerRadius="6"
+                      Background="{StaticResource BgHover}"
+                      BorderBrush="{StaticResource Stroke}"
+                      BorderThickness="1">
+                <ScrollViewer x:Name="PART_ContentHost"
+                              Margin="{TemplateBinding Padding}"
+                              VerticalAlignment="Center"/>
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsKeyboardFocused" Value="True">
+                  <Setter TargetName="Bd" Property="BorderBrush"
+                          Value="{StaticResource Accent}"/>
+                </Trigger>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="Bd" Property="BorderBrush"
+                          Value="{StaticResource TextLow}"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
       </Style>
 
       <Style TargetType="ScrollBar">

@@ -100,11 +100,18 @@ def guard(fn, *a, **kw):
 
 # -------------------------------------------------------------------- Login
 @app.get("/auth/discord/start")
-def discord_start(return_to: str = "/"):
+def discord_start(return_to: str = "/", json: int = 0):
+    """Begin a Discord login.
+
+    Redirects, because the only thing that opens this is a browser and a person
+    looking at a JSON blob has to copy a URL out of it by hand. `?json=1` keeps
+    the machine-readable form for anything scripted.
+    """
     p = guard(auth.begin_login, "discord", return_to)
-    return {"url": discord_authorize_url(p.state,
-                                         f"{BASE_URL}/auth/discord/callback"),
-            "state": p.state}
+    url = discord_authorize_url(p.state, f"{BASE_URL}/auth/discord/callback")
+    if json:
+        return {"url": url, "state": p.state}
+    return RedirectResponse(url, status_code=303)
 
 
 @app.get("/auth/discord/callback")
@@ -133,9 +140,12 @@ def discord_callback(code: str, state: str, response: Response):
 
 
 @app.get("/auth/steam/start")
-def steam_start(return_to: str = "/"):
+def steam_start(return_to: str = "/", json: int = 0):
     guard(auth.begin_login, "steam", return_to)
-    return {"url": steam_openid_url(f"{BASE_URL}/auth/steam/callback", BASE_URL)}
+    url = steam_openid_url(f"{BASE_URL}/auth/steam/callback", BASE_URL)
+    if json:
+        return {"url": url}
+    return RedirectResponse(url, status_code=303)
 
 
 @app.get("/auth/steam/callback")

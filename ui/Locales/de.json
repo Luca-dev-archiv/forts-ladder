@@ -85,7 +85,7 @@
   "live.sub": "Laufende Partien — den Host um Zuschauen bitten",
   "live.tournament": "Turnier: {0}",
   "live.unreachable": "{0} ist nicht erreichbar",
-  "login.asking_discord": "Frage Discord…",
+  "login.asking_discord": "Frage Discord — im Discord-Fenster bestätigen",
   "login.no_server": "Kein Server eingetragen. Adresse unter Live eintragen.",
   "login.pair_code": "CODE AUS DEM BROWSER",
   "login.pair_connect": "Verbinden",

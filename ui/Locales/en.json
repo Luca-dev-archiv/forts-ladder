@@ -85,7 +85,7 @@
   "live.sub": "Running games — ask the host to let you spectate",
   "live.tournament": "Tournament: {0}",
   "live.unreachable": "{0} is not reachable",
-  "login.asking_discord": "Asking Discord…",
+  "login.asking_discord": "Asking Discord — confirm in the Discord window",
   "login.no_server": "No server configured. Enter its address under Live.",
   "login.pair_code": "CODE FROM THE BROWSER",
   "login.pair_connect": "Connect",

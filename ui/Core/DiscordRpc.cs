@@ -61,7 +61,25 @@ public static class DiscordRpc
             await WriteAsync(pipe, Op.Handshake,
                 JsonSerializer.Serialize(new { v = 1, client_id = clientId }), ct);
 
-            var (op, payload) = await ReadAsync(pipe, ct);
+            // Bounded. An earlier version read this with no deadline, so when
+            // Discord accepted the pipe and then said nothing the whole login
+            // hung forever — the client sat on "asking Discord" and the browser
+            // fallback never appeared, which is worse than failing outright.
+            using var handshake = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            handshake.CancelAfter(TimeSpan.FromSeconds(8));
+            Op op;
+            string payload;
+            try
+            {
+                (op, payload) = await ReadAsync(pipe, handshake.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return new AuthResult(null,
+                    "Discord accepted the connection but did not answer. That "
+                    + "usually means this application is not allowed to use "
+                    + "Discord's local interface.");
+            }
             if (op == Op.Close)
                 return new AuthResult(null, Reason(payload, "Discord closed the connection"));
 
@@ -73,13 +91,27 @@ public static class DiscordRpc
             }), ct);
 
             // Discord is waiting for the user to press a button in its own
-            // window, so this read is allowed to take a while.
+            // window, so this read is allowed to take a while — but not
+            // forever, and not silently: if no prompt ever appears, saying so
+            // beats waiting.
             using var slow = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            slow.CancelAfter(TimeSpan.FromMinutes(2));
+            slow.CancelAfter(TimeSpan.FromSeconds(90));
 
             while (true)
             {
-                var (rop, body) = await ReadAsync(pipe, slow.Token);
+                (Op rop, string body) frame;
+                try
+                {
+                    frame = await ReadAsync(pipe, slow.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    return new AuthResult(null,
+                        "Discord never showed the permission prompt. If no "
+                        + "window appeared, this application is probably not "
+                        + "approved for Discord's local interface.");
+                }
+                var (rop, body) = frame;
                 if (rop == Op.Close)
                     return new AuthResult(null, Reason(body, "Discord closed the connection"));
                 if (rop == Op.Ping)

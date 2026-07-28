@@ -126,11 +126,18 @@ public partial class MainWindow : Window
 
     private void LangBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_langReady || LangBox.SelectedItem is not string lang) return;
-        if (lang == Loc.Language) return;
+        // Read from `sender`, not from the sidebar box: two pickers share this
+        // handler now, and hard-coding one meant changing the language in
+        // Settings silently applied whatever the sidebar happened to show.
+        if (!_langReady || sender is not ComboBox box) return;
+        if (box.SelectedItem is not string lang || lang == Loc.Language) return;
         Loc.Remember(lang);
         LangHint.Text = Loc.T("sidebar.language_restart");
         LangHint.Visibility = Visibility.Visible;
+        // Keep the other picker in step, or they disagree about what is set.
+        foreach (var other in new[] { LangBox, SettingsLangBox })
+            if (!ReferenceEquals(other, box) && other.ItemsSource is not null)
+                other.SelectedItem = lang;
     }
 
     // ----------------------------------------------------------------- Status

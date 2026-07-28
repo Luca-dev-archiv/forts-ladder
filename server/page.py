@@ -264,7 +264,13 @@ def admin(*, accounts: list[dict], grants: list[str], my_id: str,
 
 def tournaments(*, listing: list[dict], is_admin: bool,
                 modes: list[tuple[str, str]], error: str = "",
-                name: str = "", entrants: str = "") -> str:
+                name: str = "", entrants: str = "",
+                can_create: bool = True) -> str:
+    """The list, and — for whoever may create one — the form.
+
+    A referee sees the list without the form: they report into brackets they
+    did not build, and would otherwise have no way to find one.
+    """
     options = "".join(f"<option value='{html.escape(k)}'>{html.escape(v)}</option>"
                       for k, v in modes)
     rows = "".join(
@@ -283,7 +289,7 @@ def tournaments(*, listing: list[dict], is_admin: bool,
         "<p class=sub>Seeding comes from the ratings you enter, byes go to the "
         "top seeds, and results are reported rather than inferred.</p>"
         + _nav(is_admin, True) + _error(error)
-        + "<div class=card><p class=label>New tournament</p>"
+        + ("<div class=card><p class=label>New tournament</p>"
           "<form method=post action='/manage/tournaments'>"
           "<p>" + _input("name", "Name", name) + "</p>"
           f"<p><select name=mode>{options}</select></p>"
@@ -297,7 +303,7 @@ def tournaments(*, listing: list[dict], is_admin: bool,
           "leave one off and it counts as 1000. A bracket cannot be changed "
           "once it exists, because entrants are already seeded against each "
           "other.</p>"
-          "<button>Create</button></form></div>"
+          "<button>Create</button></form></div>" if can_create else "")
         + (f"<p class=label>{len(listing)} tournament(s)</p>" + rows if listing
            else "<div class=card><p>None yet.</p></div>"))
 

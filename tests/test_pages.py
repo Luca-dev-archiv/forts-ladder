@@ -204,6 +204,29 @@ def test_a_refused_tournament_keeps_what_was_typed():
     assert "just me" in r.text, "the list was thrown away"
 
 
+def test_a_referee_gets_the_list_without_the_create_form():
+    """A referee corrects results in brackets someone else built, so they need
+    to find one — but building is not theirs."""
+    w = World()
+    _, host = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    _, ref = w.person("Ref", Role.PLAYER, Grant.REFEREE)
+    tid = cup(w, host)
+
+    body = w.client.get("/manage/tournaments", headers=ref).text
+    assert "Summer Cup" in body
+    assert "New tournament" not in body, "a referee was offered the create form"
+    assert w.client.post("/manage/tournaments", headers=ref,
+                         data={"name": "Mine", "entrants": "a\nb"}
+                         ).status_code == 403
+
+    # And they can report, which is the whole point of the grant.
+    m = app_mod.store.load_tournament(tid).playable()[0]
+    r = w.client.post(f"/manage/tournaments/{tid}/report", headers=ref,
+                      follow_redirects=False,
+                      data={"match": m.id, "winner": m.a.name, "score": "3:0"})
+    assert r.status_code == 303, r.text[:200]
+
+
 def test_the_bracket_is_readable_by_a_player_but_reportable_by_a_host():
     w = World()
     _, host = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)

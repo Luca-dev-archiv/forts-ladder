@@ -762,7 +762,7 @@ def index(ladder_session: str | None = Cookie(None),
         steam_id=acc.steam_id, consent=acc.tracking_consent,
         role=acc.role.label, steam_url="/auth/steam/start", code=None,
         is_admin=acc.may("link_other_account"),
-        can_host=acc.may("create_tournament"))
+        can_host=acc.may("create_tournament") or acc.may("run_tournament"))
 
 
 @app.post("/auth/pair/page", response_class=HTMLResponse)
@@ -780,7 +780,7 @@ def pair_from_page(ladder_session: str | None = Cookie(None),
         steam_id=acc.steam_id, consent=acc.tracking_consent,
         role=acc.role.label, steam_url="/auth/steam/start", code=code,
         is_admin=acc.may("link_other_account"),
-        can_host=acc.may("create_tournament"))
+        can_host=acc.may("create_tournament") or acc.may("run_tournament"))
 
 
 @app.post("/me/consent/on")
@@ -942,10 +942,14 @@ def tournaments_page(ladder_session: str | None = Cookie(None),
     acc = current(session_token(ladder_session, authorization))
     if acc is None:
         return _login_first("/manage/tournaments")
-    guard(acc.require, "create_tournament")
+    # Reporting is enough to need the list: a referee corrects results in
+    # brackets they did not build, and had no way to find one otherwise.
+    if not acc.may("create_tournament"):
+        guard(acc.require, "run_tournament")
     return HTMLResponse(page.tournaments(
         listing=store.list_tournaments(), modes=_mode_choices(),
-        is_admin=acc.may("link_other_account")))
+        is_admin=acc.may("link_other_account"),
+        can_create=acc.may("create_tournament")))
 
 
 @app.post("/manage/tournaments", response_class=HTMLResponse)
@@ -987,7 +991,8 @@ def _bracket_page(acc, tid: str, error: str = "") -> HTMLResponse:
         champion=t.champion.name if t.champion else None,
         is_admin=acc.may("link_other_account"),
         can_report=acc.may("run_tournament"),
-        can_host=acc.may("create_tournament"), error=error))
+        can_host=acc.may("create_tournament") or acc.may("run_tournament"),
+        error=error))
 
 
 @app.get("/manage/tournaments/{tid}", response_class=HTMLResponse)

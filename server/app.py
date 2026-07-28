@@ -36,7 +36,9 @@ from .auth import (
     AuthError, AuthService, Grant, Role, discord_authorize_url,
     steam_openid_url,
 )
+from .draft import DraftService
 from .live import LiveService
+from .queue import QueueService
 from .store import Store
 
 app = FastAPI(title="Forts Ladder", version="0.1.0")
@@ -46,6 +48,8 @@ app = FastAPI(title="Forts Ladder", version="0.1.0")
 store = Store(os.environ.get("LADDER_DB", "data/ladder.sqlite"))
 auth = store.restore_auth(AuthService())
 live = LiveService()
+drafts = DraftService()
+queue = QueueService(auth, drafts)
 
 BASE_URL = os.environ.get("LADDER_BASE_URL", "http://localhost:8000")
 SESSION_COOKIE = "ladder_session"
@@ -414,6 +418,99 @@ def set_role(target_id: str, role: str,
         raise HTTPException(400, f"unknown role {role!r}")
     guard(auth.grant_role, acc, target, wanted)
     return {"account": target.id, "role": target.role.label}
+
+
+# ------------------------------------------------------------------- Drafting
+class DraftCreate(BaseModel):
+    map_pool: list[str]
+    commander_pool: list[str]
+    best_of: int = 3
+    commander_bans_per_side: int = 1
+    step_seconds: float | None = 30.0
+
+
+@app.post("/drafts")
+def draft_create(body: DraftCreate, ladder_session: str | None = Cookie(None)):
+    acc = require(ladder_session)
+    s = guard(drafts.create, acc, body.map_pool, body.commander_pool,
+              body.best_of, body.commander_bans_per_side, body.step_seconds)
+    return {"id": s.id, "join_code": s.join_code,
+            "state": s.public_state(acc)}
+
+
+@app.post("/drafts/join/{join_code}")
+def draft_join(join_code: str, ladder_session: str | None = Cookie(None)):
+    acc = require(ladder_session)
+    s = guard(drafts.join, acc, join_code)
+    return {"id": s.id, "state": s.public_state(acc)}
+
+
+@app.get("/drafts/{draft_id}")
+def draft_state(draft_id: str, ladder_session: str | None = Cookie(None)):
+    acc = require(ladder_session)
+    s = guard(drafts.get, draft_id)
+    # Ticked on read: whoever polls first advances an expired step, so one
+    # side going quiet cannot stall the other.
+    s.tick()
+    return guard(s.public_state, acc)
+
+
+class DraftMove(BaseModel):
+    value: str
+
+
+@app.post("/drafts/{draft_id}/apply")
+def draft_apply(draft_id: str, body: DraftMove,
+                ladder_session: str | None = Cookie(None)):
+    acc = require(ladder_session)
+    s = guard(drafts.get, draft_id)
+    return guard(s.apply, acc, body.value)
+
+
+# --------------------------------------------------------------------- Queue
+class QueueJoin(BaseModel):
+    rating: float = 1000.0
+
+
+@app.post("/queue")
+def queue_join(body: QueueJoin, ladder_session: str | None = Cookie(None)):
+    acc = require(ladder_session)
+    return guard(queue.join, acc, body.rating)
+
+
+@app.delete("/queue")
+def queue_leave(ladder_session: str | None = Cookie(None)):
+    return guard(queue.leave, require(ladder_session))
+
+
+@app.get("/queue")
+def queue_status(ladder_session: str | None = Cookie(None)):
+    return guard(queue.status, require(ladder_session))
+
+
+@app.post("/queue/accept")
+def queue_accept(ladder_session: str | None = Cookie(None)):
+    return guard(queue.accept, require(ladder_session))
+
+
+@app.post("/queue/decline")
+def queue_decline(ladder_session: str | None = Cookie(None)):
+    return guard(queue.decline, require(ladder_session))
+
+
+class PoolConfig(BaseModel):
+    map_pool: list[str]
+    commander_pool: list[str]
+
+
+@app.put("/admin/pools")
+def set_pools(body: PoolConfig, ladder_session: str | None = Cookie(None)):
+    """Operator sets the pools. Never the client — a client-supplied map pool
+    would let one side choose the list before the veto starts."""
+    acc = require(ladder_session)
+    guard(acc.require, "create_tournament")
+    queue.configure(body.map_pool, body.commander_pool)
+    return {"maps": len(body.map_pool), "commanders": len(body.commander_pool)}
 
 
 @app.get("/health")

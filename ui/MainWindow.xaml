@@ -210,9 +210,9 @@
                 Style="{StaticResource Btn}" Click="BtnRescan_Click"/>
         <StackPanel>
           <TextBlock Text="{core:T series.headline}" FontSize="21" FontWeight="Bold"/>
-          <TextBlock Text="{core:T series.sub}"
+          <TextBlock x:Name="SeriesSubtitle" Text="{core:T series.sub}"
                      Foreground="{StaticResource TextMid}" FontSize="12"
-                     Margin="0,2,0,0"/>
+                     Margin="0,2,0,0" TextWrapping="Wrap"/>
         </StackPanel>
       </DockPanel>
 
@@ -474,9 +474,8 @@
                   <TextBlock Text="{core:T draft.join_headline}"
                              Style="{StaticResource Label}"/>
                   <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
-                    <TextBox x:Name="JoinCodeBox" Width="130" Height="32"
+                    <TextBox x:Name="JoinCodeBox" Width="130"
                              FontFamily="Consolas" FontSize="14"
-                             VerticalContentAlignment="Center"
                              Margin="0,0,8,0"/>
                     <Button x:Name="BtnJoinDraft" Content="{core:T draft.join}"
                             Style="{StaticResource Btn}" Click="BtnJoinDraft_Click"/>
@@ -539,6 +538,11 @@
                   <TextBlock x:Name="TurnSub" Style="{StaticResource Label}"
                              TextAlignment="Center" TextWrapping="Wrap"
                              HorizontalAlignment="Center" Margin="0,2,0,6"/>
+                  <Button x:Name="BtnCancelDraft" Content="{core:T draft.cancel}"
+                          Style="{StaticResource Btn}" Padding="10,3"
+                          FontSize="11" Margin="0,0,0,6"
+                          HorizontalAlignment="Center" Visibility="Collapsed"
+                          Click="BtnCancelDraft_Click"/>
                   <!-- Countdown. The bar is driven from the server's value, so
                        it cannot be stalled by pausing this process. -->
                   <Border Width="200" Height="5" CornerRadius="3"
@@ -576,6 +580,36 @@
                     Padding="16,10">
               <TextBlock x:Name="DraftError" Foreground="{StaticResource TextHi}"
                          FontSize="12" TextWrapping="Wrap"/>
+            </Border>
+
+            <!-- Handoff. A finished draft used to be the end of the road: a
+                 plan on screen and no way into a game. One side hosts the
+                 lobby, this reads its id out of the game log, and the other
+                 side gets a join link. -->
+            <Border DockPanel.Dock="Bottom" x:Name="HandoffBar"
+                    Visibility="Collapsed" Background="{StaticResource BgPanel}"
+                    Padding="20,14" BorderBrush="{StaticResource Win}"
+                    BorderThickness="0,2,0,0">
+              <DockPanel>
+                <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right">
+                  <Button x:Name="BtnLaunchForts" Content="{core:T handoff.launch}"
+                          Style="{StaticResource Btn}" Padding="14,8"
+                          Click="BtnLaunchForts_Click"/>
+                  <Button x:Name="BtnHostLobby" Content="{core:T handoff.host}"
+                          Style="{StaticResource BtnAccent}" Padding="14,8"
+                          Margin="8,0,0,0" Click="BtnHostLobby_Click"/>
+                  <Button x:Name="BtnJoinLobby" Content="{core:T handoff.join}"
+                          Style="{StaticResource BtnAccent}" Padding="14,8"
+                          Margin="8,0,0,0" Visibility="Collapsed"
+                          Click="BtnJoinLobby_Click"/>
+                </WrapPanel>
+                <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                  <TextBlock x:Name="HandoffTitle" FontSize="14"
+                             FontWeight="SemiBold" TextWrapping="Wrap"/>
+                  <TextBlock x:Name="HandoffSub" Style="{StaticResource Label}"
+                             TextWrapping="Wrap" Margin="0,2,0,0"/>
+                </StackPanel>
+              </DockPanel>
             </Border>
 
             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20,18">
@@ -628,14 +662,20 @@
                     <TextBlock Text="{core:T draft.commanders}"
                                Style="{StaticResource Label}"/>
                   </DockPanel>
+                  <!-- Three per row, sized by the column rather than by a fixed
+                       width: with 16 commanders a wrap panel produced a ragged
+                       last row whose width depended on the window. -->
                   <ItemsControl x:Name="CommanderTiles">
                     <ItemsControl.ItemsPanel>
-                      <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                      <ItemsPanelTemplate>
+                        <UniformGrid Columns="3"/>
+                      </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                       <DataTemplate>
                         <Button Style="{StaticResource Btn}" Margin="0,0,8,8"
-                                Width="126" Height="50" Padding="10,0"
+                                MinHeight="50" Padding="10,6"
+                                HorizontalAlignment="Stretch"
                                 Background="{Binding Background}"
                                 BorderBrush="{Binding Border}"
                                 BorderThickness="{Binding Thickness}"
@@ -983,14 +1023,22 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
-                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                <!-- WrapPanel: three buttons with German labels are wider
+                     than this column. -->
+                <WrapPanel Margin="0,16,0,0">
+                  <Button x:Name="BtnReport" Content="{core:T series.report}"
+                          Style="{StaticResource BtnAccent}"
+                          Margin="0,0,8,8" Click="BtnReport_Click"/>
                   <Button x:Name="BtnCopy" Content="{core:T series.copy}"
-                          Style="{StaticResource BtnAccent}" Click="BtnCopy_Click"/>
+                          Style="{StaticResource Btn}" Margin="0,0,8,8"
+                          Click="BtnCopy_Click"/>
                   <Button x:Name="BtnCollect" Content="{core:T series.collect}"
-                          Style="{StaticResource Btn}" Margin="8,0,0,0"
+                          Style="{StaticResource Btn}" Margin="0,0,8,8"
                           Click="BtnCollect_Click"/>
-                </StackPanel>
+                </WrapPanel>
 
+                <TextBlock x:Name="ReportStatus" Style="{StaticResource Label}"
+                           Margin="0,4,0,0" TextWrapping="Wrap"/>
                 <TextBlock x:Name="ReplayInfo" Style="{StaticResource Label}"
                            Margin="0,10,0,0" TextWrapping="Wrap"/>
               </StackPanel>
@@ -1006,14 +1054,8 @@
           <Border DockPanel.Dock="Top" Background="{StaticResource BgPanel}"
                   CornerRadius="8,8,0,0" Padding="16,12">
             <DockPanel>
-              <Border DockPanel.Dock="Right" Background="{StaticResource BgDeep}"
-                      CornerRadius="6" BorderBrush="{StaticResource Stroke}"
-                      BorderThickness="1" Padding="10,6" Width="220">
-                <TextBox x:Name="TableSearch" Background="Transparent"
-                         BorderThickness="0" Foreground="{StaticResource TextHi}"
-                         CaretBrush="{StaticResource Accent}" FontSize="12"
-                         TextChanged="TableSearch_TextChanged"/>
-              </Border>
+              <TextBox x:Name="TableSearch" DockPanel.Dock="Right" Width="220"
+                       TextChanged="TableSearch_TextChanged"/>
               <TextBlock x:Name="MeLine" Foreground="{StaticResource TextMid}"
                          FontSize="12" VerticalAlignment="Center"
                          TextTrimming="CharacterEllipsis"/>

@@ -319,8 +319,26 @@ class Draft:
 
     _burned: dict[Side, set[str]] = field(default_factory=dict, init=False)
 
+    def last_commander(self, side: Side) -> str | None:
+        """What this side played in the game before this one, if any."""
+        picks = [c.value for c in self.choices
+                 if c.action == Action.PICK_COMMANDER and c.side is side]
+        return picks[-1] if picks else None
+
     def available_commanders_for(self, side: Side) -> list[str]:
+        """What this side may still pick.
+
+        Three things remove a commander: it was banned, this side already won
+        with it, and — the league rule — this side played it in the previous
+        game. No repeats back to back, so a series cannot be one commander
+        played five times.
+
+        Only the *previous* game, not the whole series: with a small pool and a
+        Bo5, banning for the whole series would run the pool out.
+        """
         gone = set(self.banned_commanders()) | self.burned(side)
+        if (last := self.last_commander(side)) is not None:
+            gone.add(last)
         return [c for c in self.commander_pool if c not in gone]
 
     def legal_options(self, side: Side | None = None) -> list[str]:

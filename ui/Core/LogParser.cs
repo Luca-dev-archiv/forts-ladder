@@ -127,7 +127,12 @@ public sealed class LogParser
         @"Client Connected: (.+?), index (\d+), id (\d+), side (-?\d+)");
     private static readonly Regex ReCommander = new(@"^\s*Team(\d) commander: (\S+)");
     private static readonly Regex ReDefeat = new(@"^\s*(\d+):(\d\d) (.+?) has been defeated!");
-    private static readonly Regex ReReplay = new(@"Replay saved as (\S+)");
+    // To the end of the line, not to the first space: a replay is called
+    // "v1.38.2_Up & Down_20260728_181126.fwr". Stopping at the space cost three
+    // things at once — the file was never found on disk, the timestamp could not
+    // be read out of the name, and two games on maps whose names start with the
+    // same word collapsed into one match key.
+    private static readonly Regex ReReplay = new(@"Replay saved as (.+\.fwr)\s*$");
     private static readonly Regex ReLobby = new(@"Setting lobby (\d+) game server (\d+)");
     private const string MatchEnd = "World::Execute mDone detected";
 
@@ -141,6 +146,15 @@ public sealed class LogParser
 
     /// <summary>Raised as soon as a game is complete.</summary>
     public event Action<MatchRecord>? MatchFinished;
+
+    /// <summary>
+    /// Raised when the game reports a new Steam lobby.
+    ///
+    /// This is the only place the lobby id exists outside the game: the ladder
+    /// reads it out of the log rather than out of the process, which is what
+    /// makes the handoff after a draft possible without touching Forts itself.
+    /// </summary>
+    public event Action<ulong>? LobbySeen;
 
     private static int SideOf(int team) => team >= 100 ? team % 100 : team;
 
@@ -197,8 +211,13 @@ public sealed class LogParser
         m = ReLobby.Match(line);
         if (m.Success)
         {
-            _lobbyId = ulong.Parse(m.Groups[1].Value);
+            var seen = ulong.Parse(m.Groups[1].Value);
+            var isNew = seen != _lobbyId;
+            _lobbyId = seen;
             if (_current is not null) _current.LobbyId = _lobbyId;
+            // Only on a change: the line is logged repeatedly for the same
+            // lobby, and the handoff must not re-announce one lobby all evening.
+            if (isNew) LobbySeen?.Invoke(seen);
             return;
         }
 
@@ -233,8 +252,13 @@ public sealed class LogParser
             else return;
         }
 
-        if (_current.Closed && !ReReplay.IsMatch(line))
-            // Match is over; the only thing still expected is its replay name.
+        if (_current.Closed && !ReReplay.IsMatch(line)
+            && !ReCommander.IsMatch(line) && !ReDefeat.IsMatch(line))
+            // The game is over, but the log is not finished talking about it:
+            // the commander lines and the last defeat arrive after
+            // `mDone detected` and before `Replay saved as`. Accepting only the
+            // replay line threw the commanders away for every match ever
+            // recorded — which is why no match ever showed one.
             return;
 
         m = ReMultiStart.Match(line);

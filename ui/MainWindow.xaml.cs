@@ -40,6 +40,7 @@ public partial class MainWindow : Window
         _watcher.AccountDetected += (id, persona) =>
             Dispatcher.Invoke(() => OnAccount(id, persona));
         _watcher.MatchFinished += m => Dispatcher.Invoke(() => AddMatch(m));
+        _watcher.LobbySeen += id => Dispatcher.Invoke(() => OnLobbySeen(id));
 
         Loaded += (_, _) => LoadHistory();
         Loaded += (_, _) => _ = CheckForUpdateAsync();
@@ -196,26 +197,42 @@ public partial class MainWindow : Window
     }
 
     // ------------------------------------------------------------------ Games
-    private void LoadHistory()
+    /// <summary>
+    /// Read every log this machine still has. Returns how many games were new.
+    ///
+    /// Two sources: the copies Forts leaves in <c>users/*/desyncs/</c>, which are
+    /// the only record of older games, and the live <c>log.txt</c>, which holds
+    /// the current session. The live one is included on purpose — the tail
+    /// watcher covers it while running, but a client started after Forts was
+    /// closed would otherwise never see the session that just happened.
+    /// </summary>
+    private int LoadHistory()
     {
         // What Forts copied itself survives the next game start: the logs in
         // users/&lt;id&gt;/desyncs/. The only route to historical games.
+        var before = _matches.Count;
         var forts = FortsPaths.FindFortsDir();
         if (forts is null)
         {
             SetStatus(Loc.T("status.forts_missing"));
-            return;
+            return 0;
         }
         var users = Path.Combine(forts, "users");
-        if (!Directory.Exists(users)) return;
+        if (!Directory.Exists(users)) return 0;
 
+        var files = new List<string>();
         foreach (var file in Directory.EnumerateFiles(users, "*.txt",
                      SearchOption.AllDirectories))
         {
-            if (!file.Contains("desyncs", StringComparison.OrdinalIgnoreCase)) continue;
             var name = Path.GetFileName(file);
-            if (!name.Contains("log", StringComparison.OrdinalIgnoreCase)) continue;
             if (name.Contains("world-dump") || name.Contains("checksum")) continue;
+            var isArchive = file.Contains("desyncs", StringComparison.OrdinalIgnoreCase)
+                            && name.Contains("log", StringComparison.OrdinalIgnoreCase);
+            var isLive = name.Equals("log.txt", StringComparison.OrdinalIgnoreCase);
+            if (isArchive || isLive) files.Add(file);
+        }
+        foreach (var file in files)
+        {
             try
             {
                 foreach (var m in LogParser.ParseFile(file)) AddMatch(m, quiet: true);
@@ -223,6 +240,7 @@ public partial class MainWindow : Window
             catch (IOException) { /* one unreadable copy must not stop the rest */ }
         }
         RebuildSeries();
+        return _matches.Count - before;
     }
 
     private void AddMatch(MatchRecord m, bool quiet = false)
@@ -257,12 +275,19 @@ public partial class MainWindow : Window
 
     private void BtnRescan_Click(object sender, RoutedEventArgs e)
     {
-        // Deliberately NOT clearing first. LoadHistory only reads the archive
-        // under desyncs/, so wiping the list threw away every match the live
-        // watcher had recorded this session — including the one just played,
-        // which is the one you would be looking at. The key set makes a second
-        // pass idempotent, so this only ever adds what is new.
-        LoadHistory();
+        // Deliberately NOT clearing first. LoadHistory reads the logs on disk,
+        // so wiping the list threw away every match the live watcher had
+        // recorded this session — including the one just played, which is the
+        // one you would be looking at. The key set makes a second pass
+        // idempotent, so this only ever adds what is new.
+        //
+        // And it says what it found: a rescan that silently adds nothing is
+        // indistinguishable from a button that does nothing, which is exactly
+        // how this one was read.
+        var added = LoadHistory();
+        SeriesSubtitle.Text = added > 0
+            ? Loc.T("series.rescan_added", added, _matches.Count)
+            : Loc.T("series.rescan_nothing", _matches.Count);
     }
 
     // ----------------------------------------------------------------- Detail
@@ -329,6 +354,49 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Send this series to the ladder.
+    ///
+    /// The server decides whether it counts, and says why not — an unsanctioned
+    /// lobby and an opponent who never opted in are both refusals, and the fix
+    /// for each is completely different. So the answer is shown verbatim
+    /// instead of being flattened into "failed".
+    /// </summary>
+    private async void BtnReport_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null) return;
+        if (!await EnsureReadyAsync()) { ReportStatus.Text = DraftError.Text; return; }
+
+        var sides = new Dictionary<string, int>();
+        foreach (var p in _selected.Matches.SelectMany(m => m.Players.Values))
+            if (!string.IsNullOrEmpty(p.SteamId) && p.Side > 0)
+                sides[p.SteamId] = p.Side;
+        if (sides.Values.Distinct().Count() != 2)
+        {
+            ReportStatus.Text = Loc.T("series.report_not_two_sides");
+            return;
+        }
+
+        var (wins, _) = _selected.Score();
+        var low = sides.Values.Min();
+        var lobby = _selected.Matches.Select(m => m.LobbyId)
+                                     .LastOrDefault(x => x is not null);
+        var (found, _) = _selected.ReplayFiles();
+
+        BtnReport.IsEnabled = false;
+        ReportStatus.Text = Loc.T("series.reporting");
+        var res = await _login.ReportSeriesAsync(
+            sides, _selected.Matches.Count, wins.GetValueOrDefault(low),
+            _selected.PlayedAt, lobby, found.Select(f => f.Name));
+        BtnReport.IsEnabled = true;
+
+        ReportStatus.Text = res is null
+            ? Loc.T("series.report_failed", _api.LastError ?? "?")
+            : res.Rated
+                ? Loc.T("series.report_rated")
+                : Loc.T("series.report_unrated", string.Join(" · ", res.Reasons));
+    }
+
     private void BtnCollect_Click(object sender, RoutedEventArgs e)
     {
         if (_selected is null) return;
@@ -336,8 +404,20 @@ public partial class MainWindow : Window
         var dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
             $"UFER_{stamp}");
-        var (n, bytes) = _selected.Collect(dir, _identity);
-        ReplayInfo.Text = Loc.T("series.collected", n, bytes / 1e6, dir);
+        try
+        {
+            var (n, bytes) = _selected.Collect(dir, _identity);
+            ReplayInfo.Text = Loc.T("series.collected", n, bytes / 1e6, dir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Collecting the same series twice is normal — the report is
+            // rewritten and existing replays are left alone. What is not normal
+            // is a locked file or a read-only desktop, and that used to throw
+            // out of a click handler with nothing said.
+            ReplayInfo.Text = Loc.T("series.collect_failed", ex.Message);
+            return;
+        }
         // The folder opens so the files can be dragged straight into
         // Discord. Nothing is sent — a human does that.
         try { System.Diagnostics.Process.Start("explorer.exe", $"\"{dir}\""); }
@@ -596,10 +676,122 @@ public partial class MainWindow : Window
         if (_draft.LastError is { Length: > 0 } err) ShowDraftError(err);
         else DraftErrorBar.Visibility = Visibility.Collapsed;
 
+        // Leaving is offered while there is something to leave, and taken away
+        // the moment the draft is done — at that point the way out is playing.
+        BtnCancelDraft.Visibility = running && !s!.Done && !s.Cancelled
+            ? Visibility.Visible : Visibility.Collapsed;
+
         if (!running) return;
         RenderVersus(s!);
         RenderBoard(s!);
         RenderPlan(s!);
+        RenderHandoff(s!);
+    }
+
+    // ----------------------------------------------------------- The handoff
+    /// <summary>
+    /// What to do once the draft is decided.
+    ///
+    /// Without this the draft ended in a plan and no game: two people with a
+    /// map list and no way into a lobby. One side hosts, the log supplies the
+    /// lobby id, and the other side gets a Steam join link.
+    /// </summary>
+    private void RenderHandoff(DraftStateDto s)
+    {
+        if (!s.Done || s.Cancelled)
+        {
+            HandoffBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+        HandoffBar.Visibility = Visibility.Visible;
+
+        var haveLobby = s.Lobby_Id is { Length: > 0 };
+        BtnJoinLobby.Visibility = haveLobby && !s.YouHostLobby
+            ? Visibility.Visible : Visibility.Collapsed;
+        BtnHostLobby.Visibility = haveLobby
+            ? Visibility.Collapsed : Visibility.Visible;
+        BtnHostLobby.IsEnabled = !_awaitingLobby;
+
+        if (haveLobby)
+        {
+            HandoffTitle.Text = s.YouHostLobby
+                ? Loc.T("handoff.you_host") : Loc.T("handoff.ready_to_join");
+            HandoffSub.Text = Loc.T("handoff.lobby_is", s.Lobby_Id!);
+        }
+        else if (_awaitingLobby)
+        {
+            HandoffTitle.Text = Loc.T("handoff.watching");
+            HandoffSub.Text = Loc.T("handoff.watching_sub");
+        }
+        else
+        {
+            HandoffTitle.Text = Loc.T("handoff.decided");
+            HandoffSub.Text = Loc.T("handoff.decided_sub");
+        }
+    }
+
+    /// <summary>Set while waiting for a lobby to appear in the game log.</summary>
+    private bool _awaitingLobby;
+
+    private void BtnLaunchForts_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            // Through Steam rather than the exe: Forts needs the Steam client
+            // for multiplayer anyway, and this starts it if it is not running.
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo("steam://run/410900")
+                { UseShellExecute = true });
+        }
+        catch (Exception ex) { ShowDraftError(ex.Message); }
+    }
+
+    private void BtnHostLobby_Click(object sender, RoutedEventArgs e)
+    {
+        _awaitingLobby = true;
+        if (_draft.State is not null) RenderHandoff(_draft.State);
+    }
+
+    /// <summary>
+    /// A lobby appeared in the log. Claim it for the draft if we are waiting.
+    ///
+    /// Only when asked for: the log reports every lobby, including one joined
+    /// for a completely unrelated game, and claiming that would sanction a
+    /// match nobody drafted.
+    /// </summary>
+    private async void OnLobbySeen(ulong lobbyId)
+    {
+        if (!_awaitingLobby || _draft.State is null || !_draft.State.Done) return;
+        _awaitingLobby = false;
+        if (!await _draft.SetLobbyAsync(lobbyId))
+            ShowDraftError(_draft.LastError ?? "?");
+        RefreshDraft();
+    }
+
+    private void BtnJoinLobby_Click(object sender, RoutedEventArgs e)
+    {
+        var s = _draft.State;
+        if (s?.Lobby_Id is not { Length: > 0 } lobby) return;
+        var host = s.Lobby_Host is not null && s.Seats.TryGetValue(s.Lobby_Host, out var h)
+            ? h : "";
+        try
+        {
+            // Steam's own join URL. The third field is the host's account, and
+            // Steam accepts 0 when it is not known — it then resolves the lobby
+            // owner itself.
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(
+                    $"steam://joinlobby/410900/{lobby}/0")
+                { UseShellExecute = true });
+            HandoffSub.Text = Loc.T("handoff.joining", host);
+        }
+        catch (Exception ex) { ShowDraftError(ex.Message); }
+    }
+
+    private async void BtnCancelDraft_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await _draft.CancelAsync()) ShowDraftError(_draft.LastError ?? "?");
+        RefreshDraft();
     }
 
     private void RenderVersus(DraftStateDto s)
@@ -622,6 +814,16 @@ public partial class MainWindow : Window
         LockedLabel.Text = s.Your_Pending_Pick is { Length: > 0 } p
             ? Loc.T("draft.you_locked", s.Display(p)) : "";
 
+        // Said before anything else: a board that still shows whose turn it is
+        // while the other side has walked away is the worst of the three states.
+        if (s.Cancelled)
+        {
+            TurnBanner.Text = Loc.T("draft.cancelled", s.Cancelled_By ?? "?");
+            TurnBanner.Foreground = (Brush)FindResource("Warn");
+            TurnSub.Text = Loc.T("draft.cancelled_sub");
+            TimerBar.Width = 0;
+            return;
+        }
         if (s.Done)
         {
             TurnBanner.Text = Loc.T("draft.finished");
@@ -653,7 +855,7 @@ public partial class MainWindow : Window
 
         // The bar is a fraction of the step budget rather than an animation, so
         // it can only ever show what the server reported.
-        var left = s.Seconds_Left ?? 0;
+        var left = s.SecondsLeftNow;
         TimerBar.Width = Math.Max(0, Math.Min(200, 200 * left / 30.0));
         TimerBar.Background = (Brush)FindResource(left <= 5 ? "Loss" : "Accent");
     }
@@ -752,10 +954,24 @@ public sealed class SeriesVm
         var own = s.LocalSide() ?? (sides.Count > 0 ? sides.Keys.Min() : 0);
         var other = sides.Keys.FirstOrDefault(x => x != own);
 
-        Title = other == 0
-            ? string.Join(", ", sides.SelectMany(kv => s.Names(ids, kv.Key)))
-            : "vs " + string.Join(", ", s.Names(ids, other));
-        Subtitle = $"{s.PlayedAt:dd.MM. HH:mm}  ·  " + Loc.T("series.count", s.Matches.Count) + "  ·  " +
+        // Both sides, own side first. Naming only the opponent read as
+        // "vs Enemy" with nothing to say who that was against — and against the
+        // built-in AI "Enemy" is literally the name in the log, so the line
+        // said nothing at all.
+        var mine = string.Join(", ", s.Names(ids, own));
+        var theirs = other == 0 ? "" : string.Join(", ", s.Names(ids, other));
+        if (string.IsNullOrWhiteSpace(mine)) mine = Loc.T("series.you");
+        Title = string.IsNullOrWhiteSpace(theirs)
+            ? mine : $"{mine}  vs  {theirs}";
+
+        // When, then how many games, then the maps. The date was there before
+        // but only in the detail pane, which needs a click to reach.
+        var when = s.PlayedAt.Date == DateTime.Today
+            ? Loc.T("series.today", s.PlayedAt.ToString("HH:mm"))
+            : s.PlayedAt.Date == DateTime.Today.AddDays(-1)
+                ? Loc.T("series.yesterday", s.PlayedAt.ToString("HH:mm"))
+                : s.PlayedAt.ToString("ddd d MMM, HH:mm");
+        Subtitle = $"{when}  ·  " + Loc.T("series.count", s.Matches.Count) + "  ·  " +
                    string.Join(", ", s.Matches.Select(m => m.Map).Distinct());
 
         var w = wins.GetValueOrDefault(own);

@@ -18,6 +18,7 @@ public sealed class ServerDraft : IDisposable
 {
     private readonly ApiClient _api;
     private readonly System.Windows.Threading.DispatcherTimer _timer;
+    private readonly System.Windows.Threading.DispatcherTimer _display;
     private bool _busy;
 
     public string? DraftId { get; private set; }
@@ -40,6 +41,19 @@ public sealed class ServerDraft : IDisposable
             Interval = TimeSpan.FromSeconds(1),
         };
         _timer.Tick += async (_, _) => await RefreshAsync();
+
+        // Local, talks to nobody: it only re-draws the countdown so the bar
+        // moves smoothly instead of once per poll.
+        _display = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(200),
+        };
+        _display.Tick += (_, _) =>
+        {
+            if (State is { Done: false, Cancelled: false, Full: true })
+                Changed?.Invoke();
+        };
+        _display.Start();
     }
 
     public async Task<bool> CreateAsync(IEnumerable<string> maps,
@@ -126,9 +140,12 @@ public sealed class ServerDraft : IDisposable
             var next = await _api.GetAsync<DraftStateDto>($"/drafts/{DraftId}");
             if (next is not null)
             {
+                next.ReceivedAt = DateTime.UtcNow;
                 State = next;
                 LastError = null;
-                if (next.Done) _timer.Stop();
+                // Nothing left to poll for once it is decided or abandoned. The
+                // state is kept so the view can say which of the two it was.
+                if (next.Done || next.Cancelled) _timer.Stop();
             }
             else
             {
@@ -165,5 +182,49 @@ public sealed class ServerDraft : IDisposable
         Changed?.Invoke();
     }
 
-    public void Dispose() => _timer.Stop();
+    /// <summary>
+    /// Leave the draft. Both sides are told; nothing is silently deleted.
+    ///
+    /// Polling stops either way: if the request failed the draft is unreachable
+    /// anyway, and continuing to poll would keep a board on screen that cannot
+    /// be played.
+    /// </summary>
+    public async Task<bool> CancelAsync()
+    {
+        if (DraftId is null) return false;
+        var ok = await _api.DeleteAsync($"/drafts/{DraftId}");
+        var why = _api.LastError;
+        Leave();
+        if (!ok) LastError = why;
+        return ok;
+    }
+
+    /// <summary>
+    /// Tell the server which Steam lobby this series is played in.
+    ///
+    /// Sent as a string: 64-bit lobby ids do not survive being parsed as JSON
+    /// numbers, and a rounded id matches no game.
+    /// </summary>
+    public async Task<bool> SetLobbyAsync(ulong lobbyId)
+    {
+        if (DraftId is null) return false;
+        var next = await _api.PostAsync<DraftStateDto>(
+            $"/drafts/{DraftId}/lobby",
+            new { lobby_id = lobbyId.ToString() });
+        if (next is null)
+        {
+            LastError = _api.LastError;
+            Changed?.Invoke();
+            return false;
+        }
+        State = next;
+        Changed?.Invoke();
+        return true;
+    }
+
+    public void Dispose()
+    {
+        _timer.Stop();
+        _display.Stop();
+    }
 }

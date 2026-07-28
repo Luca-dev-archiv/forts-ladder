@@ -21,7 +21,7 @@ import json
 import os
 from pathlib import Path
 
-from ladder.ratings import tier_of
+from ladder.ratings import recompute, tier_of
 
 #: Alongside the database rather than in the application directory: it is data,
 #: it changes when a new season is imported, and it must survive a redeploy that
@@ -68,11 +68,51 @@ class Ranking:
             r["rank"] = i
         return len(self.players)
 
+    def apply_open(self, events: list[dict]) -> int:
+        """Fill the open column from series reported to this server.
+
+        The seed is the starting point, not a second ranking: a player begins
+        at their spreadsheet rating and moves from there, so the first reported
+        game does not reset anyone to 1000.
+
+        Players who exist only through reported results are appended — someone
+        who was never on the spreadsheet still has to appear once they have
+        played.
+        """
+        seed = {p["name"]: float(p["ufer_rating"]) for p in self.players
+                if p.get("ufer_rating") is not None}
+        computed = recompute(events, seed=seed)
+        by_name = {p["name"]: p for p in self.players}
+
+        for name, st in computed.items():
+            row = by_name.get(name)
+            if row is None:
+                row = {"name": name, "ufer_rating": None, "ufer_title": None,
+                       "ufer_rank": None}
+                self.players.append(row)
+                by_name[name] = row
+            row["open_rating"] = round(st.rating, 1)
+            row["open_title"] = st.title
+            row["open_games"] = st.games
+            # Under ten games the number moves a lot per series, so it is shown
+            # as what it is rather than as a standing.
+            row["open_provisional"] = st.games < 10
+
+        # Ranked by the open rating where there is one, since that is the live
+        # column, and by the seed for everyone who has not played yet.
+        self.players.sort(key=lambda r: -(r.get("open_rating")
+                                          or r.get("ufer_rating") or 0))
+        for i, r in enumerate(self.players, start=1):
+            r["rank"] = i
+        self.open_events = len(events)
+        return len(computed)
+
     def payload(self) -> dict:
         return {
             "source": self.source,
             "count": len(self.players),
             "players": self.players,
+            "open_events": getattr(self, "open_events", 0),
             "note": ("Seeded from the community spreadsheet. The open column "
-                     "fills in as results are reported."),
+                     "is computed from the series reported to this server."),
         }

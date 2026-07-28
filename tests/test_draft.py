@@ -133,14 +133,41 @@ def test_commander_picks_are_blind_until_both_locked():
 
 
 def test_a_winning_commander_is_burned_for_that_side_only():
-    """Ladder rule: a win uses the map up, a loss does not."""
+    """Ladder rule: a win uses the commander up, a loss does not."""
     d = fresh()
     play_maps(d); play_commander_bans(d)
     d.apply(CMDS[2], Side.A); d.apply(CMDS[3], Side.B)
     d.note_result(1, Side.A)
+    assert CMDS[2] in d.burned(Side.A)
     assert CMDS[2] not in d.available_commanders_for(Side.A)
+    # The winner's choice says nothing about what the loser may use.
     assert CMDS[2] in d.available_commanders_for(Side.B)
-    assert CMDS[3] in d.available_commanders_for(Side.B)
+    # And losing with something does not spend it — it is back one game later.
+    assert CMDS[3] not in d.burned(Side.B)
+
+
+def test_the_same_commander_cannot_be_picked_twice_in_a_row():
+    """League rule: no repeat back to back, so a Bo5 cannot be one commander
+    five times. Only the previous game is blocked — with a small pool, banning
+    for the whole series would run it out."""
+    d = fresh(best_of=3)
+    play_maps(d); play_commander_bans(d)
+    d.apply(CMDS[2], Side.A); d.apply(CMDS[3], Side.B)
+
+    assert CMDS[2] not in d.available_commanders_for(Side.A)
+    assert CMDS[3] not in d.available_commanders_for(Side.B)
+    try:
+        d.apply(CMDS[2], Side.A)
+    except ValueError as e:
+        assert "not available" in str(e).lower() or CMDS[2] in str(e), str(e)
+    else:
+        raise AssertionError("a side repeated its commander back to back")
+
+    # Game 2 with something else — CMDS[0] and CMDS[1] went to the bans — and
+    # the game-1 choice is allowed again in game 3.
+    d.apply(CMDS[4], Side.A); d.apply(CMDS[5], Side.B)
+    assert CMDS[2] in d.available_commanders_for(Side.A)
+    assert CMDS[4] not in d.available_commanders_for(Side.A)
 
 
 # ---------------------------------------------------------------- Names

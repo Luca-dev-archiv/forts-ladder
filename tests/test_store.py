@@ -338,6 +338,64 @@ def test_a_draft_survives_a_restart_exactly():
         again.close()
 
 
+def test_the_lobby_and_a_cancellation_survive_a_restart():
+    """Both are decisions, not derived state. A lobby id that came back empty
+    would leave a finished series with no way to tell which games were it, and
+    a cancelled draft coming back alive would hand somebody a dead board.
+
+    Also covers the migration: the columns are added to an existing table, and
+    `CREATE TABLE IF NOT EXISTS` does not add a column.
+    """
+    from ladder.draft import Side
+    from server.draft import DraftService
+
+    maps = ["Abyss", "Pillars", "Desert Ruins", "Split", "Spirals", "Moorings"]
+    cmds = [f"commander-x-{n}" for n in "abcdef"]
+    auth = AuthService()
+    people = []
+    for i, n in enumerate(("A", "B", "C", "D"), start=1):
+        acc = auth.login_discord(str(i), n)
+        acc.role = Role.PLAYER
+        auth.attach_steam(acc, f"7656119900000{i:04d}")
+        auth.set_tracking_consent(acc, True)
+        people.append(acc)
+    a, b, c, d_ = people
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "x.sqlite"
+        store = Store(path)
+        svc = DraftService()
+
+        finished = svc.create(a, maps, cmds, best_of=1, step_seconds=None)
+        svc.join(b, finished.join_code)
+        while finished.draft.current is not None:
+            step = finished.draft.current
+            if step.side is None:
+                for side, actor in ((Side.A, a), (Side.B, b)):
+                    if finished.draft.legal_options(side):
+                        finished.apply(actor, finished.draft.legal_options(side)[0])
+            else:
+                actor = a if step.side is Side.A else b
+                finished.apply(actor, finished.draft.legal_options(step.side)[0])
+        finished.set_lobby(a, 109775243190123456)
+        store.save_draft(finished)
+
+        walked = svc.create(c, maps, cmds, best_of=1, step_seconds=None)
+        svc.join(d_, walked.join_code)
+        walked.cancel(d_)
+        store.save_draft(walked)
+        store.close()
+
+        again = Store(path)
+        svc2 = DraftService()
+        svc2.restore(again.load_drafts())
+        assert svc2.get(finished.id).lobby_id == 109775243190123456
+        assert svc2.get(finished.id).lobby_host == "A"
+        assert svc2.get(walked.id).cancelled_by == "D" or                svc2.get(walked.id).cancelled_by == "B",                svc2.get(walked.id).cancelled_by
+        assert svc2.get(walked.id).cancelled
+        again.close()
+
+
 def test_a_stale_draft_is_not_restored():
     """A board nobody finished yesterday is not something to resume."""
     from server.draft import DraftService

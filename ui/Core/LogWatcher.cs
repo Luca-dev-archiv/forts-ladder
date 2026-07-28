@@ -33,6 +33,9 @@ public sealed class LogWatcher : IDisposable
     /// from the text, or it becomes language-dependent.</summary>
     public event Action<string, bool>? StatusChanged;
     public event Action<string, string>? AccountDetected;   // steamId, persona
+    /// <summary>A new Steam lobby appeared in the log — the draft handoff
+    /// waits for this rather than asking anyone to copy an id.</summary>
+    public event Action<ulong>? LobbySeen;
 
     public string? CurrentAccount { get; private set; }
     public string? CurrentPersona { get; private set; }
@@ -41,6 +44,7 @@ public sealed class LogWatcher : IDisposable
     public LogWatcher(TimeSpan interval)
     {
         _parser.MatchFinished += m => MatchFinished?.Invoke(m);
+        _parser.LobbySeen += id => LobbySeen?.Invoke(id);
         _timer = new System.Threading.Timer(_ => Poll(), null, TimeSpan.Zero, interval);
     }
 
@@ -141,6 +145,7 @@ public sealed class LogWatcher : IDisposable
     {
         _parser = new LogParser { FallbackTime = DateTime.Now };
         _parser.MatchFinished += m => MatchFinished?.Invoke(m);
+        _parser.LobbySeen += id => LobbySeen?.Invoke(id);
     }
 
     public void Dispose()

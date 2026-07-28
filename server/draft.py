@@ -49,6 +49,19 @@ class DraftSession:
     #: from its own copy, so saving that one and rebuilding from it would strike
     #: a second map and change the board under the players.
     original_map_pool: list[str] = field(default_factory=list)
+    #: Steam lobby the two of them agreed to play in, read out of the host's
+    #: game log. This is the whole handoff: without it a finished draft is a
+    #: list of maps and no way to get into a game.
+    lobby_id: int | None = None
+    #: Which side is hosting the lobby. The other side gets the join link.
+    lobby_host: str | None = None
+    #: Set when someone walked away. Kept rather than deleted, so the other
+    #: side is told what happened instead of getting "unknown draft".
+    cancelled_by: str | None = None
+
+    @property
+    def cancelled(self) -> bool:
+        return self.cancelled_by is not None
 
     # ------------------------------------------------------------------ Seats
     def seat_of(self, account: Account) -> Seat:
@@ -93,6 +106,10 @@ class DraftSession:
         return {
             "id": self.id,
             "your_side": seat.side.value if seat else None,
+            "cancelled": self.cancelled,
+            "cancelled_by": self.cancelled_by,
+            "lobby_id": str(self.lobby_id) if self.lobby_id else None,
+            "lobby_host": self.lobby_host,
             "seats": {s.side.value: s.display for s in self.seats.values()},
             "full": self.full(),
             "done": d.done,
@@ -120,8 +137,40 @@ class DraftSession:
         }
 
     # ------------------------------------------------------------------ Moves
+    def cancel(self, account: Account) -> dict:
+        """Walk away. Either side may, and both are told who did.
+
+        Not a delete: the other player is sitting in front of a board waiting
+        for a move, and "no draft with that id" is a worse answer than "the
+        other side left".
+        """
+        seat = self.seat_of(account)
+        if not self.cancelled:
+            self.cancelled_by = seat.side.value
+        return self.public_state(account)
+
+    def set_lobby(self, account: Account, lobby_id: int) -> dict:
+        """Name the lobby the series will be played in.
+
+        Only a seat may, and only once: the id is what decides which recorded
+        games count for this series, so letting it be rewritten mid-series
+        would let one side re-point it at a different game.
+        """
+        seat = self.seat_of(account)
+        if self.cancelled:
+            raise AuthError("this draft was cancelled")
+        if not self.draft.done:
+            raise AuthError("the draft is not finished yet")
+        if self.lobby_id is not None and self.lobby_id != lobby_id:
+            raise AuthError(f"this draft is already in lobby {self.lobby_id}")
+        self.lobby_id = int(lobby_id)
+        self.lobby_host = seat.side.value
+        return self.public_state(account)
+
     def apply(self, account: Account, value: str) -> dict:
         """Make a move on behalf of one participant."""
+        if self.cancelled:
+            raise AuthError(f"side {self.cancelled_by} left this draft")
         if not self.full():
             raise AuthError("waiting for the second player")
         seat = self.seat_of(account)
@@ -148,7 +197,7 @@ class DraftSession:
         for an opponent started the timer and steps were then drawn by lot with
         nobody there to make them.
         """
-        if not self.full():
+        if not self.full() or self.cancelled:
             return []
         return self.draft.tick()
 
@@ -232,7 +281,10 @@ class DraftService:
             s = DraftSession(id=row["id"], join_code=row["join_code"],
                              draft=draft, series_id=row.get("series_id"),
                              created_at=row["created_at"],
-                             original_map_pool=list(row["map_pool"]))
+                             original_map_pool=list(row["map_pool"]),
+                             lobby_id=row.get("lobby_id"),
+                             lobby_host=row.get("lobby_host"),
+                             cancelled_by=row.get("cancelled_by"))
             for seat in row["seats"]:
                 s.seats[seat["account_id"]] = Seat(
                     Side(seat["side"]), seat["account_id"], seat["display"])

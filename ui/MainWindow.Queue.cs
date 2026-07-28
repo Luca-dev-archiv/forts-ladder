@@ -237,7 +237,7 @@ public partial class MainWindow
                 : Loc.T("queue.found_sub");
             AcceptCount.Text = Loc.T("queue.accepted_count",
                                      proposal.Accepted_Count, 2);
-            AcceptSeconds.Text = proposal.Seconds_Left.ToString();
+            AcceptSeconds.Text = proposal.SecondsLeftNow.ToString();
             BtnAccept.IsEnabled = !proposal.Accepted_By_You;
             BtnQueueToggle.Visibility = Visibility.Collapsed;
             return;
@@ -260,7 +260,7 @@ public partial class MainWindow
             // tool being broken.
             QueueBigState.Text = Loc.T("queue.penalty_title");
             QueueBigState.Foreground = (Brush)FindResource("Loss");
-            QueueSubState.Text = Loc.T("queue.penalty_sub", s.Penalised_Until);
+            QueueSubState.Text = Loc.T("queue.penalty_sub", s.PenalisedNow);
             BtnQueueToggle.Content = Loc.T("queue.find");
             return;
         }
@@ -270,7 +270,7 @@ public partial class MainWindow
             QueueBigState.Text = Loc.T("queue.searching_title");
             QueueBigState.Foreground = (Brush)FindResource("TextHi");
             QueueSubState.Text = Loc.T("queue.searching_sub");
-            QueueElapsed.Text = TimeSpan.FromSeconds(s.Waited_S).ToString(@"m\:ss");
+            QueueElapsed.Text = TimeSpan.FromSeconds(s.WaitedNow).ToString(@"m\:ss");
             QueueSize.Text = s.Queue_Size.ToString();
             BtnQueueToggle.Content = Loc.T("queue.cancel");
             return;

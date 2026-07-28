@@ -405,6 +405,97 @@ def test_the_draft_uses_the_modes_best_of():
     assert q.drafts.get(st["draft_id"]).draft.best_of == 1
 
 
+# ------------------------------------------------------- Cancelling and lobby
+def play_all(s, a, b):
+    """Run the draft to the end, whoever is on turn."""
+    while s.draft.current is not None:
+        step = s.draft.current
+        if step.side is None:
+            for side, actor in ((Side.A, a), (Side.B, b)):
+                if s.draft.legal_options(side):
+                    s.apply(actor, s.draft.legal_options(side)[0])
+        else:
+            actor = a if step.side is Side.A else b
+            s.apply(actor, s.draft.legal_options(step.side)[0])
+
+
+def test_either_side_can_cancel_and_both_are_told_who_did():
+    """Deliberately not a delete: the other player is staring at a board, and
+    "no such draft" is a worse answer than "the other side left"."""
+    svc, s, a, b = started()
+    s.cancel(b)
+    for viewer in (a, b):
+        st = s.public_state(viewer)
+        assert st["cancelled"] is True
+        assert st["cancelled_by"] == "B"
+
+
+def test_a_cancelled_draft_accepts_no_more_moves():
+    svc, s, a, b = started()
+    s.cancel(a)
+    try:
+        s.apply(b, s.draft.legal_options(Side.A)[0])
+    except AuthError as e:
+        assert "left" in str(e), str(e)
+    else:
+        raise AssertionError("a move was accepted after the draft was cancelled")
+
+
+def test_a_stranger_cannot_cancel_someone_elses_draft():
+    svc, s, a, b = started()
+    auth2, c, _ = two_players()
+    try:
+        s.cancel(c)
+    except AuthError:
+        pass
+    else:
+        raise AssertionError("an outsider cancelled a draft they are not in")
+    assert not s.cancelled
+
+
+def test_the_lobby_can_only_be_named_once_the_draft_is_finished():
+    """Before that there is nothing to play, and the id decides which recorded
+    games count — so it must not be pointed at a game that predates the plan."""
+    svc, s, a, b = started()
+    try:
+        s.set_lobby(a, 109775241234567890)
+    except AuthError as e:
+        assert "not finished" in str(e), str(e)
+    else:
+        raise AssertionError("a lobby was accepted mid-draft")
+
+    play_all(s, a, b)
+    assert s.draft.done
+    st = s.set_lobby(a, 109775241234567890)
+    assert st["lobby_id"] == "109775241234567890"
+    assert st["lobby_host"] == "A"
+    # The other side sees it too — that is the entire point of the handoff.
+    assert s.public_state(b)["lobby_id"] == "109775241234567890"
+
+
+def test_the_lobby_cannot_be_repointed_at_a_different_game():
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.set_lobby(a, 111)
+    s.set_lobby(b, 111)              # same id again is harmless
+    try:
+        s.set_lobby(b, 222)
+    except AuthError as e:
+        assert "already in lobby" in str(e), str(e)
+    else:
+        raise AssertionError("the lobby id was overwritten")
+
+
+def test_the_lobby_id_stays_a_string_in_the_state():
+    """A Steam lobby id does not survive a double: JavaScript and anything else
+    parsing JSON numbers would round it, and a rounded id matches no game."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    st = s.set_lobby(a, 109775243190123456)
+    assert isinstance(st["lobby_id"], str)
+    assert st["lobby_id"] == "109775243190123456"
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

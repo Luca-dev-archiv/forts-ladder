@@ -44,6 +44,7 @@ from .draft import DraftService
 from .live import LiveService
 from .queue import QueueService
 from .ranking import Ranking
+from .results import ResultService
 from .store import Store
 
 #: The interactive docs are useful while developing and an unnecessary
@@ -71,6 +72,10 @@ drafts = DraftService()
 drafts.restore(store.load_drafts())
 queue = QueueService(auth, drafts)
 ranking = Ranking()
+# Reported series, and the standings they produce. Before this existed the
+# shared ranking was the imported spreadsheet and nothing else — winning a
+# match on this ladder changed no number anyone else could see.
+results = ResultService(auth, store, ranking)
 
 BASE_URL = os.environ.get("LADDER_BASE_URL", "http://localhost:8000")
 SESSION_COOKIE = "ladder_session"
@@ -653,6 +658,47 @@ def draft_state(draft_id: str, ladder_session: str | None = Cookie(None),
     return guard(s.public_state, acc)
 
 
+@app.delete("/drafts/{draft_id}")
+def draft_cancel(draft_id: str, ladder_session: str | None = Cookie(None),
+                 authorization: str | None = Header(None)):
+    """Leave a draft. Either side may; the other is told who left."""
+    acc = require(session_token(ladder_session, authorization))
+    s = guard(drafts.get, draft_id)
+    state = guard(s.cancel, acc)
+    store.save_draft(s)
+    # Whoever left is out of the queue too, or the client would offer to
+    # rejoin a match it just abandoned.
+    queue.leave(acc)
+    return state
+
+
+class LobbyBody(BaseModel):
+    lobby_id: str
+
+
+@app.post("/drafts/{draft_id}/lobby")
+def draft_lobby(draft_id: str, body: LobbyBody,
+                ladder_session: str | None = Cookie(None),
+                authorization: str | None = Header(None)):
+    """The host names the Steam lobby, and the ladder sanctions it.
+
+    This is the join in both senses: the other side gets a link into the game,
+    and the lobby id becomes the one recorded games are matched against.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    s = guard(drafts.get, draft_id)
+    try:
+        lobby = int(body.lobby_id)
+    except ValueError as e:
+        raise HTTPException(400, "lobby id must be a number") from e
+    state = guard(s.set_lobby, acc, lobby)
+    store.save_draft(s)
+    # Sanctioned here rather than by the client: the server knows this lobby
+    # came out of a draft it ran, which is exactly what sanctioning means.
+    store.sanction_lobby(lobby, s.series_id or s.id, created_by=acc.id)
+    return state
+
+
 class DraftMove(BaseModel):
     value: str
 
@@ -1038,6 +1084,59 @@ async def bracket_page_report(tid: str, request: Request,
     return RedirectResponse(f"/manage/tournaments/{tid}", status_code=303)
 
 
+# ---------------------------------------------------------------- Results
+class ResultBody2(BaseModel):
+    #: SteamID64 -> side, straight out of the game log.
+    sides: dict[str, int]
+    games: int
+    #: Games won by the lower side number.
+    score_low: int
+    played_at: str
+    lobby_id: str | None = None
+    replays: list[str] = []
+
+
+@app.post("/results")
+def report_result(body: ResultBody2, ladder_session: str | None = Cookie(None),
+                  authorization: str | None = Header(None)):
+    """Report a finished series.
+
+    Accepted only from a client whose own Steam ID is in it. Both players'
+    clients report the same series on purpose — whichever is running gets it
+    through, and the second arrival is a no-op.
+
+    A series that may not be rated is still stored, with the reasons, and the
+    answer says so. "It did not count" needs to be explainable.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    lobby: int | None = None
+    if body.lobby_id:
+        try:
+            lobby = int(body.lobby_id)
+        except ValueError as e:
+            raise HTTPException(400, "lobby id must be a number") from e
+    r = guard(results.report, acc, lobby_id=lobby, sides=body.sides,
+              games=body.games, score_low=body.score_low,
+              played_at=body.played_at, replays=body.replays)
+    return {"id": r.id, "rated": r.rated, "reasons": r.reasons}
+
+
+@app.get("/results/mine")
+def my_results(ladder_session: str | None = Cookie(None),
+               authorization: str | None = Header(None)):
+    """Your own reported series — what the ladder has of yours, and what of it
+    counted. Nobody else's: this is not a browsable archive."""
+    acc = require(session_token(ladder_session, authorization))
+    if acc.steam_id is None:
+        return {"series": []}
+    mine = [r for r in store.load_results() if acc.steam_id in r.sides]
+    return {"series": [{"id": r.id, "played_at": r.played_at,
+                        "games": r.games, "score_low": r.score_low,
+                        "your_side": r.sides[acc.steam_id],
+                        "rated": r.rated, "reasons": r.reasons}
+                       for r in mine]}
+
+
 # ---------------------------------------------------------------- Ranking
 @app.get("/ranking")
 def ranking_get(ladder_session: str | None = Cookie(None),
@@ -1050,6 +1149,9 @@ def ranking_get(ladder_session: str | None = Cookie(None),
     itself from its own log.
     """
     require(session_token(ladder_session, authorization))
+    # Recomputed on read, not cached: a rating held in memory would outlive the
+    # consent it was based on.
+    results.refresh_ranking()
     return ranking.payload()
 
 

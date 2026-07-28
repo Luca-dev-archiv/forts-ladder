@@ -16,6 +16,7 @@ checks.
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 import time
 from pathlib import Path
@@ -138,6 +139,35 @@ CREATE TABLE IF NOT EXISTS tournament_results (
     seq           INTEGER NOT NULL,
     PRIMARY KEY (tournament_id, match_id)
 );
+
+-- Reported series: the events the shared ranking is computed from.
+--
+-- Ratings are deliberately NOT stored. They are recomputed from these rows on
+-- demand, which is what makes withdrawing consent retroactive and lets anyone
+-- with the same rows arrive at the same numbers.
+--
+-- `rated` is a fact about the series, not a permission: a report that arrives
+-- from an unsanctioned lobby is kept, marked, and left out of the maths. Silently
+-- dropping it would make "my game did not count" impossible to explain.
+CREATE TABLE IF NOT EXISTS results (
+    id          TEXT PRIMARY KEY,
+    lobby_id    INTEGER,
+    sides       TEXT NOT NULL,          -- {"765...": 1, "765...": 2}
+    games       INTEGER NOT NULL,
+    score_low   INTEGER NOT NULL,       -- games won by the lower side number
+    played_at   TEXT NOT NULL,
+    reported_by TEXT REFERENCES accounts(id),
+    rated       INTEGER NOT NULL DEFAULT 1,
+    reasons     TEXT NOT NULL DEFAULT '[]',
+    replays     TEXT NOT NULL DEFAULT '[]',
+    created_at  REAL NOT NULL
+);
+
+-- One series reported twice is one series. Two clients in the same match both
+-- report it, on purpose — whichever is running wins — so the pair of lobby and
+-- kickoff time is what makes the second one a no-op.
+CREATE UNIQUE INDEX IF NOT EXISTS results_once
+    ON results (lobby_id, played_at);
 """
 
 
@@ -160,6 +190,15 @@ class Store:
         "accounts": [
             ("tracking_consent", "INTEGER NOT NULL DEFAULT 0"),
             ("consent_since", "TEXT"),
+        ],
+        "drafts": [
+            # The handoff and the walk-away. Both have to survive a restart:
+            # the lobby id is what recorded games are matched against, and a
+            # cancelled draft that came back alive would put a dead board in
+            # front of whoever logs in next.
+            ("lobby_id", "INTEGER"),
+            ("lobby_host", "TEXT"),
+            ("cancelled_by", "TEXT"),
         ],
     }
 
@@ -260,6 +299,44 @@ class Store:
         return [r["lobby_id"] for r in self.db.execute(
             "SELECT lobby_id FROM sanctioned_lobbies ORDER BY created_at DESC")]
 
+    def is_sanctioned(self, lobby_id: int) -> bool:
+        return self.db.execute(
+            "SELECT 1 FROM sanctioned_lobbies WHERE lobby_id = ?",
+            (int(lobby_id),)).fetchone() is not None
+
+    # ------------------------------------------------------------ Results
+    def next_result_id(self) -> str:
+        return secrets.token_hex(8)
+
+    def save_result(self, r) -> None:
+        """Write one reported series. Reporting it twice changes nothing.
+
+        Both clients in a match report, so the second arrival is expected. It
+        keeps the first version rather than overwriting: they should agree, and
+        if they do not, the earlier one is the one that was already rated.
+        """
+        self.db.execute(
+            """INSERT OR IGNORE INTO results
+                   (id, lobby_id, sides, games, score_low, played_at,
+                    reported_by, rated, reasons, replays, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (r.id, r.lobby_id, json.dumps(r.sides), r.games, r.score_low,
+             r.played_at, r.reported_by, int(r.rated), json.dumps(r.reasons),
+             json.dumps(r.replays), r.created_at))
+        self.db.commit()
+
+    def load_results(self) -> list:
+        from .results import Reported
+        return [Reported(
+            id=r["id"], lobby_id=r["lobby_id"],
+            sides={k: int(v) for k, v in json.loads(r["sides"]).items()},
+            games=r["games"], score_low=r["score_low"],
+            played_at=r["played_at"], reported_by=r["reported_by"],
+            rated=bool(r["rated"]), reasons=json.loads(r["reasons"]),
+            replays=json.loads(r["replays"]), created_at=r["created_at"])
+            for r in self.db.execute(
+                "SELECT * FROM results ORDER BY played_at, created_at")]
+
     # ------------------------------------------------------------- Drafts
     def save_draft(self, session) -> None:
         """Write setup, seats and every move so far.
@@ -271,14 +348,19 @@ class Store:
         self.db.execute(
             """INSERT INTO drafts (id, join_code, map_pool, commander_pool,
                     best_of, bans_per_side, step_seconds, strike_seed,
-                    series_id, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET join_code=excluded.join_code""",
+                    series_id, created_at, lobby_id, lobby_host, cancelled_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   join_code=excluded.join_code,
+                   lobby_id=excluded.lobby_id,
+                   lobby_host=excluded.lobby_host,
+                   cancelled_by=excluded.cancelled_by""",
             (session.id, session.join_code,
              json.dumps(session.original_map_pool or d.map_pool),
              json.dumps(d.commander_pool), d.best_of,
              d.commander_bans_per_side, d.step_seconds, d.strike_seed,
-             session.series_id, session.created_at))
+             session.series_id, session.created_at,
+             session.lobby_id, session.lobby_host, session.cancelled_by))
 
         self.db.execute("DELETE FROM draft_seats WHERE draft_id = ?", (session.id,))
         self.db.executemany(
@@ -315,6 +397,8 @@ class Store:
                 "step_seconds": r["step_seconds"],
                 "strike_seed": r["strike_seed"],
                 "series_id": r["series_id"], "created_at": r["created_at"],
+                "lobby_id": r["lobby_id"], "lobby_host": r["lobby_host"],
+                "cancelled_by": r["cancelled_by"],
                 "seats": [dict(s) for s in self.db.execute(
                     "SELECT side, account_id, display FROM draft_seats "
                     "WHERE draft_id = ?", (r["id"],))],

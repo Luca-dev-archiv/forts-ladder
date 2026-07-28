@@ -84,6 +84,28 @@ public sealed class LoginFlow
 
     public Task<MeDto?> MeAsync() => _api.GetAsync<MeDto>("/me");
 
+    /// <summary>
+    /// Report a finished series to the ladder.
+    ///
+    /// This is the step the project was missing: everything could be recorded
+    /// and nothing was ever sent, so the shared ranking stayed the imported
+    /// spreadsheet no matter who won. The server decides whether it counts —
+    /// the lobby has to be one the ladder set up and everyone in it has to have
+    /// agreed to be tracked — and answers with the reasons when it does not.
+    /// </summary>
+    public Task<ReportResultDto?> ReportSeriesAsync(
+            Dictionary<string, int> sides, int games, int scoreLow,
+            DateTime playedAt, ulong? lobbyId, IEnumerable<string> replays) =>
+        _api.PostAsync<ReportResultDto>("/results", new
+        {
+            sides,
+            games,
+            score_low = scoreLow,
+            played_at = playedAt.ToString("yyyy-MM-dd"),
+            lobby_id = lobbyId?.ToString(),
+            replays = replays.ToList(),
+        });
+
     public async Task<bool> GrantConsentAsync() =>
         await _api.PostAsync<MeDto>("/me/consent") is not null;
 

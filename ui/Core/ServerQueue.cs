@@ -16,6 +16,7 @@ public sealed class ServerQueue : IDisposable
 {
     private readonly ApiClient _api;
     private readonly System.Windows.Threading.DispatcherTimer _timer;
+    private readonly System.Windows.Threading.DispatcherTimer _display;
     private bool _busy;
 
     public QueueStatusDto? Status { get; private set; }
@@ -36,6 +37,16 @@ public sealed class ServerQueue : IDisposable
             Interval = TimeSpan.FromSeconds(2),
         };
         _timer.Tick += async (_, _) => await RefreshAsync();
+
+        // A second, local tick that talks to nobody. It only re-renders the
+        // numbers that are counting down, so the seconds move once a second
+        // without asking the server four times as often.
+        _display = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(250),
+        };
+        _display.Tick += (_, _) => { if (Status is not null) Changed?.Invoke(); };
+        _display.Start();
     }
 
     public async Task<bool> JoinAsync(double rating, string mode = "ranked_1v1")
@@ -87,6 +98,12 @@ public sealed class ServerQueue : IDisposable
 
     private void Apply(QueueStatusDto s)
     {
+        // Stamped on arrival. Everything the view counts down is a number the
+        // server sent at a known moment, so the display can keep counting
+        // between polls instead of standing still for two seconds and then
+        // jumping — which is what made the timer look like it was lagging.
+        s.ReceivedAt = DateTime.UtcNow;
+        if (s.Proposal is not null) s.Proposal.ReceivedAt = s.ReceivedAt;
         Status = s;
         LastError = null;
         // Announced once, not on every poll: the draft id keeps being returned
@@ -99,7 +116,11 @@ public sealed class ServerQueue : IDisposable
         }
     }
 
-    public void Dispose() => _timer.Stop();
+    public void Dispose()
+    {
+        _timer.Stop();
+        _display.Stop();
+    }
 }
 
 public sealed class QueueStatusDto
@@ -113,8 +134,25 @@ public sealed class QueueStatusDto
     public string? Draft_Id { get; set; }
     public int Penalised_Until { get; set; }
 
+    /// <summary>When this answer arrived, for counting on between polls.</summary>
+    public DateTime ReceivedAt { get; set; } = DateTime.UtcNow;
+
+    private double Age => Math.Max(0, (DateTime.UtcNow - ReceivedAt).TotalSeconds);
+
+    /// <summary>How long you have waited, counted on locally.</summary>
+    public int WaitedNow => Waited_S + (int)Age;
+
+    /// <summary>
+    /// Cooldown left, counted down locally.
+    ///
+    /// Only ever *less* than what the server said, never more: the local clock
+    /// may run fast, and a countdown that claims more time than exists is the
+    /// one error that costs someone a match.
+    /// </summary>
+    public int PenalisedNow => Math.Max(0, Penalised_Until - (int)Age);
+
     /// <summary>Seconds of cooldown left, or none.</summary>
-    public bool Penalised() => Penalised_Until > 0;
+    public bool Penalised() => PenalisedNow > 0;
 }
 
 public sealed class ProposalDto
@@ -122,4 +160,12 @@ public sealed class ProposalDto
     public bool Accepted_By_You { get; set; }
     public int Accepted_Count { get; set; }
     public int Seconds_Left { get; set; }
+
+    /// <summary>Set from the reply this proposal arrived in.</summary>
+    public DateTime ReceivedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>The accept window, counted down locally and never rounded up.
+    /// This is the one clock in the app with a hard consequence.</summary>
+    public int SecondsLeftNow => Math.Max(0, Seconds_Left -
+        (int)Math.Max(0, (DateTime.UtcNow - ReceivedAt).TotalSeconds));
 }

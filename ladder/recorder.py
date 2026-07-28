@@ -63,7 +63,7 @@ RE_FORT_SELECT = re.compile(
     r"\(Allowed: (\d+), Type: (\d+), IsHost: (\d+)\)")
 RE_COMMANDER = re.compile(r"^\s*Team(\d) commander: (\S+)")
 RE_DEFEAT = re.compile(r"^\s*(\d+):(\d\d) (.+?) has been defeated!")
-RE_REPLAY = re.compile(r"Replay saved as (\S+)")
+RE_REPLAY = re.compile(r"Replay saved as (.+\.fwr)\s*$")
 RE_LOBBY = re.compile(r"Setting lobby (\d+) game server (\d+)")
 RE_VERSION = re.compile(r"Forts (?:version )?v?(\d+\.\d+\.\d+(?:\.\d+)?)")
 
@@ -310,8 +310,15 @@ class Parser:
         cur = self.cur
         assert cur is not None
 
-        if cur.closed and not RE_REPLAY.search(line):
-            # Match is over; the only thing still expected is its replay name.
+        if cur.closed and not (RE_REPLAY.search(line)
+                               or RE_COMMANDER.match(line)
+                               or RE_DEFEAT.match(line)):
+            # The game is over, but the log is not finished talking about it:
+            # the commander and last defeat lines come after `mDone detected`
+            # and before `Replay saved as`. Only *those* are still accepted, so
+            # lobby chatter from the next match cannot attach itself to this
+            # one — and the commanders stop being lost, which they were for
+            # every match ever recorded.
             return
 
         m = RE_MULTISTART.search(line)

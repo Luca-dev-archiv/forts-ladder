@@ -297,6 +297,36 @@ public sealed class DraftStateDto
     public List<string> Options { get; set; } = new();
     public List<PlannedGameDto> Plan { get; set; } = new();
 
+    /// <summary>Set once somebody walked away; the side that did.</summary>
+    public bool Cancelled { get; set; }
+    public string? Cancelled_By { get; set; }
+
+    /// <summary>
+    /// The Steam lobby this series is played in, and which side hosts it.
+    ///
+    /// A string, not a number: a Steam lobby id needs 64 bits and would be
+    /// rounded by anything that parses JSON numbers as doubles. A rounded id
+    /// matches no game.
+    /// </summary>
+    public string? Lobby_Id { get; set; }
+    public string? Lobby_Host { get; set; }
+
+    /// <summary>Is this client the side that hosts the lobby?</summary>
+    public bool YouHostLobby => Lobby_Host is not null && Lobby_Host == Your_Side;
+
+    /// <summary>When this state arrived, so the step clock can keep running
+    /// between polls instead of stepping once a second.</summary>
+    public DateTime ReceivedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// Seconds left on this step, counted down locally from what the server
+    /// said. Clamped at zero and never rounded up: the server decides when a
+    /// step expires, and a bar that showed more time than exists would invite
+    /// someone to take it.
+    /// </summary>
+    public double SecondsLeftNow => Seconds_Left is not { } left ? 0
+        : Math.Max(0, left - Math.Max(0, (DateTime.UtcNow - ReceivedAt).TotalSeconds));
+
     public bool YourTurn =>
         Your_Side is not null &&
         (Waiting_On == Your_Side || Waiting_On == "both");
@@ -360,6 +390,16 @@ public sealed class MeDto
     /// player by rank, so the role alone does not say what they may open.
     /// </summary>
     public List<string> Grants { get; set; } = new();
+}
+
+public sealed class ReportResultDto
+{
+    public string Id { get; set; } = "";
+    /// <summary>Whether it will affect anybody's rating.</summary>
+    public bool Rated { get; set; }
+    /// <summary>Why not, when it will not. Shown verbatim — the two possible
+    /// reasons call for completely different next steps.</summary>
+    public List<string> Reasons { get; set; } = new();
 }
 
 public sealed class PoolStatusDto

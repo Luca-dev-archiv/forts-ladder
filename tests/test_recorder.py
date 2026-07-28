@@ -5,9 +5,11 @@ every recorded match came out with no commanders at all, and every replay
 filename was truncated at its first space. The second one silently caused three
 further failures, which is what makes it worth a test of its own.
 
-The line order below is copied from a real log rather than invented, because
-the order is the bug: the commander lines arrive *after* the game reports
-itself over.
+The line *order* below is taken from a real log, because the order is the bug:
+the commander lines arrive after the game reports itself over. The ids and
+names in it are fabricated — the Steam IDs deliberately contain a run of zeros
+no real account has, which is also how CI tells a fixture from a leak. Never
+paste a real log in here.
 """
 
 import sys

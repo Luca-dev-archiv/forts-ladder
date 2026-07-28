@@ -101,31 +101,52 @@
               <TextBlock x:Name="AccountName" Text="—" FontSize="13" Margin="0,2,0,0"
                          TextTrimming="CharacterEllipsis"/>
               <TextBlock x:Name="AccountId" Text="" Style="{StaticResource Label}"
-                         Margin="0,1,0,0"/>
+                         Margin="0,1,0,0" TextTrimming="CharacterEllipsis"/>
               <TextBlock Text="{core:T sidebar.ufer_name}" Style="{StaticResource Label}" Margin="0,10,0,0"/>
-              <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="UferName" Text="{core:T sidebar.unassigned}" FontSize="13"
-                           Foreground="{StaticResource Warn}" Margin="0,2,0,0"/>
-                <Button x:Name="BtnSetup" Content="{core:T sidebar.change}" Style="{StaticResource Btn}"
+              <!-- DockPanel, not a horizontal StackPanel: a stack gives its
+                   children unlimited width, so a long ladder name pushed the
+                   Change button out of the card entirely. Docked right, the
+                   button keeps its place and the name gets the ellipsis. -->
+              <DockPanel>
+                <Button x:Name="BtnSetup" DockPanel.Dock="Right"
+                        Content="{core:T sidebar.change}" Style="{StaticResource Btn}"
                         Padding="7,2" FontSize="11" Margin="8,1,0,0"
                         Click="BtnSetup_Click"/>
-              </StackPanel>
+                <TextBlock x:Name="UferName" Text="{core:T sidebar.unassigned}" FontSize="13"
+                           Foreground="{StaticResource Warn}" Margin="0,2,0,0"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"/>
+              </DockPanel>
             </StackPanel>
           </Border>
 
           <Border Style="{StaticResource Card}" Margin="0,12,0,0" Padding="14,12">
             <StackPanel>
               <TextBlock Text="{core:T sidebar.recorded}" Style="{StaticResource Label}"/>
-              <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                <TextBlock x:Name="StatSeries" Text="0" FontSize="26"
-                           FontWeight="Bold"/>
-                <TextBlock Text="{core:T sidebar.series}" Foreground="{StaticResource TextMid}"
-                           VerticalAlignment="Bottom" Margin="7,0,0,5" FontSize="12"/>
-                <TextBlock x:Name="StatMatches" Text="0" FontSize="26"
-                           FontWeight="Bold" Margin="18,0,0,0"/>
-                <TextBlock Text="{core:T sidebar.matches}" Foreground="{StaticResource TextMid}"
-                           VerticalAlignment="Bottom" Margin="7,0,0,5" FontSize="12"/>
-              </StackPanel>
+              <!-- Two halves of a fixed 270px sidebar rather than one row of
+                   four items: number and word side by side ran past the card
+                   as soon as the counts reached three digits, and "Matches"
+                   was the part that fell off. -->
+              <Grid Margin="0,4,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                  <TextBlock x:Name="StatSeries" Text="0" FontSize="26"
+                             FontWeight="Bold"/>
+                  <TextBlock Text="{core:T sidebar.series}" FontSize="12"
+                             Foreground="{StaticResource TextMid}"
+                             TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                  <TextBlock x:Name="StatMatches" Text="0" FontSize="26"
+                             FontWeight="Bold"/>
+                  <TextBlock Text="{core:T sidebar.matches}" FontSize="12"
+                             Foreground="{StaticResource TextMid}"
+                             TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+              </Grid>
             </StackPanel>
           </Border>
           <!-- Nav. The active item carries an accent bar on its left edge, set
@@ -233,6 +254,7 @@
 
               <TextBlock x:Name="QueueBigState" HorizontalAlignment="Center"
                          FontSize="26" FontWeight="Bold"
+                         TextAlignment="Center" TextWrapping="Wrap"
                          Text="{core:T queue.idle_title}"/>
               <TextBlock x:Name="QueueSubState" HorizontalAlignment="Center"
                          TextAlignment="Center" TextWrapping="Wrap"
@@ -318,7 +340,12 @@
                    without being told what is missing is a dead end. -->
               <Border Background="{StaticResource BgPanel}" Padding="20,12">
                 <DockPanel>
-                  <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                  <!-- WrapPanel, because how many of these show depends on the
+                       account: Steam, consent, pools, manage and the account
+                       page at once are wider than the row, and German labels
+                       are the longest. They wrap now instead of running out. -->
+                  <WrapPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                             HorizontalAlignment="Right" MaxWidth="620">
                     <Button x:Name="BtnLinkSteam" Content="{core:T queue.link_steam}"
                             Style="{StaticResource Btn}" Padding="12,6"
                             FontSize="12" Visibility="Collapsed"
@@ -339,7 +366,7 @@
                             Style="{StaticResource Btn}" Padding="12,6"
                             FontSize="12" Margin="6,0,0,0"
                             Click="BtnWebsite_Click"/>
-                  </StackPanel>
+                  </WrapPanel>
                   <TextBlock x:Name="AccountLine" VerticalAlignment="Center"
                              FontSize="12" Foreground="{StaticResource TextMid}"
                              TextTrimming="CharacterEllipsis"/>
@@ -479,8 +506,13 @@
                   <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="0" Orientation="Horizontal">
-                  <Border x:Name="YouBadge" Width="30" Height="30"
+                <!-- DockPanels on both sides. A horizontal StackPanel measures
+                     its children with unlimited width, so a long player name
+                     grew past the column and drew over the turn banner in the
+                     middle. Docked, the name is bounded and ellipsised. -->
+                <DockPanel Grid.Column="0">
+                  <Border x:Name="YouBadge" DockPanel.Dock="Left"
+                          Width="30" Height="30"
                           CornerRadius="15" Background="{StaticResource Accent}">
                     <TextBlock x:Name="YouSide" Foreground="White"
                                FontWeight="Bold" FontSize="14"
@@ -489,16 +521,23 @@
                   </Border>
                   <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
                     <TextBlock x:Name="YouName" FontSize="14"
-                               FontWeight="SemiBold"/>
+                               FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis"/>
                     <TextBlock x:Name="YouStatus" Style="{StaticResource Label}"
-                               Margin="0,1,0,0"/>
+                               Margin="0,1,0,0"
+                               TextTrimming="CharacterEllipsis"/>
                   </StackPanel>
-                </StackPanel>
+                </DockPanel>
 
-                <StackPanel Grid.Column="1" Margin="20,0">
+                <!-- MaxWidth so a long sentence wraps instead of widening the
+                     Auto column and squeezing both names out. -->
+                <StackPanel Grid.Column="1" Margin="20,0" MaxWidth="260">
                   <TextBlock x:Name="TurnBanner" FontSize="15"
-                             FontWeight="Bold" HorizontalAlignment="Center"/>
+                             FontWeight="Bold" TextAlignment="Center"
+                             TextWrapping="Wrap"
+                             HorizontalAlignment="Center"/>
                   <TextBlock x:Name="TurnSub" Style="{StaticResource Label}"
+                             TextAlignment="Center" TextWrapping="Wrap"
                              HorizontalAlignment="Center" Margin="0,2,0,6"/>
                   <!-- Countdown. The bar is driven from the server's value, so
                        it cannot be stalled by pausing this process. -->
@@ -510,15 +549,9 @@
                   </Border>
                 </StackPanel>
 
-                <StackPanel Grid.Column="2" Orientation="Horizontal"
-                            HorizontalAlignment="Right">
-                  <StackPanel Margin="0,0,10,0" VerticalAlignment="Center">
-                    <TextBlock x:Name="OppName" FontSize="14"
-                               FontWeight="SemiBold" HorizontalAlignment="Right"/>
-                    <TextBlock x:Name="OppStatus" Style="{StaticResource Label}"
-                               HorizontalAlignment="Right" Margin="0,1,0,0"/>
-                  </StackPanel>
-                  <Border Width="30" Height="30" CornerRadius="15"
+                <DockPanel Grid.Column="2">
+                  <Border DockPanel.Dock="Right" Width="30" Height="30"
+                          CornerRadius="15"
                           Background="{StaticResource BgHover}">
                     <TextBlock x:Name="OppSide"
                                Foreground="{StaticResource TextHi}"
@@ -526,7 +559,15 @@
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"/>
                   </Border>
-                </StackPanel>
+                  <StackPanel Margin="0,0,10,0" VerticalAlignment="Center">
+                    <TextBlock x:Name="OppName" FontSize="14"
+                               FontWeight="SemiBold" TextAlignment="Right"
+                               TextTrimming="CharacterEllipsis"/>
+                    <TextBlock x:Name="OppStatus" Style="{StaticResource Label}"
+                               TextAlignment="Right" Margin="0,1,0,0"
+                               TextTrimming="CharacterEllipsis"/>
+                  </StackPanel>
+                </DockPanel>
               </Grid>
             </Border>
 
@@ -645,7 +686,8 @@
                         <TextBlock DockPanel.Dock="Right" Text="{Binding Tag}"
                                    Style="{StaticResource Label}"/>
                         <TextBlock Text="{Binding Title}" FontSize="13"
-                                   FontWeight="SemiBold"/>
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"/>
                       </DockPanel>
                       <TextBlock Text="{Binding Commanders}" FontSize="12"
                                  Foreground="{StaticResource TextMid}"
@@ -686,12 +728,15 @@
                         </StackPanel>
                         <StackPanel>
                           <TextBlock Text="{Binding Title}" FontSize="15"
-                                     FontWeight="SemiBold"/>
+                                     FontWeight="SemiBold"
+                                     TextTrimming="CharacterEllipsis"/>
                           <TextBlock Text="{Binding Sub}" Style="{StaticResource Label}"
-                                     Margin="0,4,0,0"/>
+                                     Margin="0,4,0,0"
+                                     TextTrimming="CharacterEllipsis"/>
                           <TextBlock Text="{Binding Extra}" FontSize="12"
                                      Foreground="{StaticResource Accent}"
-                                     Margin="0,3,0,0"/>
+                                     Margin="0,3,0,0"
+                                     TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                       </DockPanel>
                     </Border>
@@ -750,9 +795,11 @@
               <ListBox.ItemTemplate>
                 <DataTemplate>
                   <StackPanel>
-                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"/>
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"
+                               TextTrimming="CharacterEllipsis"/>
                     <TextBlock Text="{Binding Sub}" Style="{StaticResource Label}"
-                               Margin="0,3,0,0"/>
+                               Margin="0,3,0,0"
+                               TextTrimming="CharacterEllipsis"/>
                   </StackPanel>
                 </DataTemplate>
               </ListBox.ItemTemplate>
@@ -768,7 +815,8 @@
               <TextBlock x:Name="TourPlaceholder" Text="{core:T tour.select}"
                          FontSize="13" Foreground="{StaticResource TextMid}"/>
               <TextBlock x:Name="TourChampion" FontSize="16" FontWeight="Bold"
-                         Foreground="{StaticResource Win}" Margin="0,0,0,12"/>
+                         Foreground="{StaticResource Win}" Margin="0,0,0,12"
+                         TextWrapping="Wrap"/>
               <ItemsControl x:Name="BracketList">
                 <ItemsControl.ItemsPanel>
                   <ItemsPanelTemplate>
@@ -880,7 +928,8 @@
                          Foreground="{StaticResource TextMid}"/>
 
               <StackPanel x:Name="DetailContent" Visibility="Collapsed">
-                <TextBlock x:Name="DetailTitle" FontSize="18" FontWeight="Bold"/>
+                <TextBlock x:Name="DetailTitle" FontSize="18" FontWeight="Bold"
+                                TextWrapping="Wrap"/>
                 <TextBlock x:Name="DetailWhen" Style="{StaticResource Label}"
                            Margin="0,3,0,0"/>
 
@@ -901,9 +950,11 @@
                                      FontSize="12" Margin="0,0,14,0"
                                      VerticalAlignment="Center"/>
                           <StackPanel>
-                            <TextBlock Text="{Binding Map}" FontSize="13"/>
+                            <TextBlock Text="{Binding Map}" FontSize="13"
+                                       TextTrimming="CharacterEllipsis"/>
                             <TextBlock Text="{Binding Commanders}"
-                                       Style="{StaticResource Label}"/>
+                                       Style="{StaticResource Label}"
+                                       TextTrimming="CharacterEllipsis"/>
                           </StackPanel>
                         </DockPanel>
                       </Border>
@@ -964,7 +1015,8 @@
                          TextChanged="TableSearch_TextChanged"/>
               </Border>
               <TextBlock x:Name="MeLine" Foreground="{StaticResource TextMid}"
-                         FontSize="12" VerticalAlignment="Center"/>
+                         FontSize="12" VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"/>
             </DockPanel>
           </Border>
 
@@ -1033,7 +1085,8 @@
                   <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13"
                              TextTrimming="CharacterEllipsis"/>
                   <TextBlock Grid.Column="2" Text="{Binding TitleText}"
-                             Foreground="{StaticResource TextMid}" FontSize="12"/>
+                             Foreground="{StaticResource TextMid}" FontSize="12"
+                             TextTrimming="CharacterEllipsis"/>
                   <TextBlock Grid.Column="3" Text="{Binding UferText}" FontSize="13"
                              FontWeight="SemiBold" HorizontalAlignment="Right"/>
                   <TextBlock Grid.Column="4" Text="{Binding OpenText}" FontSize="13"

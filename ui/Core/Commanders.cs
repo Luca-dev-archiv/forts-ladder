@@ -25,6 +25,36 @@ public static class CommanderNames
     private static readonly Regex ReName =
         new(@"Name\s*=\s*L""([^""]+)""", RegexOptions.Compiled);
 
+    /// <summary>
+    /// The order the game lists the commander sets in, by their id prefix.
+    ///
+    /// Sorting the ids alphabetically is not it: that puts Fulminator
+    /// ("commander-fb-…") thirteenth of sixteen, in the middle of the grid,
+    /// while the game has it last. Anything whose prefix is not named here goes
+    /// after these — which is what a future DLC should do, and exactly what
+    /// Fulminator itself did when it arrived.
+    /// </summary>
+    private static readonly string[] SetOrder =
+        { "bpo", "cf", "da", "ee", "iba", "fb" };
+
+    private static int SetRank(string id)
+    {
+        var parts = id.Split('-');
+        if (parts.Length < 3) return SetOrder.Length;
+        var i = Array.IndexOf(SetOrder, parts[1]);
+        return i < 0 ? SetOrder.Length : i;
+    }
+
+    /// <summary>
+    /// Put commander ids in the order a player expects to see them.
+    ///
+    /// Applied where they are published *and* where they are drawn, so a pool
+    /// published by an older client still renders in the right order without
+    /// anybody having to publish it again.
+    /// </summary>
+    public static List<string> InGameOrder(IEnumerable<string> ids) =>
+        ids.OrderBy(SetRank).ThenBy(x => x, StringComparer.Ordinal).ToList();
+
     /// <summary>Every commander this installation knows, loose or packed.</summary>
     public static List<string> Installed()
     {
@@ -55,7 +85,7 @@ public static class CommanderNames
                     ids.Add(name);
             }
 
-        return _installed = ids.ToList();
+        return _installed = InGameOrder(ids);
     }
 
     /// <summary>Display names, per language, for whatever has a strings file.</summary>

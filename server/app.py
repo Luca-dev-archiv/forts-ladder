@@ -61,6 +61,9 @@ app = FastAPI(title="Forts Ladder", version="0.1.0",
 # every running tournament.
 store = Store(os.environ.get("LADDER_DB", "data/ladder.sqlite"))
 auth = store.restore_auth(AuthService())
+# Promote the configured operator before anything else can need the permission.
+if (_owner := auth.apply_owner_bootstrap()) is not None:
+    store.save_account(_owner)
 live = LiveService()
 drafts = DraftService()
 # Restored at startup: a draft that only survived while the process did would
@@ -711,6 +714,19 @@ def queue_decline(ladder_session: str | None = Cookie(None),
 class PoolConfig(BaseModel):
     map_pool: list[str]
     commander_pool: list[str]
+
+
+@app.get("/queue/pools")
+def queue_pools():
+    """Whether the queue is usable at all, and how large the pools are.
+
+    Public because "the ladder is not set up yet" is not a secret, and a client
+    that cannot tell the difference between that and its own fault shows the
+    wrong error.
+    """
+    return {"configured": bool(queue.map_pool and queue.commander_pool),
+            "maps": len(queue.map_pool),
+            "commanders": len(queue.commander_pool)}
 
 
 @app.put("/admin/pools")

@@ -109,6 +109,33 @@ public partial class MainWindow
             ? Visibility.Visible : Visibility.Collapsed;
         BtnConsent.Visibility = me.Tracking_Consent
             ? Visibility.Collapsed : Visibility.Visible;
+
+        // Only an admin sees this, and only while the server still has no pool.
+        // Once it is set, the button would just be a way to overwrite it by
+        // accident.
+        var admin = me.Role is "Admin" or "Owner";
+        var pools = await _login.PoolsAsync();
+        BtnPublishPools.Visibility = admin && pools?.Configured == false
+            ? Visibility.Visible : Visibility.Collapsed;
+        if (pools?.Configured == false && !admin)
+            QueueError.Text = Loc.T("queue.no_pools_yet");
+    }
+
+    private async void BtnPublishPools_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await EnsureReadyAsync()) return;
+        var maps = LeagueMapPool();
+        var commanders = CommanderNames.Installed();
+        if (maps.Count < 5 || commanders.Count < 4)
+        {
+            QueueError.Text = Loc.T("draft.too_little", maps.Count, commanders.Count);
+            return;
+        }
+        QueueError.Text = await _login.PublishPoolsAsync(maps, commanders)
+            ? Loc.T("queue.pools_published", maps.Count, commanders.Count)
+            : _api.LastError ?? "?";
+        await RefreshAccountAsync();
+        await LoadModesAsync();
     }
 
     private async void BtnLinkSteam_Click(object sender, RoutedEventArgs e)

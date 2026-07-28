@@ -143,6 +143,51 @@ def test_publishing_a_live_match_needs_consent():
         raise AssertionError("a non-consenting host published a live match")
 
 
+# ------------------------------------------------------------- Bootstrapping
+def test_without_a_configured_owner_nobody_can_become_one():
+    """The hole this closes: OWNER can only be granted by an OWNER and every
+    account starts as PLAYER, so a fresh server had no first admin at all and
+    could never be set up."""
+    auth = AuthService()
+    a = auth.login_discord("1", "First")
+    b = auth.login_discord("2", "Second")
+    assert a.role is Role.PLAYER
+    assert auth.apply_owner_bootstrap() is None
+    try:
+        auth.grant_role(a, b, Role.OWNER)
+    except AuthError:
+        pass
+    else:
+        raise AssertionError("a player handed out OWNER")
+
+
+def test_the_configured_operator_becomes_owner():
+    """Named in the environment rather than "first login wins": on a public
+    endpoint that would hand the server to whichever stranger arrives first."""
+    import server.auth as mod
+    # The module constant is patched directly rather than reloading the module:
+    # a reload builds new class objects, so `Role` imported at the top of this
+    # file would stop matching and every later test would compare against stale
+    # classes. That cost one failure before it was noticed.
+    saved = mod.OWNER_DISCORD_ID
+    mod.OWNER_DISCORD_ID = "12345"
+    try:
+        auth = AuthService()
+        me = auth.login_discord("12345", "Operator")
+        assert me.role is Role.OWNER
+        # And nobody else.
+        assert auth.login_discord("999", "Stranger").role is Role.PLAYER
+
+        # An account that already existed is promoted too, so the operator does
+        # not have to sign in again after configuring the id.
+        later = AuthService()
+        existing = later.login_discord("12345", "Operator")
+        existing.role = Role.PLAYER
+        assert later.apply_owner_bootstrap().role is Role.OWNER
+    finally:
+        mod.OWNER_DISCORD_ID = saved
+
+
 # ------------------------------------------------------------- Verification
 def test_a_steam_identity_from_another_host_is_rejected_before_any_call():
     """The parameters arrive in the user's own query string, so they can be

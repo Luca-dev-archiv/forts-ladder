@@ -137,4 +137,22 @@ public sealed class LoginFlow
     }
 
     public Task<QueueModesDto?> ModesAsync() => _api.GetAsync<QueueModesDto>("/queue/modes");
+
+    public Task<PoolStatusDto?> PoolsAsync() => _api.GetAsync<PoolStatusDto>("/queue/pools");
+
+    /// <summary>
+    /// Send this machine's map and commander pools to the server. Admin only.
+    ///
+    /// The server cannot read them itself — it has no Forts installation — and
+    /// they must not come from whoever is queueing, or one side could choose the
+    /// map list before the veto starts. So an admin publishes them once from a
+    /// client that has the game, and that is what everyone then drafts from.
+    /// </summary>
+    public async Task<bool> PublishPoolsAsync(IEnumerable<string> maps,
+                                              IEnumerable<string> commanders)
+    {
+        var body = new { map_pool = maps.ToList(), commander_pool = commanders.ToList() };
+        return await _api.PutAsync<Dictionary<string, int>>("/admin/pools", body)
+               is not null;
+    }
 }

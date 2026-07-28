@@ -295,7 +295,7 @@ def test_queueing_without_configured_pools_is_refused():
     try:
         q.join(a, 1500)
     except AuthError as e:
-        assert "pools" in str(e), str(e)
+        assert "no map or commander pool" in str(e), str(e)
     else:
         raise AssertionError("queued with no pools configured")
 

@@ -178,6 +178,33 @@ public sealed class ApiClient
         }
     }
 
+    public Task<T?> PutAsync<T>(string path, object? body = null) =>
+        SendAsync<T>(HttpMethod.Put, path, body);
+
+    private async Task<T?> SendAsync<T>(HttpMethod method, string path,
+                                        object? body)
+    {
+        LastError = null;
+        if (!Configured) return default;
+        try
+        {
+            using var r = await _http.SendAsync(Request(method, path, body));
+            var text = await r.Content.ReadAsStringAsync();
+            if (!r.IsSuccessStatusCode)
+            {
+                LastError = Describe(r.StatusCode, text);
+                return default;
+            }
+            return JsonSerializer.Deserialize<T>(text, Json);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
+                                      or JsonException)
+        {
+            LastError = ex.Message;
+            return default;
+        }
+    }
+
     public async Task<bool> DeleteAsync(string path)
     {
         LastError = null;
@@ -327,6 +354,13 @@ public sealed class MeDto
     public string? Role { get; set; }
     public bool Verified { get; set; }
     public bool Tracking_Consent { get; set; }
+}
+
+public sealed class PoolStatusDto
+{
+    public bool Configured { get; set; }
+    public int Maps { get; set; }
+    public int Commanders { get; set; }
 }
 
 public sealed class SteamTicketDto

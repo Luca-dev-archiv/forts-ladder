@@ -39,6 +39,15 @@ OAUTH_STATE_TTL_S = 600
 #: anything short has to be short-lived.
 PAIRING_TTL_S = 300
 
+#: Discord id of the operator, promoted to OWNER on sight.
+#:
+#: Without this a fresh server is unusable: OWNER can only be granted by an
+#: OWNER and every new account starts as PLAYER, so nobody could ever become
+#: the first one. Naming the id in the environment means only whoever controls
+#: the machine decides — unlike "the first account to log in wins", which on a
+#: public endpoint hands the server to whichever stranger arrives first.
+OWNER_DISCORD_ID = os.environ.get("LADDER_OWNER_DISCORD_ID", "").strip()
+
 #: Sent on every outbound API call. Discord's edge answers 403 to urllib's
 #: default agent, and Steam is friendlier about it but expects one too.
 USER_AGENT = ("FortsLadder/0.1 "
@@ -257,6 +266,8 @@ class AuthService:
         else:
             # Discord names change, the ID does not.
             acc.discord_name = discord_name
+        if OWNER_DISCORD_ID and acc.discord_id == OWNER_DISCORD_ID:
+            acc.role = Role.OWNER
         return acc
 
     def attach_steam(self, account: Account, steam_id: str) -> None:
@@ -409,6 +420,21 @@ class AuthService:
         if account is None:
             raise AuthError("the account behind this ticket is gone")
         return account
+
+    def apply_owner_bootstrap(self) -> Account | None:
+        """Promote the configured operator. Idempotent, safe to call at startup.
+
+        Runs over accounts that already exist as well, so the operator does not
+        have to sign in again after the id is configured.
+        """
+        if not OWNER_DISCORD_ID:
+            return None
+        for a in self.accounts.values():
+            if a.discord_id == OWNER_DISCORD_ID:
+                if a.role is not Role.OWNER:
+                    a.role = Role.OWNER
+                return a
+        return None
 
     def account_for(self, token: str | None) -> Account | None:
         """Account for a session token, or None when not logged in.

@@ -96,7 +96,10 @@ class QueueService:
         account.require("join_queue")
         self.auth.require_trackable(account)
         if not self.map_pool or not self.commander_pool:
-            raise AuthError("the operator has not configured the pools yet")
+            raise AuthError(
+                "this server has no map or commander pool yet, so there is "
+                "nothing to draft. An admin sets it from a client that has "
+                "Forts installed — the server cannot read the game files.")
         q = self._queue(mode_key)
         # One queue at a time. Standing in two and being offered both at once
         # means one offer lapses and earns a penalty for nothing.

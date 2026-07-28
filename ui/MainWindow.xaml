@@ -327,6 +327,10 @@
                             Style="{StaticResource Btn}" Padding="12,6"
                             FontSize="12" Margin="6,0,0,0" Visibility="Collapsed"
                             Click="BtnConsent_Click"/>
+                    <Button x:Name="BtnPublishPools" Content="{core:T queue.publish_pools}"
+                            Style="{StaticResource Btn}" Padding="12,6"
+                            FontSize="12" Margin="6,0,0,0" Visibility="Collapsed"
+                            Click="BtnPublishPools_Click"/>
                     <Button x:Name="BtnWebsite" Content="{core:T queue.open_site}"
                             Style="{StaticResource Btn}" Padding="12,6"
                             FontSize="12" Margin="6,0,0,0"

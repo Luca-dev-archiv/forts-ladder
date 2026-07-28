@@ -22,6 +22,7 @@ only required to appear on the ladder, queue, or run a tournament.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -33,6 +34,10 @@ SESSION_TTL_S = 7 * 24 * 3600
 #: The redirect state must expire, or an intercepted link can be replayed
 #: later.
 OAUTH_STATE_TTL_S = 600
+
+#: A pairing code is read off a screen and typed by hand, so it is short — and
+#: anything short has to be short-lived.
+PAIRING_TTL_S = 300
 
 
 class Role(IntEnum):
@@ -71,9 +76,9 @@ class Grant(str, Enum):
     @property
     def label(self) -> str:
         return {
-            Grant.TOURNAMENT_HOST: "Turnierleiter",
-            Grant.REFEREE: "Schiedsrichter",
-            Grant.CASTER: "Kommentator",
+            Grant.TOURNAMENT_HOST: "Tournament Host",
+            Grant.REFEREE: "Referee",
+            Grant.CASTER: "Caster",
             Grant.MAP_MAKER: "Map Creator",
             Grant.MOD_MAKER: "Mod Maker",
             Grant.CONTENT_CREATOR: "Content Creator",
@@ -202,8 +207,11 @@ class AuthService:
         self.accounts: dict[str, Account] = {}
         self.sessions: dict[str, Session] = {}
         self.pending: dict[str, PendingLogin] = {}
+        #: code -> (account id, expiry). Not persisted: a pairing code that
+        #: survived a restart would outlive the screen it was shown on.
+        self._pairings: dict[str, tuple[str, float]] = {}
 
-    # ------------------------------------------------------- Anmeldevorgang
+    # ---------------------------------------------------------- Login flow
     def begin_login(self, provider: str, return_to: str = "/") -> PendingLogin:
         """Step 1: create the state the provider hands back.
 
@@ -337,6 +345,35 @@ class AuthService:
         self.sessions[s.token] = s
         return s
 
+    # ------------------------------------------------------- Pairing a client
+    def begin_pairing(self, account: Account) -> str:
+        """A short code the desktop client can trade for a session.
+
+        Needed because the login happens in a browser and the cookie stays
+        there — the client is a separate process with its own cookie jar and
+        can never see it. Embedding a browser instead would mean shipping one
+        and asking people to type their Discord password into our window,
+        which is worse in every way.
+
+        Short, single-use, and short-lived: it is read off a screen and typed,
+        so it has to be small, and anything small has to expire.
+        """
+        code = "-".join(secrets.token_hex(2).upper() for _ in range(2))
+        self._pairings[code] = (account.id, self._now() + PAIRING_TTL_S)
+        return code
+
+    def claim_pairing(self, code: str) -> Session:
+        entry = self._pairings.pop(code.strip().upper(), None)
+        if entry is None:
+            raise AuthError("unknown or already used pairing code")
+        account_id, expires = entry
+        if self._now() > expires:
+            raise AuthError("this pairing code has expired")
+        account = self.accounts.get(account_id)
+        if account is None:
+            raise AuthError("the account behind this code is gone")
+        return self.start_session(account)
+
     def account_for(self, token: str | None) -> Account | None:
         """Account for a session token, or None when not logged in.
 
@@ -373,6 +410,118 @@ def discord_authorize_url(state: str, redirect_uri: str) -> str:
         "scope": "identify",
         "state": state,
     })
+
+
+def exchange_discord_code(code: str, redirect_uri: str) -> dict:
+    """Turn an authorization code into the user's Discord id and name.
+
+    Two calls, both mandatory. The code proves nothing on its own: it is
+    handed to us by the browser, so anyone can send one. Only the exchange —
+    which requires the client secret we alone hold — establishes that Discord
+    issued it to *our* application, and only the `/users/@me` call establishes
+    who it belongs to.
+    """
+    client_id = os.environ.get("DISCORD_CLIENT_ID")
+    client_secret = os.environ.get("DISCORD_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise AuthError(
+            "DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET must be set — "
+            "without the secret the code cannot be verified, and an "
+            "unverified login is worse than none")
+
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    def _post_form(url: str, form: dict) -> dict:
+        req = urllib.request.Request(
+            url, data=urllib.parse.urlencode(form).encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read().decode())
+
+    try:
+        token = _post_form("https://discord.com/api/oauth2/token", {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+        })
+    except urllib.error.HTTPError as e:
+        # The usual cause is a redirect_uri that differs by one character from
+        # the one registered in the Discord application, so say so.
+        raise AuthError(
+            f"Discord rejected the code ({e.code}). The redirect URI must "
+            f"match the application exactly: {redirect_uri}") from e
+    except (urllib.error.URLError, OSError) as e:
+        raise AuthError(f"could not reach Discord: {e}") from e
+
+    access = token.get("access_token")
+    if not access:
+        raise AuthError("Discord returned no access token")
+
+    req = urllib.request.Request(
+        "https://discord.com/api/users/@me",
+        headers={"Authorization": f"Bearer {access}"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            me = json.loads(r.read().decode())
+    except (urllib.error.URLError, OSError) as e:
+        raise AuthError(f"could not read the Discord profile: {e}") from e
+
+    if not me.get("id"):
+        raise AuthError("Discord profile has no id")
+    # `username` is the handle; `global_name` is the display name people
+    # actually go by, which is what the ranking lists.
+    return {"id": str(me["id"]),
+            "name": me.get("global_name") or me.get("username") or "?"}
+
+
+#: Steam hands the claimed identity back as a URL ending in the SteamID64.
+_STEAM_ID_RE = re.compile(r"^https?://steamcommunity\.com/openid/id/(\d{17})$")
+
+
+def verify_steam_openid(params: dict[str, str]) -> str:
+    """Verify a Steam OpenID response and return the SteamID64.
+
+    The whole security of this rests on one thing: the parameters arrive in
+    the *user's* query string, so they can be edited freely. Reading
+    `openid.claimed_id` and trusting it would let anyone claim any Steam
+    account. Steam has to be asked whether it really signed this response,
+    which is what `check_authentication` does — the signature cannot be forged
+    without Steam's key.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    claimed = params.get("openid.claimed_id", "")
+    m = _STEAM_ID_RE.match(claimed)
+    if not m:
+        raise AuthError(f"not a Steam identity: {claimed!r}")
+
+    # Echo every openid.* parameter back unchanged; the signature covers them.
+    form = {k: v for k, v in params.items() if k.startswith("openid.")}
+    form["openid.mode"] = "check_authentication"
+    try:
+        req = urllib.request.Request(
+            "https://steamcommunity.com/openid/login",
+            data=urllib.parse.urlencode(form).encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            body = r.read().decode()
+    except (urllib.error.URLError, OSError) as e:
+        raise AuthError(f"could not reach Steam: {e}") from e
+
+    # Steam answers a tiny key:value document. Anything other than an explicit
+    # `is_valid:true` is a rejection — including a missing line.
+    valid = any(line.strip() == "is_valid:true" for line in body.splitlines())
+    if not valid:
+        raise AuthError("Steam did not confirm this login")
+    return m.group(1)
 
 
 def steam_openid_url(return_to: str, realm: str) -> str:

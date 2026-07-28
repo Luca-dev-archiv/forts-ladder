@@ -48,7 +48,7 @@ def test_the_refusal_names_both_ways_in():
     try:
         a.require("create_tournament")
     except AuthError as e:
-        assert "Admin" in str(e) and "Turnierleiter" in str(e), str(e)
+        assert "Admin" in str(e) and "Tournament Host" in str(e), str(e)
     else:
         raise AssertionError("the refusal never came")
 

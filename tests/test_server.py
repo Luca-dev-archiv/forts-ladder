@@ -143,6 +143,41 @@ def test_publishing_a_live_match_needs_consent():
         raise AssertionError("a non-consenting host published a live match")
 
 
+# ------------------------------------------------------------- Verification
+def test_a_steam_identity_from_another_host_is_rejected_before_any_call():
+    """The parameters arrive in the user's own query string, so they can be
+    edited. Trusting `claimed_id` would let anyone claim any account."""
+    from server.auth import verify_steam_openid
+    for forged in ("https://evil.example/openid/id/76561190000000001",
+                   "https://steamcommunity.com/openid/id/12",
+                   "76561190000000001", ""):
+        try:
+            verify_steam_openid({"openid.claimed_id": forged})
+        except AuthError as e:
+            assert "not a Steam identity" in str(e), str(e)
+        else:
+            raise AssertionError(f"{forged!r} was accepted as an identity")
+
+
+def test_discord_exchange_refuses_without_a_secret():
+    """Without the secret the code cannot be verified, and a login that is not
+    verified is worse than none because it looks like proof."""
+    import os
+    from server.auth import exchange_discord_code
+    saved = {k: os.environ.pop(k, None)
+             for k in ("DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET")}
+    try:
+        exchange_discord_code("some-code", "https://example.com/cb")
+    except AuthError as e:
+        assert "DISCORD_CLIENT_SECRET" in str(e), str(e)
+    else:
+        raise AssertionError("the exchange proceeded without a secret")
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+
+
 # ----------------------------------------------------------------- Identity
 def test_a_matching_discord_name_proves_the_ufer_claim():
     """The core: the ranking lists Discord names, so the login itself

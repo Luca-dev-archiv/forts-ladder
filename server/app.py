@@ -29,12 +29,13 @@ import os
 import secrets
 
 from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from ladder.modes import BY_KEY
 from ladder.tournament import Participant, Tournament
 
+from . import page
 from .auth import (
     AuthError, AuthService, Grant, Role, discord_authorize_url,
     exchange_discord_code, steam_openid_url, verify_steam_openid,
@@ -673,6 +674,68 @@ def set_pools(body: PoolConfig, ladder_session: str | None = Cookie(None),
     guard(acc.require, "create_tournament")
     queue.configure(body.map_pool, body.commander_pool)
     return {"maps": len(body.map_pool), "commanders": len(body.commander_pool)}
+
+
+# ----------------------------------------------------------------- The page
+#
+# One page, for one purpose: the login has to land somewhere, and connecting a
+# client needs a code that only a signed-in session can be given. Everything
+# else a person looks at is in the client.
+@app.get("/", response_class=HTMLResponse)
+def index(ladder_session: str | None = Cookie(None),
+          authorization: str | None = Header(None)):
+    acc = current(session_token(ladder_session, authorization))
+    if acc is None:
+        return page.signed_out("/auth/discord/start")
+    return page.signed_in(
+        discord=acc.discord_name, ufer_name=acc.ufer_name,
+        steam_id=acc.steam_id, consent=acc.tracking_consent,
+        role=acc.role.label, steam_url="/auth/steam/start", code=None)
+
+
+@app.post("/auth/pair/page", response_class=HTMLResponse)
+def pair_from_page(ladder_session: str | None = Cookie(None),
+                   authorization: str | None = Header(None)):
+    """Same as POST /auth/pair, but answers with the page showing the code.
+
+    A browser cannot issue the JSON call, and telling someone to run curl after
+    they have just logged in is not an instruction, it is an obstacle.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    code = auth.begin_pairing(acc)
+    return page.signed_in(
+        discord=acc.discord_name, ufer_name=acc.ufer_name,
+        steam_id=acc.steam_id, consent=acc.tracking_consent,
+        role=acc.role.label, steam_url="/auth/steam/start", code=code)
+
+
+@app.post("/me/consent/on")
+def consent_on_page(ladder_session: str | None = Cookie(None),
+                    authorization: str | None = Header(None)):
+    acc = require(session_token(ladder_session, authorization))
+    guard(auth.set_tracking_consent, acc, True)
+    store.save_account(acc)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/me/consent/off")
+def consent_off_page(ladder_session: str | None = Cookie(None),
+                     authorization: str | None = Header(None)):
+    acc = require(session_token(ladder_session, authorization))
+    guard(auth.set_tracking_consent, acc, False)
+    store.save_account(acc)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/auth/logout/page")
+def logout_page(ladder_session: str | None = Cookie(None),
+                authorization: str | None = Header(None)):
+    token = session_token(ladder_session, authorization)
+    if token:
+        auth.logout(token)
+    r = RedirectResponse("/", status_code=303)
+    r.delete_cookie(SESSION_COOKIE)
+    return r
 
 
 @app.get("/health")

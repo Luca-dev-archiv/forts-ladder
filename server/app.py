@@ -44,7 +44,16 @@ from .live import LiveService
 from .queue import QueueService
 from .store import Store
 
-app = FastAPI(title="Forts Ladder", version="0.1.0")
+#: The interactive docs are useful while developing and an unnecessary
+#: invitation once the API is on the internet: every route is guarded, but
+#: publishing the full list — including the admin ones — hands anyone the map
+#: for free. Off unless asked for: LADDER_DOCS=1.
+_DOCS = os.environ.get("LADDER_DOCS") == "1"
+
+app = FastAPI(title="Forts Ladder", version="0.1.0",
+              docs_url="/docs" if _DOCS else None,
+              redoc_url="/redoc" if _DOCS else None,
+              openapi_url="/openapi.json" if _DOCS else None)
 
 # Load persisted state at startup, or a restart logs everyone out and loses
 # every running tournament.

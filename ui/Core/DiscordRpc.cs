@@ -20,11 +20,16 @@ namespace FortsLadder.Core;
 /// inside a downloadable .exe is not a secret, it is a published credential.
 /// So this class returns the code and the server does the rest.
 ///
-/// This is the preferred path, not the only one. Discord may not be running,
-/// may be a Store/sandboxed build whose pipe is not reachable, or may refuse
-/// `AUTHORIZE` if the application has not been granted RPC access. Every one
-/// of those falls back to the browser flow, so the fallback is a requirement
-/// rather than a nicety.
+/// This is the preferred path, not the only one, and the reason matters:
+/// Discord's own documentation states it "currently do[es] not allow access to
+/// RPC for unapproved apps without being on the game's list of testers". So an
+/// unapproved application works only for accounts added as testers — everyone
+/// else gets no prompt at all. Discord may also not be running, or be a
+/// sandboxed build whose pipe is unreachable. All of those fall back to the
+/// browser flow, which makes the fallback a requirement rather than a nicety.
+///
+/// Only `identify` is requested. The `rpc` scope itself needs approval, and
+/// nothing here needs it.
 /// </summary>
 public static class DiscordRpc
 {
@@ -76,9 +81,10 @@ public static class DiscordRpc
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 return new AuthResult(null,
-                    "Discord accepted the connection but did not answer. That "
-                    + "usually means this application is not allowed to use "
-                    + "Discord's local interface.");
+                    "Discord accepted the connection but did not answer. An "
+                    + "unapproved application may only use the local interface "
+                    + "for accounts on its tester list — add yourself there in "
+                    + "the Discord developer portal.");
             }
             if (op == Op.Close)
                 return new AuthResult(null, Reason(payload, "Discord closed the connection"));
@@ -107,9 +113,10 @@ public static class DiscordRpc
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
                     return new AuthResult(null,
-                        "Discord never showed the permission prompt. If no "
-                        + "window appeared, this application is probably not "
-                        + "approved for Discord's local interface.");
+                        "Discord never showed the permission prompt. An "
+                        + "unapproved application may only use the local "
+                        + "interface for accounts on its tester list — add "
+                        + "yourself there in the Discord developer portal.");
                 }
                 var (rop, body) = frame;
                 if (rop == Op.Close)

@@ -55,8 +55,12 @@ the live list, or the standings.
 
 Opting in is a separate act from signing in: an account made to watch a
 stream is not a request to be rated. Withdrawal works the same way round and
-is retroactive — the rating is recomputed from the event list, so events
-involving a withdrawn player simply stop being seen.
+is retroactive — the rating is recomputed from the event list on every read, so
+events involving a withdrawn player simply stop being produced.
+
+A series that fails either rule is still stored, marked with the reason, and
+left out of the maths. Dropping it silently would make "why did my game not
+count?" impossible to answer.
 
 Reading the log is deliberately *not* gated. Your own log file on your own
 disk is not someone else's data; a message with their name in it is. So the
@@ -93,8 +97,9 @@ intended default: the ladder counts nothing until someone says it should.
 | **Match recorder** | Follows the game log live and writes one JSON record per match — map, roster with Steam IDs, sides, commanders, duration, winner, replay file |
 | **UFER-compatible rating** | Reproduces the community's existing formula to the decimal, verified against the real spreadsheet |
 | **Open ladder** | A second, always-playable rating with re-tuned constants — never mixed with the first |
+| **Results that accumulate** | A finished series is reported to the server, and the shared ranking is recomputed from every reported series — so the standings grow with what is played |
 | **Map & commander draft** | Symmetric veto with blind commander picks, a turn timer, and after-the-fact verification against the log |
-| **Tournaments** | Seeded single-elimination brackets with byes, persisted in SQLite |
+| **Tournaments** | Single elimination with byes, seeded by rating, by the listed order or by draw; Bo1 to Bo7; persisted in SQLite |
 | **Live matches** | See what is being played and ask the host for a spectator slot |
 | **Slot management** | Nine clients, spectators included — planned correctly instead of discovered at the tournament |
 | **Rule checks** | Map pools, monthly quotas, opponent eligibility, commander reuse |
@@ -179,7 +184,7 @@ ladder match. What it serves a human is three pages, all of them forms:
 | Page | Who | What for |
 |---|---|---|
 | `/` | anyone signed in | Link Steam, agree to be tracked, get the code that connects the client |
-| `/admin` | admins | Roles and grants, and whether the map pool has been published |
+| `/admin` | admins | Roles and grants, ladder names waiting to be confirmed, and whether the map pool has been published |
 | `/manage/tournaments` | tournament hosts | Build a bracket from a pasted list of entrants, then report results |
 
 There is no ladder to browse and no profile to look up: the ranking lives in

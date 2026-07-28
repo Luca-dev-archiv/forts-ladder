@@ -28,6 +28,8 @@ public partial class MainWindow : Window
         _draft.Changed += RefreshDraft;
         RefreshDraft();
 
+        _login = new LoginFlow(_api);
+        InitLanguagePicker();
         _queue = new ServerQueue(_api);
         InitQueue();
 
@@ -80,6 +82,27 @@ public partial class MainWindow : Window
             MessageBox.Show(this, ex.Message, Loc.T("update.failed"),
                             MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+
+    // --------------------------------------------------------------- Language
+    private bool _langReady;
+
+    private void InitLanguagePicker()
+    {
+        LangBox.ItemsSource = Loc.Available();
+        LangBox.SelectedItem = Loc.Language;
+        // Set after populating, or assigning the items would fire the handler
+        // and immediately claim the language had been changed.
+        _langReady = true;
+    }
+
+    private void LangBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_langReady || LangBox.SelectedItem is not string lang) return;
+        if (lang == Loc.Language) return;
+        Loc.Remember(lang);
+        LangHint.Text = Loc.T("sidebar.language_restart");
+        LangHint.Visibility = Visibility.Visible;
     }
 
     // ----------------------------------------------------------------- Status
@@ -207,8 +230,11 @@ public partial class MainWindow : Window
 
     private void BtnRescan_Click(object sender, RoutedEventArgs e)
     {
-        _matches.Clear();
-        _seenKeys.Clear();
+        // Deliberately NOT clearing first. LoadHistory only reads the archive
+        // under desyncs/, so wiping the list threw away every match the live
+        // watcher had recorded this session — including the one just played,
+        // which is the one you would be looking at. The key set makes a second
+        // pass idempotent, so this only ever adds what is new.
         LoadHistory();
     }
 
@@ -367,7 +393,7 @@ public partial class MainWindow : Window
 
     private async void BtnHostDraft_Click(object sender, RoutedEventArgs e)
     {
-        if (!RequireServer()) return;
+        if (!await EnsureReadyAsync()) return;
         var maps = LeagueMapPool();
         var commanders = CommanderNames.Installed();
         if (maps.Count < 5 || commanders.Count < 4)
@@ -382,27 +408,57 @@ public partial class MainWindow : Window
 
     private async void BtnJoinDraft_Click(object sender, RoutedEventArgs e)
     {
-        if (!RequireServer()) return;
+        if (!await EnsureReadyAsync()) return;
         var code = JoinCodeBox.Text.Trim();
         if (code.Length == 0) return;
         if (!await _draft.JoinAsync(code))
             ShowDraftError(_draft.LastError ?? "?");
     }
 
-    /// <summary>A networked draft needs both a server and an account.</summary>
-    private bool RequireServer()
+    private readonly LoginFlow _login;
+
+    /// <summary>
+    /// Make sure there is a server and an account, signing in if needed.
+    ///
+    /// Signing in happens *here*, at the moment something actually needs it,
+    /// rather than being demanded up front — and it starts by asking the
+    /// Discord app that is almost certainly already running. Telling someone to
+    /// go and log in elsewhere is the last resort, not the first instruction.
+    /// </summary>
+    private async Task<bool> EnsureReadyAsync()
     {
         if (!_api.Configured)
         {
             ShowDraftError(Loc.T("draft.needs_server"));
             return false;
         }
-        if (!_api.LoggedIn)
+        if (_api.LoggedIn) return true;
+
+        SetStatus(Loc.T("login.asking_discord"));
+        var r = await _login.TryDiscordAppAsync();
+        if (r.Ok)
         {
-            ShowDraftError(Loc.T("draft.needs_login"));
+            SetStatus(Loc.T("login.signed_in"), true);
+            DraftErrorBar.Visibility = Visibility.Collapsed;
+            return true;
+        }
+
+        // Discord could not be asked. Say why, and offer the browser route in
+        // the same breath instead of leaving someone at a dead end.
+        if (!r.CanRetryInBrowser)
+        {
+            ShowDraftError(r.Error ?? Loc.T("draft.needs_login"));
             return false;
         }
-        return true;
+        var dlg = new PairDialog(_login, r.Error) { Owner = this };
+        if (dlg.ShowDialog() == true)
+        {
+            SetStatus(Loc.T("login.signed_in"), true);
+            DraftErrorBar.Visibility = Visibility.Collapsed;
+            return true;
+        }
+        ShowDraftError(r.Error ?? Loc.T("draft.needs_login"));
+        return false;
     }
 
     private void ShowDraftError(string message)

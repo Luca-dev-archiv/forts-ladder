@@ -96,6 +96,9 @@ class Match:
         self.defeats: list[dict] = []
         self.fort_select: list[dict] = []
         self.ended_at: float | None = None
+        #: Set when the game reported the match over. Only the replay line is
+        #: still accepted afterwards.
+        self.closed = False
 
     # ----------------------------------------------------------------- Setup
     def note_roster(self, m: re.Match) -> None:
@@ -307,6 +310,10 @@ class Parser:
         cur = self.cur
         assert cur is not None
 
+        if cur.closed and not RE_REPLAY.search(line):
+            # Match is over; the only thing still expected is its replay name.
+            return
+
         m = RE_MULTISTART.search(line)
         if m:
             cur.is_host = m.group(1) == "1"
@@ -345,9 +352,19 @@ class Parser:
         m = RE_REPLAY.search(line)
         if m:
             cur.replay = m.group(1)
+            # The replay line is the real end: everything worth recording has
+            # arrived by now.
+            self._finish()
             return
         if MATCH_END in line:
-            self._finish()
+            # NOT the end of parsing. `Replay saved as` follows about ten lines
+            # later, and finishing here dropped it every single time — which
+            # also cost the timestamp, since the replay filename is the only
+            # wall clock in the log. Mark it closed instead: from now on only
+            # the replay line is accepted, so lobby chatter from the next match
+            # cannot attach itself to this one.
+            cur.ended_at = time.time()
+            cur.closed = True
 
     def flush(self) -> None:
         self._finish()
@@ -448,16 +465,19 @@ def cmd_backfill(args) -> int:
     total, stat, dupes = 0, {}, 0
     for p in logs:
         before = len(seen)
-        res = parse_file(p, Path(args.out) if args.out else None, quiet=True,
+        # Defaults to the normal output directory. Passing None here meant
+        # --backfill printed "N new" for every log and wrote nothing at all,
+        # which is worse than doing nothing: it looks like it worked.
+        res = parse_file(p, Path(args.out) if args.out else OUT_DIR, quiet=True,
                          seen=seen)
         for d in res:
             stat[d["outcome"]["status"]] = stat.get(d["outcome"]["status"], 0) + 1
         if res:
-            print(f"{p.parent.name[:44]:44s} {len(res):2d} neu")
+            print(f"{p.parent.name[:44]:44s} {len(res):2d} new")
         elif len(seen) == before:
             dupes += 1
         total += len(res)
-    print(f"\n{total} eindeutige Match(es), Status: {stat}")
+    print(f"\n{total} distinct match(es) written, status: {stat}")
     print(f"{dupes} logs held only games that were already known")
     return 0
 

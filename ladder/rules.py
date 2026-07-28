@@ -160,8 +160,8 @@ def check_series(games: list[dict], *, pool: list[str] | None = None,
         if chk.maps_played[map_name] > MAX_TIMES_PER_MAP:
             chk.violations.append(Violation(
                 "map repeat",
-                f"game {i}: {map_name} for the "
-                f"{chk.maps_played[map_name]}. time (allowed: "
+                f"game {i}: {map_name} played "
+                f"{chk.maps_played[map_name]} times (allowed: "
                 f"{MAX_TIMES_PER_MAP})", "block"))
 
         # A commander is spent for a side once they win with it.

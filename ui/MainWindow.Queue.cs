@@ -39,8 +39,12 @@ public partial class MainWindow
             await _queue.LeaveAsync();
             return;
         }
-        if (!_api.Configured) { QueueError.Text = Loc.T("draft.needs_server"); return; }
-        if (!_api.LoggedIn) { QueueError.Text = Loc.T("draft.needs_login"); return; }
+        // Same route as the draft: ask Discord, fall back to the browser.
+        if (!await EnsureReadyAsync())
+        {
+            QueueError.Text = DraftError.Text;
+            return;
+        }
 
         // Your own open-ladder rating if the table knows it, so the first
         // pairing is not against someone hundreds of points away.

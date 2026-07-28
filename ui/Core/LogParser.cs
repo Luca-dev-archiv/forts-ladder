@@ -30,6 +30,11 @@ public sealed class MatchRecord
     public bool? HostedLocally { get; set; }
     public ulong? LobbyId { get; set; }
     public string? Replay { get; set; }
+    /// <summary>
+    /// The game reported the match over. Only the replay line is still
+    /// accepted after this.
+    /// </summary>
+    public bool Closed { get; set; }
     public Dictionary<int, string> Commanders { get; } = new();
     public Dictionary<string, PlayerRecord> Players { get; } = new();
     public List<DefeatRecord> Defeats { get; } = new();
@@ -228,6 +233,10 @@ public sealed class LogParser
             else return;
         }
 
+        if (_current.Closed && !ReReplay.IsMatch(line))
+            // Match is over; the only thing still expected is its replay name.
+            return;
+
         m = ReMultiStart.Match(line);
         if (m.Success)
         {
@@ -277,9 +286,24 @@ public sealed class LogParser
             return;
         }
         m = ReReplay.Match(line);
-        if (m.Success) { _current.Replay = m.Groups[1].Value; return; }
+        if (m.Success)
+        {
+            _current.Replay = m.Groups[1].Value;
+            // The replay line is the real end: everything worth recording has
+            // arrived by now.
+            Finish();
+            return;
+        }
 
-        if (line.Contains(MatchEnd)) Finish();
+        if (line.Contains(MatchEnd))
+        {
+            // NOT the end of parsing. `Replay saved as` follows about ten lines
+            // later, and finishing here dropped it every time — which also cost
+            // the timestamp, since the replay filename is the only wall clock in
+            // the log. Mark it closed instead, so lobby chatter from the next
+            // match cannot attach itself to this one.
+            _current.Closed = true;
+        }
     }
 
     public void Flush() => Finish();

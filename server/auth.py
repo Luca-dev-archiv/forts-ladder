@@ -39,6 +39,11 @@ OAUTH_STATE_TTL_S = 600
 #: anything short has to be short-lived.
 PAIRING_TTL_S = 300
 
+#: Sent on every outbound API call. Discord's edge answers 403 to urllib's
+#: default agent, and Steam is friendlier about it but expects one too.
+USER_AGENT = ("FortsLadder/0.1 "
+              "(+https://github.com/Luca-dev-archiv/forts-ladder)")
+
 
 class Role(IntEnum):
     """Authority level. Higher means more."""
@@ -438,7 +443,12 @@ def exchange_discord_code(code: str, redirect_uri: str) -> dict:
         req = urllib.request.Request(
             url, data=urllib.parse.urlencode(form).encode(),
             headers={"Content-Type": "application/x-www-form-urlencoded",
-                     "Accept": "application/json"})
+                     "Accept": "application/json",
+                     # Explicit User-Agent, not urllib's default: Discord sits
+                     # behind a filter that answers 403 to the stock
+                     # `Python-urllib/3.x`, which looks exactly like a rejected
+                     # code and sends you hunting the wrong bug.
+                     "User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=15) as r:
             return json.loads(r.read().decode())
 
@@ -465,7 +475,8 @@ def exchange_discord_code(code: str, redirect_uri: str) -> dict:
 
     req = urllib.request.Request(
         "https://discord.com/api/users/@me",
-        headers={"Authorization": f"Bearer {access}"})
+        headers={"Authorization": f"Bearer {access}",
+                 "User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             me = json.loads(r.read().decode())
@@ -510,7 +521,8 @@ def verify_steam_openid(params: dict[str, str]) -> str:
         req = urllib.request.Request(
             "https://steamcommunity.com/openid/login",
             data=urllib.parse.urlencode(form).encode(),
-            headers={"Content-Type": "application/x-www-form-urlencoded"})
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=15) as r:
             body = r.read().decode()
     except (urllib.error.URLError, OSError) as e:

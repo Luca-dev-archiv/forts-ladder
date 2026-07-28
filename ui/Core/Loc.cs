@@ -92,6 +92,41 @@ public static class Loc
         JsonSerializer.Deserialize<Dictionary<string, string>>(json)
         ?? new Dictionary<string, string>();
 
+    private static string PreferencePath =>
+        Path.Combine(Path.GetDirectoryName(IdentityStore.DefaultPath())
+                     ?? AppContext.BaseDirectory, "language.txt");
+
+    /// <summary>The language chosen previously, if any.</summary>
+    public static string? Preferred()
+    {
+        try
+        {
+            if (!File.Exists(PreferencePath)) return null;
+            var v = File.ReadAllText(PreferencePath).Trim();
+            return v.Length is > 0 and < 16 ? v : null;
+        }
+        catch (IOException) { return null; }
+    }
+
+    /// <summary>
+    /// Remember a language for next start. Not applied immediately: the XAML
+    /// labels were resolved when the window was parsed, so switching live would
+    /// leave half of them behind. The caller says a restart is needed.
+    /// </summary>
+    public static void Remember(string lang)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(PreferencePath)!);
+            File.WriteAllText(PreferencePath, lang);
+        }
+        catch (IOException) { /* not remembering it is a nuisance, not a fault */ }
+    }
+
+    /// <summary>The system language, for offering it as a choice.</summary>
+    public static string SystemLanguage() =>
+        CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+
     /// <summary>
     /// Pick a language. Without an argument the system language is used, and
     /// English if there is no catalog for it.

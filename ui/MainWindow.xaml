@@ -108,6 +108,19 @@
         </StackPanel>
 
         <StackPanel DockPanel.Dock="Bottom">
+          <!-- Language. Applied on the next start, because the XAML labels were
+               resolved when this window was parsed. -->
+          <DockPanel Margin="0,0,0,12">
+            <TextBlock DockPanel.Dock="Left" Text="{core:T sidebar.language}"
+                       Style="{StaticResource Label}"
+                       VerticalAlignment="Center"/>
+            <ComboBox x:Name="LangBox" Width="76" HorizontalAlignment="Right"
+                      VerticalContentAlignment="Center"
+                      SelectionChanged="LangBox_SelectionChanged"/>
+          </DockPanel>
+          <TextBlock x:Name="LangHint" Style="{StaticResource Label}"
+                     Foreground="{StaticResource Warn}" TextWrapping="Wrap"
+                     Visibility="Collapsed" Margin="0,0,0,10"/>
           <TextBlock Style="{StaticResource Label}" TextWrapping="Wrap"
                      Text="{core:T app.disclaimer}"/>
         </StackPanel>

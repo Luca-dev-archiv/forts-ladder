@@ -173,7 +173,24 @@ public static class LobbySettings
         return new string(chars);
     }
 
-    /// <summary>Lua string escaping, which is the same two characters as C.</summary>
-    private static string Escape(string s) =>
-        s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    /// <summary>
+    /// Lua string escaping, and ASCII only.
+    ///
+    /// The file Forts ships is pure ASCII with no byte-order mark, and its
+    /// strings are `L"..."` wide literals whose encoding this project has not
+    /// established. A lobby name is cosmetic; a settings file the game cannot
+    /// read is not — so a player whose ladder name has an umlaut in it gets a
+    /// plainer lobby name rather than a broken config.
+    /// </summary>
+    private static string Escape(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        foreach (var ch in s)
+        {
+            if (ch == '\\' || ch == '"') sb.Append('\\').Append(ch);
+            else if (ch >= ' ' && ch < (char)127) sb.Append(ch);
+            else sb.Append('?');
+        }
+        return sb.ToString();
+    }
 }

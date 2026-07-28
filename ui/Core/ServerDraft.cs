@@ -132,9 +132,24 @@ public sealed class ServerDraft : IDisposable
             }
             else
             {
-                // Do not blank the board on a single failed poll: a moment of
-                // network trouble should not look like the draft vanished.
                 LastError = _api.LastError;
+                // A draft the server does not know is never coming back —
+                // sessions live in memory, so a restart ends them. Polling it
+                // forever produced a stream of 403s and a board frozen on a
+                // state that no longer exists.
+                if (LastError is { Length: > 0 } e
+                    && (e.Contains("unknown draft", StringComparison.OrdinalIgnoreCase)
+                        || e.Contains("not in this draft", StringComparison.OrdinalIgnoreCase)))
+                {
+                    _timer.Stop();
+                    DraftId = null;
+                    JoinCode = null;
+                    State = null;
+                    LastError = "The draft is no longer on the server — it was "
+                              + "probably restarted. Start or join a new one.";
+                }
+                // Otherwise keep the board: a moment of network trouble should
+                // not look like the draft vanished.
             }
             Changed?.Invoke();
         }

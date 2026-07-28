@@ -15,6 +15,10 @@ namespace FortsLadder.Core;
 ///
 /// If the file is missing the view stays empty and says how to generate it,
 /// rather than inventing a ranking out of nothing.
+///
+/// The server is asked first, so everyone reads the same table — a ranking
+/// assembled per machine is not a ranking. The local file remains the fallback
+/// for working offline or against no server at all.
 /// </summary>
 public sealed class RatingsTable
 {
@@ -53,6 +57,9 @@ public sealed class RatingsTable
     public List<string> Skipped { get; private set; } = new();
     public bool Loaded { get; private set; }
     public string Path { get; }
+    /// <summary>Where the table currently shown came from.</summary>
+    public bool FromServer { get; private set; }
+    public string? Source { get; private set; }
 
     public RatingsTable(string? path = null)
     {
@@ -87,7 +94,44 @@ public sealed class RatingsTable
             Loaded = true;
         }
         catch (Exception) { /* broken file = no table, not a crash */ }
+        FromServer = false;
         MarkSelf(mySteamId);
+    }
+
+    /// <summary>
+    /// Take the shared table from the server.
+    ///
+    /// Returns false and changes nothing on failure, so a lost connection shows
+    /// the table you already had rather than an empty one.
+    /// </summary>
+    public async Task<bool> LoadFromServerAsync(ApiClient api, string? myName)
+    {
+        var dto = await api.GetAsync<ServerDto>("/ranking");
+        if (dto is null || dto.Players.Count == 0) return false;
+        Players = dto.Players;
+        // The server sends no Steam IDs — a client recognises itself by the
+        // ladder name it already knows from /me.
+        EventsUsed = 0;
+        Skipped = new List<string>();
+        Loaded = true;
+        FromServer = true;
+        Source = dto.Source;
+        MarkSelfByName(myName);
+        return true;
+    }
+
+    public sealed class ServerDto
+    {
+        [JsonPropertyName("players")] public List<Row> Players { get; set; } = new();
+        [JsonPropertyName("source")] public string? Source { get; set; }
+        [JsonPropertyName("count")] public int Count { get; set; }
+    }
+
+    public void MarkSelfByName(string? myName)
+    {
+        foreach (var r in Players)
+            r.IsMe = myName is not null
+                && string.Equals(r.Name, myName, StringComparison.OrdinalIgnoreCase);
     }
 
     public void MarkSelf(string? mySteamId)

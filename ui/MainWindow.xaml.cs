@@ -377,16 +377,47 @@ public partial class MainWindow : Window
         Set(ViewTour, HeaderTour, NavTour, which == "tour");
     }
 
-    private void ReloadTable()
+    private void ReloadTable() => _ = ReloadTableAsync();
+
+    /// <summary>
+    /// Server first, local file second. Everyone has to read the same ranking,
+    /// or it is not one — but the local file keeps the view working offline and
+    /// against no server at all.
+    /// </summary>
+    private async Task ReloadTableAsync()
     {
+        if (_api.LoggedIn)
+        {
+            var me = await _login.MeAsync();
+            if (await _table.LoadFromServerAsync(_api, me?.Ufer_Name))
+            {
+                ShowTable();
+                return;
+            }
+        }
         _table.Reload(_watcher.CurrentAccount);
+        ShowTable();
+    }
+
+    private void ShowTable()
+    {
         TableList.ItemsSource = _table.Search(TableSearch.Text);
         TableEmpty.Visibility = _table.Loaded ? Visibility.Collapsed : Visibility.Visible;
 
         if (!_table.Loaded)
         {
-            TableSubtitle.Text = Loc.T("table.missing_at", _table.Path);
+            TableSubtitle.Text = _api.LoggedIn
+                ? Loc.T("table.missing_at", _table.Path)
+                : Loc.T("table.sign_in_for_shared");
             MeLine.Text = "";
+            return;
+        }
+        if (_table.FromServer)
+        {
+            TableSubtitle.Text = Loc.T("table.from_server", _table.Players.Count);
+            MeLine.Text = _table.Me is { } m
+                ? Loc.T("table.you", m.Rank, m.UferText, m.OpenText)
+                : Loc.T("table.you_unassigned");
             return;
         }
         TableSubtitle.Text =

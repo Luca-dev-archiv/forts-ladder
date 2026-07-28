@@ -43,6 +43,7 @@ from .auth import (
 from .draft import DraftService
 from .live import LiveService
 from .queue import QueueService
+from .ranking import Ranking
 from .store import Store
 
 #: The interactive docs are useful while developing and an unnecessary
@@ -63,6 +64,7 @@ auth = store.restore_auth(AuthService())
 live = LiveService()
 drafts = DraftService()
 queue = QueueService(auth, drafts)
+ranking = Ranking()
 
 BASE_URL = os.environ.get("LADDER_BASE_URL", "http://localhost:8000")
 SESSION_COOKIE = "ladder_session"
@@ -770,6 +772,30 @@ def logout_page(ladder_session: str | None = Cookie(None),
     r = RedirectResponse("/", status_code=303)
     r.delete_cookie(SESSION_COOKIE)
     return r
+
+
+# ---------------------------------------------------------------- Ranking
+@app.get("/ranking")
+def ranking_get(ladder_session: str | None = Cookie(None),
+                authorization: str | None = Header(None)):
+    """The shared ranking. Requires a session.
+
+    Not public: the seed is a few hundred real display names and ratings from
+    the community spreadsheet, and an open endpoint would be a scrapeable copy
+    of someone else's list. Steam IDs are not included — a client recognises
+    itself from its own log.
+    """
+    require(session_token(ladder_session, authorization))
+    return ranking.payload()
+
+
+@app.post("/admin/ranking/reload")
+def ranking_reload(ladder_session: str | None = Cookie(None),
+                   authorization: str | None = Header(None)):
+    """Re-read the seed after a new season has been uploaded."""
+    acc = require(session_token(ladder_session, authorization))
+    guard(acc.require, "link_other_account")
+    return {"players": ranking.reload(), "source": ranking.source}
 
 
 @app.get("/health")

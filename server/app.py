@@ -152,15 +152,32 @@ def consent_withdraw(ladder_session: str | None = Cookie(None)):
     return {"tracking_consent": False}
 
 
-@app.get("/consent/roster")
-def consent_roster():
-    """Steam IDs that opted in, so a client can tell whether a match counts.
+class EligibilityQuery(BaseModel):
+    #: Steam IDs and lobby ids the caller already saw in its own game log.
+    steam_ids: list[str] = []
+    lobby_ids: list[int] = []
 
-    Ids only, no names: checking eligibility does not require knowing who
-    else plays here.
+
+@app.post("/eligibility/check")
+def eligibility_check(body: EligibilityQuery):
+    """Answer whether specific ids count. Never enumerate.
+
+    There is deliberately no "give me everyone who opted in" endpoint: that
+    list is the member roster, and a Steam lobby id is a join key — the same
+    reason `/live` withholds it. Answering only about ids the caller already
+    holds does the job and discloses nothing new.
+
+    Capped per request so the endpoint cannot be walked to rebuild the roster
+    a bounded number of guesses at a time.
     """
-    return {"authoritative": True,
-            "steam_ids": sorted(auth.trackable_ids())}
+    if len(body.steam_ids) > 64 or len(body.lobby_ids) > 64:
+        raise HTTPException(413, "ask about at most 64 ids per request")
+    trackable = auth.trackable_ids()
+    known = set(store.sanctioned_lobbies())
+    return {
+        "opted_in": sorted(set(body.steam_ids) & trackable),
+        "sanctioned_lobbies": sorted(set(body.lobby_ids) & known),
+    }
 
 
 class SanctionBody(BaseModel):
@@ -184,13 +201,15 @@ def lobby_sanction(body: SanctionBody,
     return {"lobby_id": body.lobby_id, "sanctioned": True}
 
 
-@app.get("/sync")
-def sync():
-    """Everything a client needs to decide what counts, in one call.
+@app.get("/admin/roster")
+def admin_roster(ladder_session: str | None = Cookie(None)):
+    """The full roster — admins only.
 
-    Consent roster and sanctioned lobbies together, because a client that has
-    one without the other cannot answer the question.
+    The operator holds this data anyway; the point is that nobody else can
+    fetch it. Clients use POST /eligibility/check instead.
     """
+    acc = require(ladder_session)
+    guard(acc.require, "link_other_account")
     return {"authoritative": True,
             "steam_ids": sorted(auth.trackable_ids()),
             "sanctioned_lobbies": store.sanctioned_lobbies()}

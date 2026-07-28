@@ -29,27 +29,56 @@ public static class Loc
 
     public static string Language { get; private set; } = "en";
 
-    /// <summary>Languages that actually have a catalog on disk.</summary>
+    /// <summary>Languages available, from the executable or from disk.</summary>
     public static IReadOnlyList<string> Available()
     {
+        var langs = new HashSet<string>(Embedded());
         var dir = CatalogDir();
-        if (!Directory.Exists(dir)) return new[] { "en" };
-        return Directory.GetFiles(dir, "*.json")
-            .Select(Path.GetFileNameWithoutExtension)
-            .OfType<string>().OrderBy(x => x).ToList();
+        if (Directory.Exists(dir))
+        {
+            foreach (var f in Directory.GetFiles(dir, "*.json"))
+                if (Path.GetFileNameWithoutExtension(f) is { Length: > 0 } n)
+                    langs.Add(n);
+        }
+        return langs.Count == 0 ? new[] { "en" } : langs.OrderBy(x => x).ToList();
     }
 
     private static string CatalogDir() =>
         Path.Combine(AppContext.BaseDirectory, "Locales");
 
+    private const string ResourcePrefix = "FortsLadder.Locales.";
+
+    private static IEnumerable<string> Embedded() =>
+        typeof(Loc).Assembly.GetManifestResourceNames()
+            .Where(n => n.StartsWith(ResourcePrefix, StringComparison.Ordinal)
+                        && n.EndsWith(".json", StringComparison.Ordinal))
+            .Select(n => n[ResourcePrefix.Length..^".json".Length]);
+
+    /// <summary>
+    /// Load one catalog. Baked into the executable, overridable on disk.
+    ///
+    /// Embedded because the release ships a single file — a catalog that only
+    /// existed next to the exe would be missing for everyone who downloads it,
+    /// and the whole UI would render as raw keys like `draft.headline`.
+    ///
+    /// Disk wins where present, so adding or correcting a language still means
+    /// dropping in a file next to the exe, with no rebuild.
+    /// </summary>
     private static Dictionary<string, string> Read(string lang)
     {
         var path = Path.Combine(CatalogDir(), lang + ".json");
-        if (!File.Exists(path)) return new Dictionary<string, string>();
+        if (File.Exists(path))
+        {
+            try { return Parse(File.ReadAllText(path)); }
+            catch (Exception) { /* fall through to the embedded copy */ }
+        }
         try
         {
-            return JsonSerializer.Deserialize<Dictionary<string, string>>(
-                       File.ReadAllText(path)) ?? new Dictionary<string, string>();
+            using var s = typeof(Loc).Assembly
+                .GetManifestResourceStream(ResourcePrefix + lang + ".json");
+            if (s is null) return new Dictionary<string, string>();
+            using var r = new StreamReader(s);
+            return Parse(r.ReadToEnd());
         }
         catch (Exception)
         {
@@ -58,6 +87,10 @@ public static class Loc
             return new Dictionary<string, string>();
         }
     }
+
+    private static Dictionary<string, string> Parse(string json) =>
+        JsonSerializer.Deserialize<Dictionary<string, string>>(json)
+        ?? new Dictionary<string, string>();
 
     /// <summary>
     /// Pick a language. Without an argument the system language is used, and

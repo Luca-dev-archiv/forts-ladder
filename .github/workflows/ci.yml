@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      # Each test file is a standalone runner that prints "N/M passed" and
+      # exits non-zero on failure, so no test framework is needed. The loop
+      # runs all of them and fails the job if any file fails.
+      - name: Run tests
+        run: |
+          status=0
+          for f in tests/test_*.py; do
+            echo "--- $f"
+            python "$f" || status=1
+          done
+          exit $status
+
+      # The two rules the project was cleared under are enforced in code. If
+      # that file ever stops passing, the release is not fit to ship.
+      - name: Eligibility rules must hold
+        run: python tests/test_eligibility.py
+
+  no-personal-data:
+    name: No personal data in the tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # A tracked SteamID64 or an email address is the failure mode that
+      # cannot be undone once pushed, so it is checked on every commit rather
+      # than remembered.
+      - name: Scan tracked files
+        run: |
+          echo "Checking tracked files for Steam IDs and email addresses..."
+          hits=$(git grep -nIE '7656119[0-9]{10}|[a-zA-Z0-9._%+-]+@(gmail|gmx|web|outlook|hotmail|yahoo)\.[a-z]+' \
+                 -- . ':!*.md' || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "::error::Found what looks like a real Steam ID or private email address."
+            exit 1
+          fi
+          echo "clean"
+
+  client:
+    name: Build client
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build
+        run: dotnet build ui/FortsLadder.csproj -c Release --nologo
+
+      # The catalogs are loaded by key at runtime, so a missing key shows up as
+      # a raw `draft.headline` on someone's screen rather than as a build error.
+      # Comparing the key sets here is the only place it can be caught early.
+      - name: Locale catalogs must have identical keys
+        shell: python
+        run: |
+          import json, pathlib, sys
+          cat = {p.stem: set(json.loads(p.read_text(encoding="utf-8")))
+                 for p in pathlib.Path("ui/Locales").glob("*.json")}
+          en = cat.pop("en")
+          bad = False
+          for lang, keys in sorted(cat.items()):
+              missing, extra = sorted(en - keys), sorted(keys - en)
+              if missing or extra:
+                  bad = True
+                  print(f"::error::{lang}.json missing={missing} extra={extra}")
+          print(f"{len(en)} keys in en.json, {len(cat)} other catalog(s)")
+          sys.exit(1 if bad else 0)

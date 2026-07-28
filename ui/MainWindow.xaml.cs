@@ -31,7 +31,48 @@ public partial class MainWindow : Window
         _watcher.MatchFinished += m => Dispatcher.Invoke(() => AddMatch(m));
 
         Loaded += (_, _) => LoadHistory();
+        Loaded += (_, _) => _ = CheckForUpdateAsync();
         Closed += (_, _) => _watcher.Dispose();
+    }
+
+    // ----------------------------------------------------------------- Updates
+    /// <summary>
+    /// Offer an update if there is one. Never installs on its own.
+    ///
+    /// Fire-and-forget on purpose: someone who opened this to record a match
+    /// should not wait on a network call, and a failed check is not an error
+    /// worth showing.
+    /// </summary>
+    private async Task CheckForUpdateAsync()
+    {
+        var rel = await Updater.CheckAsync();
+        if (rel is null) return;
+
+        var answer = MessageBox.Show(
+            this,
+            Loc.T("update.available", rel.Version.ToString(),
+                  Updater.CurrentVersion().ToString(),
+                  Math.Round(rel.SizeBytes / 1e6, 1)),
+            Loc.T("update.title"), MessageBoxButton.YesNo,
+            MessageBoxImage.Information);
+        if (answer != MessageBoxResult.Yes) return;
+
+        try
+        {
+            SetStatus(Loc.T("update.downloading"));
+            var staged = await Updater.DownloadAndVerifyAsync(rel);
+            // Only reached when the checksum matched.
+            SetStatus(Loc.T("update.restarting"), true);
+            Updater.ApplyAndRestart(staged);
+        }
+        catch (Exception ex)
+        {
+            // Includes a checksum mismatch, which is the case that matters:
+            // say so plainly instead of retrying quietly.
+            SetStatus(Loc.T("update.failed"));
+            MessageBox.Show(this, ex.Message, Loc.T("update.failed"),
+                            MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     // ----------------------------------------------------------------- Status

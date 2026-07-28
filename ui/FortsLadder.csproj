@@ -9,16 +9,34 @@
     <AssemblyName>FortsLadder</AssemblyName>
     <RootNamespace>FortsLadder</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <!-- Eine Datei zum Weitergeben: wer das Werkzeug ausprobieren soll, darf
-         nicht erst eine Laufzeitumgebung installieren muessen. -->
+
+    <!-- CI overrides this from the git tag (-p:Version=1.2.3). The default is
+         deliberately not a real version, so a hand-built exe can never claim
+         to be a release — the updater compares against it. -->
+    <Version>0.0.0-dev</Version>
+    <RepositoryUrl>https://github.com/Luca-dev-archiv/forts-ladder</RepositoryUrl>
+
+    <!-- One file, and it runs without installing anything first. "Please
+         install the .NET desktop runtime" is where most people in a game
+         community stop, which costs more than the download size saves. -->
     <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>false</SelfContained>
+    <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Trimming stays off: WPF resolves types by reflection, so a trimmed
+         build fails at runtime — in whichever window happens to use the type
+         that got removed. Not a trade worth making for a desktop tool. -->
+    <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Translation catalogs ship next to the executable, so adding a
-         language means dropping in a file. No rebuild required. -->
+    <!-- Baked in, because the release is a single .exe: catalogs that only
+         lived beside it would be absent for everyone who downloads it, and
+         every label would render as its raw key. -->
+    <EmbeddedResource Include="Locales\*.json" />
+    <!-- Also copied out next to the build, where they override the embedded
+         copy. That keeps "add a language by dropping in a file" true. -->
     <None Include="Locales\*.json" CopyToOutputDirectory="PreserveNewest"
           Link="Locales\%(Filename)%(Extension)" />
   </ItemGroup>

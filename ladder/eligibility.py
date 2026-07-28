@@ -89,9 +89,13 @@ class Eligibility:
         #: different claims if a result is ever disputed.
         self.sanctioned: dict[int, str] = {}
         self.armed: ArmedIntent | None = None
-        #: True once the roster came from the server. Local-only rosters know
-        #: about this machine and nothing else, so an unknown Steam ID means
-        #: "cannot confirm" rather than "refused" — and the reason says which.
+        #: Steam IDs the server explicitly answered "has not opted in" for.
+        #: Tracked separately from "never heard of" so a refusal can be stated
+        #: as a fact without holding a copy of the whole member list.
+        self.refused: set[str] = set()
+        #: True only when a complete roster was loaded (admin/offline use). The
+        #: normal path asks about specific ids instead, so an unknown Steam ID
+        #: means "cannot confirm" rather than "refused" — the reason says which.
         self.authoritative = False
 
     # ------------------------------------------------------------ Persistence
@@ -122,6 +126,7 @@ class Eligibility:
             e.armed = ArmedIntent(float(armed.get("until", 0)),
                                   armed.get("series_id"),
                                   armed.get("source", "client"))
+        e.refused = {s for s in (raw.get("refused") or []) if s}
         e.authoritative = bool(raw.get("authoritative", False))
         return e
 
@@ -133,6 +138,7 @@ class Eligibility:
             "note": ("Who agreed to be tracked, and which lobbies this ladder "
                      "created. Both gate whether a result counts."),
             "authoritative": self.authoritative,
+            "refused": sorted(self.refused),
             "consent": [
                 {"steam_id": p.steam_id, "since": p.since, "source": p.source}
                 for p in sorted(self.consent.values(), key=lambda p: p.steam_id)],
@@ -214,14 +220,46 @@ class Eligibility:
         return True
 
     # ------------------------------------------------------------ Server sync
-    def sync_from_server(self, payload: dict) -> None:
-        """Apply the roster and lobby list the server hands out.
+    def observed_ids(self, matches: list[dict]) -> tuple[list[str], list[int]]:
+        """The Steam IDs and lobby ids appearing in recorded matches.
 
-        This is what makes the guest's client agree with the host's: the
-        server knows the lobby was set up for a ladder match, the guest's
-        machine never saw it being armed. Server statements replace local
-        guesses, and the roster becomes authoritative — so an unknown Steam ID
-        now genuinely means "did not opt in".
+        This is what gets asked about. It comes out of the local log, so
+        sending it to the server discloses nothing the server's own operator
+        could not already infer — and nothing about anyone else.
+        """
+        ids = sorted({p.get("steam_id") for m in matches
+                      for p in m.get("players", []) if p.get("steam_id")})
+        lobbies = sorted({int(m["lobby_id"]) for m in matches
+                          if m.get("lobby_id")})
+        return ids, lobbies
+
+    def sync_checked(self, asked_ids, opted_in, sanctioned=()) -> None:
+        """Apply answers to a question about specific ids.
+
+        The server is never asked for "everyone who opted in" — that list is
+        the member roster, and a Steam lobby id is a join key, so neither
+        belongs in a response to an anonymous caller. Asking about ids the
+        client already holds gets the same job done and reveals nothing.
+
+        Anything asked about and not returned is a definite "no", which is why
+        `refused` can be filled in here.
+        """
+        opted = {s for s in opted_in if s}
+        for sid in opted:
+            self.consent[sid] = Participation(sid, "", "server")
+            self.refused.discard(sid)
+        for sid in asked_ids:
+            if sid and sid not in opted:
+                self.consent.pop(sid, None)     # a withdrawal propagates
+                self.refused.add(sid)
+        for lid in sanctioned:
+            self.sanction(int(lid), source="server")
+
+    def sync_from_server(self, payload: dict) -> None:
+        """Apply a complete roster. Admin and offline use only.
+
+        Kept for an operator running against their own database, where the
+        full list is theirs to hold anyway. The client path is `sync_checked`.
         """
         self.consent = {
             sid: Participation(sid, "", "server")
@@ -268,11 +306,20 @@ class Eligibility:
         missing = self.unregistered(steam_ids)
         if not missing:
             return []
-        if self.authoritative:
-            return [f"{len(missing)} participant(s) have not opted in: "
-                    f"{', '.join(missing)}"]
-        return [f"consent unknown for {len(missing)} participant(s): "
-                f"{', '.join(missing)} — refresh the roster from the server"]
+        # "Declined" and "never asked" are different facts. Reporting the
+        # second as the first tells people they refused something they never
+        # saw, so they are kept apart.
+        declined = [s for s in missing if self.authoritative or s in self.refused]
+        unknown = [s for s in missing if s not in declined]
+        out = []
+        if declined:
+            out.append(f"{len(declined)} participant(s) have not opted in: "
+                       f"{', '.join(declined)}")
+        if unknown:
+            out.append(f"consent unknown for {len(unknown)} participant(s): "
+                       f"{', '.join(unknown)} — ask the server "
+                       f"(python -m ladder.eligibility sync)")
+        return out
 
 
 def consent_filter(elig: Eligibility, reg) -> "callable":
@@ -355,24 +402,49 @@ def cmd_arm(args) -> int:
 
 
 def cmd_sync(args) -> int:
-    """Pull roster and lobby list from the server.
+    """Ask the server about the ids in your own recorded matches.
 
-    Without this a guest's client cannot know the host set the lobby up, and
-    reports "consent unknown" for everyone.
+    Without this a guest's client cannot know the host set the lobby up and
+    reports "consent unknown" for everyone. Only ids already present in the
+    local log are sent, and the server answers about exactly those.
     """
-    try:
-        import urllib.request
-        with urllib.request.urlopen(args.url.rstrip("/") + "/sync",
-                                    timeout=10) as r:
-            payload = json.loads(r.read().decode("utf-8"))
-    except Exception as exc:                       # pragma: no cover
-        print(f"could not reach {args.url}: {exc}")
-        return 1
+    import urllib.error
+    import urllib.request
+
+    from .report import load_matches
+
     e = Eligibility.load()
-    e.sync_from_server(payload)
+    matches = load_matches()
+    ids, lobbies = e.observed_ids(matches)
+    if not ids and not lobbies:
+        print("nothing recorded yet — nothing to ask about")
+        return 0
+
+    answered_ids, answered_lobbies = set(), set()
+    # Chunked to stay under the server's per-request cap.
+    for start in range(0, max(len(ids), len(lobbies)), 64):
+        chunk_ids = ids[start:start + 64]
+        chunk_lobbies = lobbies[start:start + 64]
+        body = json.dumps({"steam_ids": chunk_ids,
+                           "lobby_ids": chunk_lobbies}).encode("utf-8")
+        req = urllib.request.Request(
+            args.url.rstrip("/") + "/eligibility/check", data=body,
+            headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                payload = json.loads(r.read().decode("utf-8"))
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            print(f"could not reach {args.url}: {exc}")
+            return 1
+        e.sync_checked(chunk_ids, payload.get("opted_in", []),
+                       payload.get("sanctioned_lobbies", []))
+        answered_ids.update(payload.get("opted_in", []))
+        answered_lobbies.update(payload.get("sanctioned_lobbies", []))
     e.save()
-    print(f"{len(e.consent)} opted in, {len(e.sanctioned)} sanctioned "
-          f"lobbies — roster is now authoritative")
+    print(f"asked about {len(ids)} player(s) and {len(lobbies)} lobby(s)")
+    print(f"  opted in  : {len(answered_ids)}")
+    print(f"  not opted in: {len(set(ids) - answered_ids)}")
+    print(f"  sanctioned lobbies: {len(answered_lobbies)}")
     return 0
 
 

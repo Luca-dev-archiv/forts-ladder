@@ -103,6 +103,63 @@ def test_an_arm_survives_a_client_restart():
         assert again.observe_lobby(555, now=1100.0)
 
 
+# ------------------------------------------------- Asking without enumerating
+def test_only_ids_from_your_own_log_are_ever_asked_about():
+    """The client sends what it already read out of its own log file, so the
+    question itself discloses nothing about anyone else."""
+    e = Eligibility()
+    ids, lobbies = e.observed_ids([match(lobby=555), match(lobby=556, ids=(A, C))])
+    assert ids == sorted([A, B, C])
+    assert lobbies == [555, 556]
+
+
+def test_a_checked_answer_makes_a_refusal_a_fact_not_a_gap():
+    """Anything asked about and not returned is a definite no — that is what
+    lets the reason say "has not opted in" without holding the member list."""
+    e = Eligibility()
+    e.sync_checked([A, B], opted_in=[A], sanctioned=[555])
+    assert e.is_registered(A)
+    assert B in e.refused
+    assert e.is_sanctioned(555)
+    reasons = e.check_series([match(lobby=555)]).reasons
+    assert any("not opted in" in r and B in r for r in reasons), reasons
+    assert not any("unknown" in r for r in reasons), reasons
+
+
+def test_an_id_never_asked_about_stays_unknown_not_refused():
+    e = Eligibility()
+    e.sync_checked([A], opted_in=[A])
+    reasons = e.check_series([match(lobby=555)]).reasons
+    assert any("consent unknown" in r and B in r for r in reasons), reasons
+
+
+def test_a_checked_answer_propagates_a_withdrawal():
+    """Someone who opted in earlier and is no longer returned must drop out."""
+    e = Eligibility()
+    e.sync_checked([A, B], opted_in=[A, B])
+    assert e.is_registered(B)
+    e.sync_checked([A, B], opted_in=[A])
+    assert not e.is_registered(B)
+    assert B in e.refused
+
+
+def test_re_opting_in_clears_an_earlier_refusal():
+    e = Eligibility()
+    e.sync_checked([A], opted_in=[])
+    assert A in e.refused
+    e.sync_checked([A], opted_in=[A])
+    assert e.is_registered(A) and A not in e.refused
+
+
+def test_refusals_survive_a_restart():
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "consent.json"
+        e = Eligibility()
+        e.sync_checked([A, B], opted_in=[A])
+        e.save(path)
+        assert Eligibility.load(path).refused == {B}
+
+
 # ------------------------------------------------------------- Server sync
 def test_sync_lets_the_guest_agree_with_the_host():
     """The guest's machine never saw the lobby being armed, so without this

@@ -28,6 +28,9 @@ public partial class MainWindow : Window
         _draft.Changed += RefreshDraft;
         RefreshDraft();
 
+        _queue = new ServerQueue(_api);
+        InitQueue();
+
         _watcher = new LogWatcher(TimeSpan.FromSeconds(2));
         _watcher.StatusChanged += (s, ok) => Dispatcher.Invoke(() => SetStatus(s, ok));
         _watcher.AccountDetected += (id, persona) =>
@@ -36,7 +39,7 @@ public partial class MainWindow : Window
 
         Loaded += (_, _) => LoadHistory();
         Loaded += (_, _) => _ = CheckForUpdateAsync();
-        Closed += (_, _) => { _watcher.Dispose(); _draft.Dispose(); };
+        Closed += (_, _) => { _watcher.Dispose(); _draft.Dispose(); _queue.Dispose(); };
     }
 
     // ----------------------------------------------------------------- Updates
@@ -308,7 +311,12 @@ public partial class MainWindow : Window
             view.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
             header.Visibility = view.Visibility;
             nav.Background = on ? (Brush)FindResource("BgHover") : Brushes.Transparent;
+            // An accent bar on the left edge: a filled background alone is hard
+            // to spot at a glance while a step timer is running.
+            nav.BorderBrush = on ? (Brush)FindResource("Accent") : Brushes.Transparent;
+            nav.BorderThickness = new Thickness(on ? 3 : 0, 0, 0, 0);
         }
+        Set(ViewQueue, HeaderQueue, NavQueue, which == "queue");
         Set(ViewSeries, HeaderSeries, NavSeries, which == "series");
         Set(ViewTable, HeaderTable, NavTable, which == "table");
         Set(ViewDraft, HeaderDraft, NavDraft, which == "draft");
@@ -613,7 +621,7 @@ public partial class MainWindow : Window
     internal Brush BrushFor(string key) => (Brush)FindResource(key);
 }
 
-// --------------------------------------------------------------- Ansichtsdaten
+// ------------------------------------------------------------- View models
 public sealed class SeriesVm
 {
     public Series Model { get; }

@@ -13,7 +13,7 @@
       <ColumnDefinition Width="*"/>
     </Grid.ColumnDefinitions>
 
-    <!-- ============ Seitenleiste ============ -->
+    <!-- ============ Sidebar ============ -->
     <Border Grid.Column="0" Background="{StaticResource BgPanel}">
       <DockPanel Margin="20,22,20,18">
 
@@ -31,7 +31,14 @@
             </StackPanel>
           </StackPanel>
 
-          <!-- Statuskarte -->
+          <!-- The one dominant action. Everything else in this client is
+               something you look at; this is the thing you came to do. -->
+          <Button x:Name="BtnPlay" Height="46" Margin="0,20,0,0"
+                  Style="{StaticResource BtnAccent}" FontSize="15"
+                  FontWeight="Bold" Content="{core:T queue.play}"
+                  Click="NavQueue_Click"/>
+
+          <!-- Status card -->
           <Border Style="{StaticResource Card}" Margin="0,22,0,0" Padding="14,12">
             <StackPanel>
               <StackPanel Orientation="Horizontal">
@@ -73,23 +80,30 @@
               </StackPanel>
             </StackPanel>
           </Border>
+          <!-- Nav. The active item carries an accent bar on its left edge, set
+               from code — a filled background alone was too quiet to find at a
+               glance while a draft timer is running. -->
           <StackPanel Margin="0,16,0,0">
             <TextBlock Text="{core:T nav.section}" Style="{StaticResource Label}" Margin="0,0,0,6"/>
-            <Button x:Name="NavSeries" Content="{core:T nav.series}" Style="{StaticResource Btn}"
+            <Button x:Name="NavQueue" Content="{core:T nav.queue}" Style="{StaticResource Btn}"
                     HorizontalContentAlignment="Left" Margin="0,0,0,4"
-                    Background="{StaticResource BgHover}" Click="NavSeries_Click"/>
-            <Button x:Name="NavTable" Content="{core:T nav.table}" Style="{StaticResource Btn}"
-                    HorizontalContentAlignment="Left" Margin="0,0,0,4"
-                    Background="Transparent" Click="NavTable_Click"/>
+                    Padding="12,7" Background="Transparent" Click="NavQueue_Click"/>
             <Button x:Name="NavDraft" Content="{core:T nav.draft}" Style="{StaticResource Btn}"
                     HorizontalContentAlignment="Left" Margin="0,0,0,4"
-                    Background="Transparent" Click="NavDraft_Click"/>
+                    Padding="12,7" Background="Transparent" Click="NavDraft_Click"/>
+            <Button x:Name="NavSeries" Content="{core:T nav.series}" Style="{StaticResource Btn}"
+                    HorizontalContentAlignment="Left" Margin="0,0,0,4"
+                    Padding="12,7" Background="{StaticResource BgHover}"
+                    Click="NavSeries_Click"/>
+            <Button x:Name="NavTable" Content="{core:T nav.table}" Style="{StaticResource Btn}"
+                    HorizontalContentAlignment="Left" Margin="0,0,0,4"
+                    Padding="12,7" Background="Transparent" Click="NavTable_Click"/>
             <Button x:Name="NavLive" Content="{core:T nav.live}" Style="{StaticResource Btn}"
                     HorizontalContentAlignment="Left" Margin="0,0,0,4"
-                    Background="Transparent" Click="NavLive_Click"/>
+                    Padding="12,7" Background="Transparent" Click="NavLive_Click"/>
             <Button x:Name="NavTour" Content="{core:T nav.tournaments}" Style="{StaticResource Btn}"
                     HorizontalContentAlignment="Left"
-                    Background="Transparent" Click="NavTour_Click"/>
+                    Padding="12,7" Background="Transparent" Click="NavTour_Click"/>
           </StackPanel>
         </StackPanel>
 
@@ -102,7 +116,7 @@
       </DockPanel>
     </Border>
 
-    <!-- ============ Hauptbereich ============ -->
+    <!-- ============ Main area ============ -->
     <Grid Grid.Column="1" Margin="26,22,26,20">
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto"/>
@@ -132,6 +146,108 @@
                      Margin="0,2,0,0"/>
         </StackPanel>
       </DockPanel>
+
+      <DockPanel Grid.Row="0" Margin="0,0,0,16" x:Name="HeaderQueue"
+                 Visibility="Collapsed">
+        <StackPanel>
+          <TextBlock Text="{core:T queue.headline}" FontSize="21" FontWeight="Bold"/>
+          <TextBlock Text="{core:T queue.sub}" Foreground="{StaticResource TextMid}"
+                     FontSize="12" Margin="0,2,0,0"/>
+        </StackPanel>
+      </DockPanel>
+
+      <!-- ============ Queue ============ -->
+      <Grid Grid.Row="1" x:Name="ViewQueue" Visibility="Collapsed">
+        <Border Style="{StaticResource Card}" Padding="0">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- One state at a time, centred. A queue screen showing four
+                 possible things at once is how you miss the accept window. -->
+            <StackPanel Grid.Row="0" VerticalAlignment="Center"
+                        HorizontalAlignment="Center" MaxWidth="460">
+
+              <TextBlock x:Name="QueueBigState" HorizontalAlignment="Center"
+                         FontSize="26" FontWeight="Bold"
+                         Text="{core:T queue.idle_title}"/>
+              <TextBlock x:Name="QueueSubState" HorizontalAlignment="Center"
+                         TextAlignment="Center" TextWrapping="Wrap"
+                         Foreground="{StaticResource TextMid}" FontSize="13"
+                         Margin="0,8,0,0" Text="{core:T queue.idle_sub}"/>
+
+              <!-- Accept window. Deliberately the largest thing on screen when
+                   it is showing: it is the only moment with a hard deadline. -->
+              <Border x:Name="AcceptPanel" Visibility="Collapsed"
+                      Margin="0,22,0,0" CornerRadius="10" Padding="24,20"
+                      Background="{StaticResource BgPanel}"
+                      BorderBrush="{StaticResource Accent}" BorderThickness="2">
+                <StackPanel>
+                  <TextBlock x:Name="AcceptCount" HorizontalAlignment="Center"
+                             Style="{StaticResource Label}"/>
+                  <TextBlock x:Name="AcceptSeconds" HorizontalAlignment="Center"
+                             FontSize="40" FontWeight="Bold"
+                             Foreground="{StaticResource Accent}"/>
+                  <StackPanel Orientation="Horizontal" Margin="0,10,0,0"
+                              HorizontalAlignment="Center">
+                    <Button x:Name="BtnAccept" Content="{core:T queue.accept}"
+                            Style="{StaticResource BtnAccent}" Padding="26,9"
+                            FontWeight="Bold" Click="BtnAccept_Click"/>
+                    <Button x:Name="BtnDecline" Content="{core:T queue.decline}"
+                            Style="{StaticResource Btn}" Padding="18,9"
+                            Margin="8,0,0,0" Click="BtnDecline_Click"/>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+
+              <StackPanel x:Name="SearchStats" Visibility="Collapsed"
+                          Orientation="Horizontal" HorizontalAlignment="Center"
+                          Margin="0,20,0,0">
+                <StackPanel Margin="0,0,26,0">
+                  <TextBlock x:Name="QueueElapsed" FontSize="22"
+                             FontWeight="Bold" HorizontalAlignment="Center"/>
+                  <TextBlock Text="{core:T queue.elapsed}"
+                             Style="{StaticResource Label}"
+                             HorizontalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel>
+                  <TextBlock x:Name="QueueSize" FontSize="22"
+                             FontWeight="Bold" HorizontalAlignment="Center"/>
+                  <TextBlock Text="{core:T queue.searching_count}"
+                             Style="{StaticResource Label}"
+                             HorizontalAlignment="Center"/>
+                </StackPanel>
+              </StackPanel>
+
+              <Button x:Name="BtnQueueToggle" Height="48" MinWidth="230"
+                      Margin="0,26,0,0" FontSize="15" FontWeight="Bold"
+                      Style="{StaticResource BtnAccent}"
+                      Content="{core:T queue.find}" Click="BtnQueueToggle_Click"/>
+
+              <Button x:Name="BtnGoToDraft" Visibility="Collapsed"
+                      Height="42" MinWidth="230" Margin="0,10,0,0"
+                      Style="{StaticResource Btn}"
+                      Content="{core:T queue.open_draft}"
+                      Click="NavDraft_Click"/>
+
+              <TextBlock x:Name="QueueError" Foreground="{StaticResource Loss}"
+                         FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
+                         Margin="0,16,0,0"/>
+            </StackPanel>
+
+            <!-- What the queue will and will not do, stated where someone is
+                 waiting anyway. Both are rules people otherwise discover by
+                 being surprised. -->
+            <Border Grid.Row="1" Background="{StaticResource BgPanel}"
+                    CornerRadius="0,0,10,10" Padding="20,14">
+              <TextBlock Text="{core:T queue.rules}" TextWrapping="Wrap"
+                         FontSize="11" Foreground="{StaticResource TextLow}"/>
+            </Border>
+          </Grid>
+        </Border>
+      </Grid>
 
       <DockPanel Grid.Row="0" Margin="0,0,0,16" x:Name="HeaderDraft"
                  Visibility="Collapsed">

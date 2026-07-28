@@ -105,6 +105,18 @@ public sealed class ServerDraft : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Take over a draft the queue created. There is no join code involved —
+    /// both seats were filled server-side when the proposal completed.
+    /// </summary>
+    public async Task AdoptAsync(string draftId)
+    {
+        DraftId = draftId;
+        JoinCode = null;
+        _timer.Start();
+        await RefreshAsync();
+    }
+
     public async Task RefreshAsync()
     {
         if (DraftId is null || _busy) return;

@@ -396,6 +396,59 @@ def test_the_lobby_and_a_cancellation_survive_a_restart():
         again.close()
 
 
+def test_a_void_and_the_played_games_survive_a_restart():
+    """Both are agreements between two people. A void that came back to life,
+    or a played game that had to be replayed, would be worse than not having
+    the feature."""
+    from ladder.draft import Side
+    from server.draft import DraftService
+
+    maps = ["Abyss", "Pillars", "Desert Ruins", "Split", "Spirals", "Moorings"]
+    cmds = [f"commander-x-{n}" for n in "abcdef"]
+    auth = AuthService()
+    people = []
+    for i, n in enumerate(("A", "B"), start=1):
+        acc = auth.login_discord(str(i), n)
+        acc.role = Role.PLAYER
+        auth.attach_steam(acc, f"7656119900000{i:04d}")
+        auth.set_tracking_consent(acc, True)
+        people.append(acc)
+    a, b = people
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "v.sqlite"
+        store = Store(path)
+        svc = DraftService()
+        s = svc.create(a, maps, cmds, best_of=3, step_seconds=None)
+        svc.join(b, s.join_code)
+        while s.draft.current is not None:
+            step = s.draft.current
+            if step.side is None:
+                for side, actor in ((Side.A, a), (Side.B, b)):
+                    if s.draft.legal_options(side):
+                        s.apply(actor, s.draft.legal_options(side)[0])
+            else:
+                actor = a if step.side is Side.A else b
+                s.apply(actor, s.draft.legal_options(step.side)[0])
+
+        s.note_game(a, 1, "A")
+        s.note_game(a, 2, "B")
+        s.request_void(a, "game:2", "crash")
+        s.request_void(b, "game:2")
+        before = (s.wins(), sorted(s.voided_games), s.draft.revealed_through())
+        store.save_draft(s)
+        store.close()
+
+        again = Store(path)
+        svc2 = DraftService()
+        svc2.restore(again.load_drafts())
+        s2 = svc2.get(s.id)
+        after = (s2.wins(), sorted(s2.voided_games), s2.draft.revealed_through())
+        assert after == before, f"{before} became {after}"
+        assert s2.wins() == {"A": 1, "B": 0}
+        again.close()
+
+
 def test_a_stale_draft_is_not_restored():
     """A board nobody finished yesterday is not something to resume."""
     from server.draft import DraftService

@@ -10,6 +10,7 @@ namespace FortsLadder;
 public partial class MainWindow : Window
 {
     private readonly LogWatcher _watcher;
+    private System.Windows.Threading.DispatcherTimer? _lobbyFile;
     private readonly IdentityStore _identity = new();
     private readonly List<MatchRecord> _matches = new();
     private readonly HashSet<string> _seenKeys = new();
@@ -26,6 +27,9 @@ public partial class MainWindow : Window
 
         _draft = new ServerDraft(_api);
         _draft.Changed += RefreshDraft;
+        // Only the countdown. Anything here that rebuilt a control would put the
+        // three-clicks-to-ban bug straight back.
+        _draft.Tick += RefreshDraftClock;
         RefreshDraft();
 
         _login = new LoginFlow(_api);
@@ -39,12 +43,29 @@ public partial class MainWindow : Window
         _watcher.StatusChanged += (s, ok) => Dispatcher.Invoke(() => SetStatus(s, ok));
         _watcher.AccountDetected += (id, persona) =>
             Dispatcher.Invoke(() => OnAccount(id, persona));
-        _watcher.MatchFinished += m => Dispatcher.Invoke(() => AddMatch(m));
+        _watcher.MatchFinished += m => Dispatcher.Invoke(() =>
+        {
+            AddMatch(m);
+            // A game in the drafted lobby is a game of that series, and the
+            // server needs to hear about it to open the next commanders.
+            MaybeReportSeriesGame(m);
+        });
         _watcher.LobbySeen += id => Dispatcher.Invoke(() => OnLobbySeen(id));
+
+        // lobby.dat carries the id the moment the lobby exists, which the log
+        // only gets round to mentioning later.
+        _lobbyFile = new System.Windows.Threading.DispatcherTimer
+        { Interval = TimeSpan.FromSeconds(1) };
+        _lobbyFile.Tick += (_, _) => PollLobbyFile();
+        _lobbyFile.Start();
 
         Loaded += (_, _) => LoadHistory();
         Loaded += (_, _) => _ = CheckForUpdateAsync();
-        Closed += (_, _) => { _watcher.Dispose(); _draft.Dispose(); _queue.Dispose(); };
+        Closed += (_, _) =>
+        {
+            _lobbyFile?.Stop();
+            _watcher.Dispose(); _draft.Dispose(); _queue.Dispose();
+        };
     }
 
     // ----------------------------------------------------------------- Updates
@@ -699,6 +720,7 @@ public partial class MainWindow : Window
         RenderBoard(s!);
         RenderPlan(s!);
         RenderHandoff(s!);
+        RenderVoid(s!);
     }
 
     // ----------------------------------------------------------- The handoff
@@ -719,17 +741,32 @@ public partial class MainWindow : Window
         HandoffBar.Visibility = Visibility.Visible;
 
         var haveLobby = s.Lobby_Id is { Length: > 0 };
-        BtnJoinLobby.Visibility = haveLobby && !s.YouHostLobby
-            ? Visibility.Visible : Visibility.Collapsed;
-        BtnHostLobby.Visibility = haveLobby
-            ? Visibility.Collapsed : Visibility.Visible;
-        BtnHostLobby.IsEnabled = !_awaitingLobby;
+        var claimed = s.Lobby_Host is { Length: > 0 };
+        var theirs = claimed && !s.YouHostLobby;
 
+        // Offered to whoever has not been settled as the other side's job.
+        BtnHostLobby.Visibility = !haveLobby && !theirs
+            ? Visibility.Visible : Visibility.Collapsed;
+        BtnHostLobby.IsEnabled = !_awaitingLobby;
+        BtnJoinLobby.Visibility = haveLobby && theirs
+            ? Visibility.Visible : Visibility.Collapsed;
+        // Starting Forts is the host's job; the other side is launched into the
+        // lobby by the join link.
+        BtnLaunchForts.Visibility = theirs && !haveLobby
+            ? Visibility.Collapsed : Visibility.Visible;
+
+        var oppName = s.Seats.TryGetValue(s.Your_Side == "A" ? "B" : "A",
+                                          out var o) ? o : Loc.T("draft.them");
         if (haveLobby)
         {
             HandoffTitle.Text = s.YouHostLobby
                 ? Loc.T("handoff.you_host") : Loc.T("handoff.ready_to_join");
             HandoffSub.Text = Loc.T("handoff.lobby_is", s.Lobby_Id!);
+        }
+        else if (theirs)
+        {
+            HandoffTitle.Text = Loc.T("handoff.they_host", oppName);
+            HandoffSub.Text = Loc.T("handoff.they_host_sub");
         }
         else if (_awaitingLobby)
         {
@@ -743,8 +780,40 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Set while waiting for a lobby to appear in the game log.</summary>
+    /// <summary>Set while waiting for a lobby to appear.</summary>
     private bool _awaitingLobby;
+
+    /// <summary>The lobby id that was already there when we started watching, so
+    /// a lobby from an earlier session is not claimed as this series.</summary>
+    private ulong? _lobbyBefore;
+
+    /// <summary>Password written into the host's lobby settings, shown so it can
+    /// be passed on.</summary>
+    private string? _lobbyPassword;
+
+    /// <summary>
+    /// Write the league settings the host screen would otherwise be clicked
+    /// into: the exact series size, sides and forts locked, a password, and a
+    /// name the opponent recognises.
+    ///
+    /// Only works before Forts starts, because the game reads that file at
+    /// startup — so this runs when the host role is claimed, not when Forts is
+    /// launched. The map is not in that file and has to be picked by hand; the
+    /// panel says which one rather than pretending it was set.
+    /// </summary>
+    private void WriteLobbySettings()
+    {
+        var s = _draft.State;
+        if (s is null) return;
+        var a = s.Seats.TryGetValue("A", out var na) ? na : "A";
+        var b = s.Seats.TryGetValue("B", out var nb) ? nb : "B";
+        var size = Math.Max(2, s.Seats.Count);
+        var res = LobbySettings.Apply($"Ladder: {a} vs {b}", size);
+        _lobbyPassword = res.Password;
+        HandoffSub.Text = res.Ok
+            ? Loc.T("handoff.settings_written", res.Password ?? "-")
+            : Loc.T("handoff.settings_failed", res.Message);
+    }
 
     private void BtnLaunchForts_Click(object sender, RoutedEventArgs e)
     {
@@ -759,10 +828,19 @@ public partial class MainWindow : Window
         catch (Exception ex) { ShowDraftError(ex.Message); }
     }
 
-    private void BtnHostLobby_Click(object sender, RoutedEventArgs e)
+    private async void BtnHostLobby_Click(object sender, RoutedEventArgs e)
     {
+        // Claimed on the server first: both clients used to offer this until one
+        // pressed it, which is two people about to open the same match.
+        if (!await _draft.ClaimHostAsync())
+        {
+            ShowDraftError(_draft.LastError ?? "?");
+            return;
+        }
+        _lobbyBefore = LobbySettings.CurrentLobby();
         _awaitingLobby = true;
-        if (_draft.State is not null) RenderHandoff(_draft.State);
+        WriteLobbySettings();
+        RefreshDraft();
     }
 
     /// <summary>
@@ -775,10 +853,26 @@ public partial class MainWindow : Window
     private async void OnLobbySeen(ulong lobbyId)
     {
         if (!_awaitingLobby || _draft.State is null || !_draft.State.Done) return;
+        if (lobbyId == _lobbyBefore) return;   // the one from before we watched
         _awaitingLobby = false;
         if (!await _draft.SetLobbyAsync(lobbyId))
             ShowDraftError(_draft.LastError ?? "?");
         RefreshDraft();
+    }
+
+    /// <summary>
+    /// Second source for the lobby id: lobby.dat, whose first eight bytes are it.
+    ///
+    /// The game log mentions the lobby eventually; this file has it as soon as
+    /// the lobby exists, and waiting for the log was the slowest part of the
+    /// handoff. Whichever arrives first wins and the other becomes a no-op.
+    /// </summary>
+    private void PollLobbyFile()
+    {
+        if (!_awaitingLobby) return;
+        if (LobbySettings.CurrentLobby() is not ulong id) return;
+        if (id == _lobbyBefore) return;
+        OnLobbySeen(id);
     }
 
     private void BtnJoinLobby_Click(object sender, RoutedEventArgs e)
@@ -787,14 +881,21 @@ public partial class MainWindow : Window
         if (s?.Lobby_Id is not { Length: > 0 } lobby) return;
         var host = s.Lobby_Host is not null && s.Seats.TryGetValue(s.Lobby_Host, out var h)
             ? h : "";
+        // Steam's own join URL, with the lobby owner's account in the third
+        // field. Passing 0 there and letting Steam work it out did not join —
+        // the server knows who claimed the host role, so the id comes from
+        // there.
+        var owner = s.Lobby_Host_Steam;
+        if (string.IsNullOrEmpty(owner))
+        {
+            HandoffSub.Text = Loc.T("handoff.no_host_id");
+            return;
+        }
         try
         {
-            // Steam's own join URL. The third field is the host's account, and
-            // Steam accepts 0 when it is not known — it then resolves the lobby
-            // owner itself.
             System.Diagnostics.Process.Start(
                 new System.Diagnostics.ProcessStartInfo(
-                    $"steam://joinlobby/410900/{lobby}/0")
+                    $"steam://joinlobby/410900/{lobby}/{owner}")
                 { UseShellExecute = true });
             HandoffSub.Text = Loc.T("handoff.joining", host);
         }
@@ -805,6 +906,23 @@ public partial class MainWindow : Window
     {
         if (!await _draft.CancelAsync()) ShowDraftError(_draft.LastError ?? "?");
         RefreshDraft();
+    }
+
+    /// <summary>
+    /// Just the countdown, on the display ticker.
+    ///
+    /// Kept separate from <see cref="RefreshDraft"/> because that one rebuilds
+    /// the tile buttons, and rebuilding them five times a second meant a click
+    /// starting on a button ended on its replacement — three presses to ban a
+    /// map.
+    /// </summary>
+    private void RefreshDraftClock()
+    {
+        var s = _draft.State;
+        if (s is null || s.Done || s.Cancelled || !s.Full) return;
+        var left = s.SecondsLeftNow;
+        TimerBar.Width = Math.Max(0, Math.Min(200, 200 * left / 30.0));
+        TimerBar.Background = (Brush)FindResource(left <= 5 ? "Loss" : "Accent");
     }
 
     private void RenderVersus(DraftStateDto s)
@@ -822,8 +940,12 @@ public partial class MainWindow : Window
         YouStatus.Text = s.Locked_In.Contains(you) ? Loc.T("draft.locked_in") : "";
         OppStatus.Text = s.Locked_In.Contains(opp) ? Loc.T("draft.locked_in") : "";
 
-        DraftProgress.Text = Loc.T("draft.progress",
-            Math.Min(s.Step_Index + 1, s.Step_Total), s.Step_Total);
+        // Which game of the series this step belongs to. "Step 7 of 12" says
+        // nothing to a player; "Game 2 of 3" is what they are thinking in.
+        var step = Loc.T("draft.progress",
+                         Math.Min(s.Step_Index + 1, s.Step_Total), s.Step_Total);
+        DraftProgress.Text = s.Game is int g
+            ? Loc.T("draft.game_of", g, s.Plan.Count) + "  .  " + step : step;
         LockedLabel.Text = s.Your_Pending_Pick is { Length: > 0 } p
             ? Loc.T("draft.you_locked", s.Display(p)) : "";
 
@@ -839,10 +961,21 @@ public partial class MainWindow : Window
         }
         if (s.Done)
         {
-            TurnBanner.Text = Loc.T("draft.finished");
+            var w = s.Wins.GetValueOrDefault(you);
+            var l = s.Wins.GetValueOrDefault(opp);
+            TurnBanner.Text = s.Series_Over
+                ? Loc.T("draft.series_over", w, l)
+                : w + l > 0 ? Loc.T("draft.series_score", w, l)
+                            : Loc.T("draft.finished");
             TurnBanner.Foreground = (Brush)FindResource("Win");
-            TurnSub.Text = Loc.T("draft.finished_hint");
+            // Say why later games look empty, rather than leaving it as a
+            // puzzle: the opponent's commander is withheld on purpose.
+            TurnSub.Text = s.Revealed_Through <= s.Plan.Count
+                ? Loc.T("draft.hidden_later") : Loc.T("draft.finished_hint");
             TimerBar.Width = 0;
+            DraftProgress.Text = Loc.T("draft.game_of",
+                                       Math.Min(s.Revealed_Through, s.Plan.Count),
+                                       s.Plan.Count);
             return;
         }
         if (!s.Full)
@@ -886,19 +1019,37 @@ public partial class MainWindow : Window
                         s.IsBanStep);
         }).ToList();
 
-        var inPlan = s.Plan
-            .SelectMany(g => new[] { g.Commander_A, g.Commander_B })
-            .Where(c => c is not null).ToHashSet();
+        // Whose pick a commander was has to be on the tile. Both sides ended up
+        // marked "chosen" in the same green after the reveal, so the opponent's
+        // commander read as your own — which is the one thing this screen must
+        // never be ambiguous about.
+        var you = s.Your_Side ?? "A";
+        var mine = new HashSet<string>();
+        var theirs = new HashSet<string>();
+        foreach (var g in s.Plan)
+        {
+            var a = you == "A" ? g.Commander_A : g.Commander_B;
+            var b = you == "A" ? g.Commander_B : g.Commander_A;
+            if (a is not null) mine.Add(a);
+            if (b is not null) theirs.Add(b);
+        }
+        if (s.Your_Pending_Pick is { Length: > 0 } pending) mine.Add(pending);
+        var oppName = s.Seats.TryGetValue(you == "A" ? "B" : "A", out var on2)
+            ? on2 : Loc.T("draft.them");
+
         CommanderTiles.ItemsSource = CommanderNames
             .InGameOrder(s.Commander_Pool).Select(c =>
         {
             var banned = s.Banned_Commanders.Contains(c);
-            var chosen = inPlan.Contains(c) || s.Your_Pending_Pick == c;
+            var isMine = mine.Contains(c);
+            var isTheirs = theirs.Contains(c);
             var note = s.Your_Pending_Pick == c ? Loc.T("draft.locked_in")
-                     : inPlan.Contains(c) ? Loc.T("draft.state_picked") : null;
-            return Tile(s.Display(c), c, banned, chosen, note,
+                     : isMine ? Loc.T("draft.picked_by_you")
+                     : isTheirs ? Loc.T("draft.picked_by_them", oppName)
+                     : null;
+            return Tile(s.Display(c), c, banned, isMine, note,
                         !s.IsMapStep && s.YourTurn && s.Options.Contains(c),
-                        s.IsBanStep);
+                        s.IsBanStep, theirs: isTheirs);
         }).ToList();
     }
 
@@ -912,9 +1063,15 @@ public partial class MainWindow : Window
             Title = Loc.T("draft.game", g.Game, g.Map ?? "—"),
             Tag = g.Decider ? Loc.T("draft.decider")
                 : g.Map_Picked_By is null ? "" : Loc.T("draft.picked_by", g.Map_Picked_By),
+            // Own side first and both named: "A vs B" left the reader to work
+            // out which of the two was theirs.
             Commanders = g.Commander_A is null && g.Commander_B is null
                 ? Loc.T("draft.commanders_open")
-                : $"{s.Display(g.Commander_A ?? "?")}  vs  {s.Display(g.Commander_B ?? "?")}",
+                : Loc.T("draft.you_vs_them",
+                        s.Display((s.Your_Side == "B" ? g.Commander_B
+                                                      : g.Commander_A) ?? "?"),
+                        s.Display((s.Your_Side == "B" ? g.Commander_A
+                                                      : g.Commander_B) ?? "?")),
             Accent = (Brush)FindResource(g.Decider ? "Warn" : "Stroke"),
         }).ToList();
     }
@@ -924,9 +1081,14 @@ public partial class MainWindow : Window
     /// at a glance — a draft step is decided in seconds.
     /// </summary>
     private object Tile(string label, string id, bool banned, bool picked,
-                        string? note, bool enabled, bool isBanStep)
+                        string? note, bool enabled, bool isBanStep,
+                        bool theirs = false)
     {
+        // Four states, four looks. `theirs` exists because the opponent's
+        // revealed pick used to be the same green as your own, which made it
+        // read as yours.
         var bg = banned ? "#3A1F22" : picked ? "#1B3327"
+               : theirs ? "#2B2233"
                : enabled ? "#242935" : "#191C23";
         return new
         {
@@ -939,12 +1101,14 @@ public partial class MainWindow : Window
             Background = new SolidColorBrush(
                 (Color)ColorConverter.ConvertFromString(bg)),
             Border = (Brush)FindResource(enabled ? "Accent"
-                : banned ? "Loss" : picked ? "Win" : "Stroke"),
+                : banned ? "Loss" : picked ? "Win"
+                : theirs ? "Warn" : "Stroke"),
             Thickness = new Thickness(enabled ? 2 : 1),
-            Fore = (Brush)FindResource(banned || (!enabled && !picked)
+            Fore = (Brush)FindResource(banned || (!enabled && !picked && !theirs)
                 ? "TextLow" : "TextHi"),
             NoteBrush = (Brush)FindResource(banned ? "Loss"
-                : picked ? "Win" : enabled ? "Accent" : "TextLow"),
+                : picked ? "Win" : theirs ? "Warn"
+                : enabled ? "Accent" : "TextLow"),
         };
     }
 

@@ -207,6 +207,12 @@ class Store:
             # front of whoever logs in next.
             ("lobby_id", "INTEGER"),
             ("lobby_host", "TEXT"),
+            ("lobby_host_steam", "TEXT"),
+            # Agreements, not derived state: a void both players settled on
+            # must not come back to life after a restart.
+            ("voided", "INTEGER NOT NULL DEFAULT 0"),
+            ("voided_games", "TEXT NOT NULL DEFAULT '[]'"),
+            ("results", "TEXT NOT NULL DEFAULT '{}'"),
             ("cancelled_by", "TEXT"),
         ],
     }
@@ -363,19 +369,28 @@ class Store:
         self.db.execute(
             """INSERT INTO drafts (id, join_code, map_pool, commander_pool,
                     best_of, bans_per_side, step_seconds, strike_seed,
-                    series_id, created_at, lobby_id, lobby_host, cancelled_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    series_id, created_at, lobby_id, lobby_host, cancelled_by,
+                    lobby_host_steam, voided, voided_games, results)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    join_code=excluded.join_code,
                    lobby_id=excluded.lobby_id,
                    lobby_host=excluded.lobby_host,
-                   cancelled_by=excluded.cancelled_by""",
+                   cancelled_by=excluded.cancelled_by,
+                   lobby_host_steam=excluded.lobby_host_steam,
+                   voided=excluded.voided,
+                   voided_games=excluded.voided_games,
+                   results=excluded.results""",
             (session.id, session.join_code,
              json.dumps(session.original_map_pool or d.map_pool),
              json.dumps(d.commander_pool), d.best_of,
              d.commander_bans_per_side, d.step_seconds, d.strike_seed,
              session.series_id, session.created_at,
-             session.lobby_id, session.lobby_host, session.cancelled_by))
+             session.lobby_id, session.lobby_host, session.cancelled_by,
+             session.lobby_host_steam, int(session.voided),
+             json.dumps(sorted(session.voided_games)),
+             json.dumps({str(g): s.value
+                         for g, s in session.draft._results.items()})))
 
         self.db.execute("DELETE FROM draft_seats WHERE draft_id = ?", (session.id,))
         self.db.executemany(
@@ -413,6 +428,10 @@ class Store:
                 "strike_seed": r["strike_seed"],
                 "series_id": r["series_id"], "created_at": r["created_at"],
                 "lobby_id": r["lobby_id"], "lobby_host": r["lobby_host"],
+                "lobby_host_steam": r["lobby_host_steam"],
+                "voided": bool(r["voided"]),
+                "voided_games": json.loads(r["voided_games"]),
+                "results": json.loads(r["results"]),
                 "cancelled_by": r["cancelled_by"],
                 "seats": [dict(s) for s in self.db.execute(
                     "SELECT side, account_id, display FROM draft_seats "

@@ -311,8 +311,40 @@ public sealed class DraftStateDto
     public string? Lobby_Id { get; set; }
     public string? Lobby_Host { get; set; }
 
+    /// <summary>The host's SteamID64. Steam's join URL wants the lobby owner's
+    /// account; a zero there makes it guess, and it guessed wrong.</summary>
+    public string? Lobby_Host_Steam { get; set; }
+
     /// <summary>Is this client the side that hosts the lobby?</summary>
     public bool YouHostLobby => Lobby_Host is not null && Lobby_Host == Your_Side;
+
+    /// <summary>How far the series has got: game 1 is open, game N opens once
+    /// N-1 has been reported. Later games show your own pick and not
+    /// theirs.</summary>
+    public int Revealed_Through { get; set; } = 1;
+    public List<int> Games_Played { get; set; } = new();
+
+    /// <summary>Games won per side, from the reported games.</summary>
+    public Dictionary<string, int> Wins { get; set; } = new();
+    /// <summary>Decided — a Bo3 ends at two, not after three games.</summary>
+    public bool Series_Over { get; set; }
+
+    /// <summary>Both sides agreed to throw the whole series away.</summary>
+    public bool Voided { get; set; }
+    /// <summary>Games both sides agreed not to count; they are played again.</summary>
+    public List<int> Voided_Games { get; set; } = new();
+    /// <summary>Open requests by side: what was asked for and why.</summary>
+    public Dictionary<string, VoidRequestDto> Void_Requests { get; set; } = new();
+
+    /// <summary>The opponent's open request, if there is one.</summary>
+    public VoidRequestDto? TheirVoidRequest =>
+        Your_Side is null ? null
+        : Void_Requests.TryGetValue(Your_Side == "A" ? "B" : "A", out var v)
+            ? v : null;
+
+    public VoidRequestDto? MyVoidRequest =>
+        Your_Side is not null && Void_Requests.TryGetValue(Your_Side, out var v)
+            ? v : null;
 
     /// <summary>When this state arrived, so the step clock can keep running
     /// between polls instead of stepping once a second.</summary>
@@ -396,6 +428,13 @@ public sealed class MeDto
     /// player by rank, so the role alone does not say what they may open.
     /// </summary>
     public List<string> Grants { get; set; } = new();
+}
+
+public sealed class VoidRequestDto
+{
+    /// <summary>"series" or "game:N".</summary>
+    public string Scope { get; set; } = "";
+    public string Reason { get; set; } = "";
 }
 
 public sealed class NameClaimDto

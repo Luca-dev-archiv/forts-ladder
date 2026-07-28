@@ -54,10 +54,28 @@ class DraftSession:
     #: list of maps and no way to get into a game.
     lobby_id: int | None = None
     #: Which side is hosting the lobby. The other side gets the join link.
+    #:
+    #: Claimed *before* the lobby exists, not derived from who reported it
+    #: first: both clients used to show "I am hosting" until one pressed it,
+    #: which is two people about to host the same match.
     lobby_host: str | None = None
+    #: SteamID64 of the host, so the other side can be sent straight into their
+    #: lobby. Steam's join URL wants the owner's account; a zero there makes it
+    #: guess, and it guessed wrong.
+    lobby_host_steam: str | None = None
     #: Set when someone walked away. Kept rather than deleted, so the other
     #: side is told what happened instead of getting "unknown draft".
     cancelled_by: str | None = None
+
+    #: Open void requests, side -> (scope, reason). A void needs *both* sides,
+    #: because "that game did not count" is exactly the claim a losing player
+    #: has an interest in making alone.
+    void_requests: dict[str, tuple[str, str]] = field(default_factory=dict)
+    #: Games both sides agreed not to count. They are played again under the
+    #: same number.
+    voided_games: set[int] = field(default_factory=set)
+    #: Set when both sides agreed to throw the whole series away.
+    voided: bool = False
 
     @property
     def cancelled(self) -> bool:
@@ -110,6 +128,7 @@ class DraftSession:
             "cancelled_by": self.cancelled_by,
             "lobby_id": str(self.lobby_id) if self.lobby_id else None,
             "lobby_host": self.lobby_host,
+            "lobby_host_steam": self.lobby_host_steam,
             "seats": {s.side.value: s.display for s in self.seats.values()},
             "full": self.full(),
             "done": d.done,
@@ -133,8 +152,73 @@ class DraftSession:
             "locked_in": locked,
             "your_pending_pick": mine,
             "options": (d.legal_options(seat.side) if seat and step else []),
-            "plan": d.plan(),
+            "plan": self._plan_for(seat),
+            # How far the series has got, so a client can say "game 2 of 3" and
+            # explain why later games are still blank.
+            "revealed_through": d.revealed_through(),
+            "games_played": sorted(d.played_games()),
+            "wins": self.wins(),
+            "series_over": self.series_over(),
+            "voided": self.voided,
+            "voided_games": sorted(self.voided_games),
+            # Who has asked for what, so a client can say "your opponent wants
+            # to void game 2 — crash" and offer to agree.
+            "void_requests": {side: {"scope": scope, "reason": reason}
+                              for side, (scope, reason)
+                              in self.void_requests.items()},
         }
+
+    def wins(self) -> dict[str, int]:
+        """Games won per side, from the results reported so far.
+
+        Voided games are not in `_results` at all, so they cannot count here
+        either — which is the whole point of voiding one.
+        """
+        out = {"A": 0, "B": 0}
+        for side in self.draft._results.values():
+            out[side.value] += 1
+        return out
+
+    def series_over(self) -> bool:
+        """Has somebody taken it? A Bo3 ends at two, not after three games."""
+        needed = self.draft.best_of // 2 + 1
+        return max(self.wins().values()) >= needed
+
+    def _plan_for(self, seat: Seat | None) -> list[dict]:
+        """The plan, with the opponent's later commanders withheld.
+
+        A blind pick decides every game of the series at once. Revealing all of
+        them when the draft ends hands over the opponent's game 2 and game 3
+        before game 1 is played, which is worse than having no blind pick: it
+        turns one hidden choice into three known ones. So the opponent's
+        commander appears one game at a time, as results come in.
+
+        Your own picks are always shown — you chose them — and the maps are
+        public throughout, because the map veto is open by design.
+        """
+        plan = self.draft.plan()
+        if seat is None:
+            # A spectator sees only what has actually been played.
+            through = self.draft.revealed_through() - 1
+            return [self._hide(g, None) if g["game"] > through else g
+                    for g in plan]
+        through = self.draft.revealed_through()
+        return [g if g["game"] <= through else self._hide(g, seat.side)
+                for g in plan]
+
+    @staticmethod
+    def _hide(game: dict, keep: Side | None) -> dict:
+        """One planned game with the other side's commander removed.
+
+        A copy, not a mutation: the same `plan()` output is handed to both sides
+        in turn, and blanking in place would leak to whoever is served second.
+        """
+        out = dict(game)
+        if keep is not Side.A:
+            out["commander_a"] = None
+        if keep is not Side.B:
+            out["commander_b"] = None
+        return out
 
     # ------------------------------------------------------------------ Moves
     def cancel(self, account: Account) -> dict:
@@ -147,6 +231,119 @@ class DraftSession:
         seat = self.seat_of(account)
         if not self.cancelled:
             self.cancelled_by = seat.side.value
+        return self.public_state(account)
+
+    def claim_host(self, account: Account) -> dict:
+        """Say that this side will open the lobby.
+
+        First come, first served, and then it is settled: the point is that the
+        other client stops offering to host and starts waiting for a join link.
+        Re-claiming by the same side is harmless, so a double click is not an
+        error.
+        """
+        seat = self.seat_of(account)
+        if self.cancelled:
+            raise AuthError("this draft was cancelled")
+        if not self.draft.done:
+            raise AuthError("the draft is not finished yet")
+        if self.lobby_host is not None and self.lobby_host != seat.side.value:
+            raise AuthError(f"side {self.lobby_host} is already hosting")
+        self.lobby_host = seat.side.value
+        self.lobby_host_steam = account.steam_id
+        return self.public_state(account)
+
+    #: What a void may be asked for. "series" throws the whole thing away;
+    #: "game:N" drops one game so it can be played again.
+    def _parse_scope(self, scope: str) -> tuple[str, int | None]:
+        scope = (scope or "").strip().lower()
+        if scope == "series":
+            return "series", None
+        if scope.startswith("game:"):
+            try:
+                n = int(scope.split(":", 1)[1])
+            except ValueError as e:
+                raise AuthError(f"{scope!r} is not a scope") from e
+            if not 1 <= n <= self.draft.best_of:
+                raise AuthError(f"game {n} is not in a Bo{self.draft.best_of}")
+            return "game", n
+        raise AuthError("a void is either 'series' or 'game:N'")
+
+    def request_void(self, account: Account, scope: str,
+                     reason: str = "") -> dict:
+        """Ask for a game or the series not to count.
+
+        Needs both sides. A crash, the wrong commander loaded, the wrong map —
+        these happen, and the alternative to a mutual void is a rated result
+        that both players know is wrong. What it must never be is one-sided:
+        "that game did not count" is precisely the claim a losing player has an
+        interest in making alone.
+
+        Asking twice for the same thing is not an error, and asking for
+        something different replaces your earlier request — you get one vote,
+        not a collection.
+        """
+        seat = self.seat_of(account)
+        kind, game = self._parse_scope(scope)
+        if self.voided:
+            raise AuthError("this series was already voided")
+        if kind == "game" and game in self.voided_games:
+            return self.public_state(account)
+
+        self.void_requests[seat.side.value] = (scope.strip().lower(),
+                                               (reason or "").strip()[:120])
+        wanted = {s for s, (sc, _) in self.void_requests.items()
+                  if sc == scope.strip().lower()}
+        if {"A", "B"} <= wanted:
+            # Both agreed: apply it and clear the votes.
+            if kind == "series":
+                self.voided = True
+            else:
+                self.voided_games.add(int(game))
+                # Drop its result so the game is genuinely replayable, and give
+                # the winner their commander back.
+                self.draft._results.pop(int(game), None)
+                self.draft._burned.clear()
+                for g, side in self.draft._results.items():
+                    self.draft.note_result(g, side)
+            self.void_requests.clear()
+        return self.public_state(account)
+
+    def withdraw_void(self, account: Account) -> dict:
+        """Take your vote back before the other side agrees."""
+        seat = self.seat_of(account)
+        self.void_requests.pop(seat.side.value, None)
+        return self.public_state(account)
+
+    def note_game(self, account: Account, game: int, winner: str) -> dict:
+        """Record one finished game of the series.
+
+        Reported by the clients from their own game log, which is the only place
+        the result exists. It does three things at once: it spends the winner's
+        commander, it opens the next game's commanders for both sides, and it is
+        what makes the series end at two wins rather than after three games.
+
+        Idempotent per game, and the first report wins — both clients report the
+        same game, and they should agree.
+        """
+        self.seat_of(account)
+        if not self.draft.done:
+            raise AuthError("the draft is not finished yet")
+        if self.voided:
+            raise AuthError("this series was voided by both players")
+        if game in self.draft.played_games():
+            return self.public_state(account)
+        try:
+            side = Side(winner)
+        except ValueError as e:
+            raise AuthError(f"{winner!r} is not a side") from e
+        if not 1 <= game <= self.draft.best_of:
+            raise AuthError(f"game {game} is not in a Bo{self.draft.best_of}")
+        if game != self.draft.revealed_through():
+            # Out of order would open a later game while an earlier one is still
+            # unplayed, which is exactly the reveal this is protecting.
+            raise AuthError(
+                f"game {self.draft.revealed_through()} is the one being played")
+        self.draft.note_result(game, side)
         return self.public_state(account)
 
     def set_lobby(self, account: Account, lobby_id: int) -> dict:
@@ -163,8 +360,11 @@ class DraftSession:
             raise AuthError("the draft is not finished yet")
         if self.lobby_id is not None and self.lobby_id != lobby_id:
             raise AuthError(f"this draft is already in lobby {self.lobby_id}")
+        if self.lobby_host is not None and self.lobby_host != seat.side.value:
+            raise AuthError(f"side {self.lobby_host} is hosting this series")
         self.lobby_id = int(lobby_id)
         self.lobby_host = seat.side.value
+        self.lobby_host_steam = account.steam_id
         return self.public_state(account)
 
     def apply(self, account: Account, value: str) -> dict:
@@ -284,7 +484,10 @@ class DraftService:
                              original_map_pool=list(row["map_pool"]),
                              lobby_id=row.get("lobby_id"),
                              lobby_host=row.get("lobby_host"),
-                             cancelled_by=row.get("cancelled_by"))
+                             lobby_host_steam=row.get("lobby_host_steam"),
+                             cancelled_by=row.get("cancelled_by"),
+                             voided=bool(row.get("voided")),
+                             voided_games=set(row.get("voided_games") or []))
             for seat in row["seats"]:
                 s.seats[seat["account_id"]] = Seat(
                     Side(seat["side"]), seat["account_id"], seat["display"])
@@ -293,6 +496,13 @@ class DraftService:
                     draft.apply(c["value"], Side(c["side"]) if c["side"] else None)
                 except (ValueError, KeyError):
                     break
+            # Reported games, replayed through note_result so the burned
+            # commanders and the reveal come out the same as before the restart.
+            for g, side in (row.get("results") or {}).items():
+                try:
+                    draft.note_result(int(g), Side(side))
+                except (ValueError, KeyError):
+                    continue
             # A restored draft starts its current step fresh: the players were
             # not looking at a deadline that ran while the server was down.
             draft._step_started = None

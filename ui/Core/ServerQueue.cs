@@ -23,7 +23,14 @@ public sealed class ServerQueue : IDisposable
     public string? LastError { get; private set; }
     public bool InQueue => Status?.In_Queue == true;
 
+    /// <summary>Raised when the queue state actually changed.</summary>
     public event Action? Changed;
+
+    /// <summary>Raised by the display ticker. Only the counting numbers may
+    /// listen — the accept button is the one control in this app with a hard
+    /// deadline, and re-creating its content under the cursor is how a click on
+    /// it gets lost.</summary>
+    public event Action? Tick;
     /// <summary>Raised once, when a proposal has turned into a draft.</summary>
     public event Action<string>? DraftReady;
 
@@ -45,7 +52,7 @@ public sealed class ServerQueue : IDisposable
         {
             Interval = TimeSpan.FromMilliseconds(250),
         };
-        _display.Tick += (_, _) => { if (Status is not null) Changed?.Invoke(); };
+        _display.Tick += (_, _) => { if (Status is not null) Tick?.Invoke(); };
         _display.Start();
     }
 
@@ -89,12 +96,28 @@ public sealed class ServerQueue : IDisposable
         try
         {
             var s = await _api.GetAsync<QueueStatusDto>("/queue");
-            if (s is not null) Apply(s);
-            else LastError = _api.LastError;
-            Changed?.Invoke();
+            if (s is not null)
+            {
+                var before = Status is null ? null : Signature(Status);
+                Apply(s);
+                // Only when something moved. Apply() already ticked otherwise.
+                if (before is null || before != Signature(s)) Changed?.Invoke();
+            }
+            else
+            {
+                LastError = _api.LastError;
+                Changed?.Invoke();
+            }
         }
         finally { _busy = false; }
     }
+
+    /// <summary>What the queue screen draws, minus everything that counts down.
+    /// Used to decide whether a poll is worth a redraw at all.</summary>
+    private static string Signature(QueueStatusDto s) => string.Join("|",
+        s.In_Queue, s.State, s.Queue_Size, s.Mode, s.Draft_Id,
+        s.Penalised_Until > 0,
+        s.Proposal is null ? "-" : $"{s.Proposal.Accepted_By_You}:{s.Proposal.Accepted_Count}");
 
     private void Apply(QueueStatusDto s)
     {
@@ -104,8 +127,11 @@ public sealed class ServerQueue : IDisposable
         // jumping — which is what made the timer look like it was lagging.
         s.ReceivedAt = DateTime.UtcNow;
         if (s.Proposal is not null) s.Proposal.ReceivedAt = s.ReceivedAt;
+        var same = Status is not null && Signature(Status) == Signature(s);
         Status = s;
         LastError = null;
+        // A poll that changed nothing gets a tick, not a redraw.
+        if (same) Tick?.Invoke();
         // Announced once, not on every poll: the draft id keeps being returned
         // and re-raising would fight the user for the current view.
         if (s.Draft_Id is { Length: > 0 } id && id != _announced)

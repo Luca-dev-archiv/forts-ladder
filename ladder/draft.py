@@ -463,12 +463,34 @@ class Draft:
             self._step_started = d
         return messages
 
+    #: Reported results, game -> winner. Kept because they decide what the next
+    #: game is allowed to see; see `revealed_through`.
+    _results: dict[int, Side] = field(default_factory=dict, init=False)
+
     def note_result(self, game: int, winner: Side) -> None:
         """Report a game result, spending the winner's commander."""
+        self._results[int(game)] = winner
         for c in self.choices:
             if c.action == Action.PICK_COMMANDER and c.game == game \
                     and c.side is winner:
                 self.burned(winner).add(c.value)
+
+    def played_games(self) -> set[int]:
+        return set(self._results)
+
+    def revealed_through(self) -> int:
+        """The highest game whose commanders both sides may see.
+
+        A blind pick decides every game of the series up front, so revealing all
+        of them the moment the draft ends hands over the opponent's game 2 and
+        game 3 before game 1 has been played — which is worse than having no
+        blind pick at all. One game at a time: game 1 is open, and game N opens
+        once game N-1 has a reported result.
+        """
+        n = 1
+        while n in self._results:
+            n += 1
+        return n
 
     # ------------------------------------------------------------- Outcome
     def plan(self) -> list[dict]:

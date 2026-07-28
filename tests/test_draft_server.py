@@ -477,13 +477,125 @@ def test_the_lobby_cannot_be_repointed_at_a_different_game():
     svc, s, a, b = started()
     play_all(s, a, b)
     s.set_lobby(a, 111)
-    s.set_lobby(b, 111)              # same id again is harmless
+    s.set_lobby(a, 111)              # the host saying it again is harmless
     try:
-        s.set_lobby(b, 222)
+        s.set_lobby(a, 222)
     except AuthError as e:
         assert "already in lobby" in str(e), str(e)
     else:
         raise AssertionError("the lobby id was overwritten")
+
+
+def test_only_one_side_hosts_and_the_other_cannot_name_the_lobby():
+    """Both clients used to offer "I am hosting" until one pressed it, which is
+    two people about to open the same match."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.claim_host(a)
+    assert s.public_state(b)["lobby_host"] == "A"
+    try:
+        s.claim_host(b)
+    except AuthError as e:
+        assert "already hosting" in str(e), str(e)
+    else:
+        raise AssertionError("both sides claimed the host role")
+    try:
+        s.set_lobby(b, 999)
+    except AuthError as e:
+        assert "hosting this series" in str(e), str(e)
+    else:
+        raise AssertionError("the guest named the lobby")
+
+
+def test_the_host_steam_id_is_published_so_the_other_side_can_join():
+    """Steam's join URL wants the lobby owner's account. Passing zero and
+    letting Steam work it out did not join."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.claim_host(a)
+    assert s.public_state(b)["lobby_host_steam"] == a.steam_id
+
+
+# ------------------------------------------------- Revealing one game at a time
+def test_the_opponents_later_commanders_stay_hidden():
+    """The blind pick decides every game up front. Revealing all of them when
+    the draft ends hands over game 2 and game 3 before game 1 is played, which
+    is worse than having no blind pick at all."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    assert s.draft.done
+
+    view = s.public_state(a)
+    assert view["revealed_through"] == 1
+    game1, game2, game3 = view["plan"]
+    # Game 1 is open to both.
+    assert game1["commander_a"] and game1["commander_b"]
+    # Later games: your own pick, never theirs.
+    assert game2["commander_a"] is not None, "own pick should stay visible"
+    assert game2["commander_b"] is None, "the opponent's game 2 was revealed"
+    assert game3["commander_b"] is None
+
+    # And mirrored for the other side.
+    other = s.public_state(b)["plan"]
+    assert other[1]["commander_b"] is not None
+    assert other[1]["commander_a"] is None
+
+
+def test_reporting_a_game_opens_the_next_one():
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.note_game(a, 1, "A")
+    view = s.public_state(a)
+    assert view["revealed_through"] == 2
+    assert view["plan"][1]["commander_b"] is not None, "game 2 did not open"
+    assert view["plan"][2]["commander_b"] is None, "game 3 opened too early"
+    assert view["wins"] == {"A": 1, "B": 0}
+    assert view["series_over"] is False
+
+
+def test_a_series_ends_at_two_wins_not_after_three_games():
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.note_game(a, 1, "A")
+    s.note_game(b, 2, "A")
+    st = s.public_state(a)
+    assert st["wins"] == {"A": 2, "B": 0}
+    assert st["series_over"] is True
+
+
+def test_games_cannot_be_reported_out_of_order():
+    """Reporting game 3 first would open its commanders while games 1 and 2 are
+    still unplayed — the very reveal this protects."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    try:
+        s.note_game(a, 3, "A")
+    except AuthError as e:
+        assert "game 1 is the one being played" in str(e), str(e)
+    else:
+        raise AssertionError("a later game was reported first")
+
+
+def test_the_same_game_reported_twice_counts_once():
+    """Both clients report from their own log, so the second arrival is
+    expected."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.note_game(a, 1, "A")
+    s.note_game(b, 1, "A")
+    assert s.public_state(a)["wins"] == {"A": 1, "B": 0}
+
+
+def test_a_spectator_sees_only_what_has_been_played():
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    outsider = None
+    plan = s.public_state(outsider)["plan"]
+    assert plan[0]["commander_a"] is None, "an outsider saw game 1 before it ran"
+    s.note_game(a, 1, "A")
+    plan = s.public_state(outsider)["plan"]
+    assert plan[0]["commander_a"] is not None, "a played game stayed hidden"
+    assert plan[1]["commander_a"] is None
 
 
 def test_the_lobby_id_stays_a_string_in_the_state():
@@ -494,6 +606,104 @@ def test_the_lobby_id_stays_a_string_in_the_state():
     st = s.set_lobby(a, 109775243190123456)
     assert isinstance(st["lobby_id"], str)
     assert st["lobby_id"] == "109775243190123456"
+
+
+# ------------------------------------------------------------------- Voiding
+def test_voiding_a_game_needs_both_sides():
+    """One-sided is exactly the claim a losing player has an interest in making
+    alone, so one vote changes nothing."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.note_game(a, 1, "A")
+    assert s.public_state(a)["wins"] == {"A": 1, "B": 0}
+
+    st = s.request_void(a, "game:1", "crashed")
+    assert st["void_requests"]["A"]["scope"] == "game:1"
+    assert st["voided_games"] == [], "one side voided a game on its own"
+    assert st["wins"] == {"A": 1, "B": 0}
+
+    st = s.request_void(b, "game:1", "yes, crashed")
+    assert st["voided_games"] == [1]
+    assert st["wins"] == {"A": 0, "B": 0}, "the voided game still counted"
+    assert st["void_requests"] == {}, "the votes should be spent"
+
+
+def test_a_voided_game_is_played_again_under_the_same_number():
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.note_game(a, 1, "A")
+    s.request_void(a, "game:1"); s.request_void(b, "game:1")
+    # Game 1 is the one being played again, not game 2.
+    st = s.note_game(b, 1, "B")
+    assert st["wins"] == {"A": 0, "B": 1}
+
+
+def test_voiding_a_game_gives_the_commander_back():
+    """A win spends the commander. If the win did not happen, it was not
+    spent."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    won_with = next(c.value for c in s.draft.choices
+                    if c.action is Action.PICK_COMMANDER and c.side is Side.A
+                    and c.game == 1)
+    s.note_game(a, 1, "A")
+    assert won_with in s.draft.burned(Side.A)
+    s.request_void(a, "game:1"); s.request_void(b, "game:1")
+    assert won_with not in s.draft.burned(Side.A)
+
+
+def test_voiding_the_series_stops_it_being_reported_at_all():
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.note_game(a, 1, "A")
+    s.request_void(a, "series", "wrong commander loaded")
+    assert s.public_state(b)["voided"] is False
+    s.request_void(b, "series")
+    assert s.public_state(b)["voided"] is True
+    try:
+        s.note_game(a, 2, "A")
+    except AuthError as e:
+        assert "voided" in str(e), str(e)
+    else:
+        raise AssertionError("a voided series accepted another result")
+
+
+def test_the_other_side_sees_what_was_asked_for_and_why():
+    """A request nobody can see is not a request."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.request_void(a, "game:1", "host crashed at 3:20")
+    seen = s.public_state(b)["void_requests"]
+    assert seen["A"]["scope"] == "game:1"
+    assert "crashed" in seen["A"]["reason"]
+
+
+def test_a_vote_can_be_taken_back_and_replaced():
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.request_void(a, "series")
+    s.withdraw_void(a)
+    assert s.public_state(a)["void_requests"] == {}
+
+    # And asking for something else replaces the earlier ask rather than adding
+    # to it: one vote, not a collection.
+    s.request_void(a, "series")
+    s.request_void(a, "game:1")
+    assert s.public_state(a)["void_requests"]["A"]["scope"] == "game:1"
+    s.request_void(b, "series")
+    assert s.public_state(a)["voided"] is False,         "two different asks were treated as agreement"
+
+
+def test_a_nonsense_scope_is_refused():
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    for scope in ("", "everything", "game:0", "game:99", "game:x"):
+        try:
+            s.request_void(a, scope)
+        except AuthError:
+            pass
+        else:
+            raise AssertionError(f"{scope!r} was accepted as a scope")
 
 
 def _run_all() -> int:

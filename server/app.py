@@ -731,6 +731,81 @@ def draft_cancel(draft_id: str, ladder_session: str | None = Cookie(None),
     return state
 
 
+@app.post("/drafts/{draft_id}/host")
+def draft_claim_host(draft_id: str, ladder_session: str | None = Cookie(None),
+                     authorization: str | None = Header(None)):
+    """Claim the host role, before the lobby exists.
+
+    Without this both clients offered "I am hosting" until one pressed it, which
+    is two people about to open the same match. Whoever is first settles it, and
+    the other side switches to waiting for the join link.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    s = guard(drafts.get, draft_id)
+    state = guard(s.claim_host, acc)
+    store.save_draft(s)
+    return state
+
+
+class VoidBody(BaseModel):
+    #: "series" or "game:N".
+    scope: str
+    reason: str = ""
+
+
+@app.post("/drafts/{draft_id}/void")
+def draft_request_void(draft_id: str, body: VoidBody,
+                       ladder_session: str | None = Cookie(None),
+                       authorization: str | None = Header(None)):
+    """Ask for a game or the series not to count. Takes effect when both agree.
+
+    A crash, the wrong commander, the wrong map — the alternative to a mutual
+    void is a rated result both players know is wrong. One-sided it must never
+    be: that is exactly the claim a losing player has an interest in making
+    alone.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    s = guard(drafts.get, draft_id)
+    state = guard(s.request_void, acc, body.scope, body.reason)
+    store.save_draft(s)
+    return state
+
+
+@app.delete("/drafts/{draft_id}/void")
+def draft_withdraw_void(draft_id: str,
+                        ladder_session: str | None = Cookie(None),
+                        authorization: str | None = Header(None)):
+    acc = require(session_token(ladder_session, authorization))
+    s = guard(drafts.get, draft_id)
+    state = guard(s.withdraw_void, acc)
+    store.save_draft(s)
+    return state
+
+
+class GameBody(BaseModel):
+    game: int
+    #: "A" or "B" — the side that won, as the draft numbers them.
+    winner: str
+
+
+@app.post("/drafts/{draft_id}/game")
+def draft_note_game(draft_id: str, body: GameBody,
+                    ladder_session: str | None = Cookie(None),
+                    authorization: str | None = Header(None)):
+    """Record one finished game of a drafted series.
+
+    The clients report it from their own game log, because that is the only
+    place the result exists. Three things follow: the winner's commander is
+    spent, the next game's commanders are revealed to both sides, and the series
+    can end at two wins instead of running all three games.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    s = guard(drafts.get, draft_id)
+    state = guard(s.note_game, acc, body.game, body.winner)
+    store.save_draft(s)
+    return state
+
+
 class LobbyBody(BaseModel):
     lobby_id: str
 

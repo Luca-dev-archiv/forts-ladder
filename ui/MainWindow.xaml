@@ -682,6 +682,35 @@
                          FontSize="12" TextWrapping="Wrap"/>
             </Border>
 
+            <!-- Voiding. A crash, the wrong commander, the wrong map: the
+                 alternative to agreeing that a game did not count is a rated
+                 result both players know is wrong. Needs both sides, which is
+                 why this shows what the other one asked for. -->
+            <Border DockPanel.Dock="Bottom" x:Name="VoidBar"
+                    Visibility="Collapsed" Background="{StaticResource BgPanel}"
+                    Padding="20,12" BorderBrush="{StaticResource Warn}"
+                    BorderThickness="0,2,0,0">
+              <DockPanel>
+                <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right">
+                  <Button x:Name="BtnVoidGame" Content="{core:T void.game}"
+                          Style="{StaticResource Btn}" Padding="12,7"
+                          Margin="0,0,8,0" Click="BtnVoidGame_Click"/>
+                  <Button x:Name="BtnVoidSeries" Content="{core:T void.series}"
+                          Style="{StaticResource Btn}" Padding="12,7"
+                          Margin="0,0,8,0" Click="BtnVoidSeries_Click"/>
+                  <Button x:Name="BtnVoidWithdraw" Content="{core:T void.withdraw}"
+                          Style="{StaticResource Btn}" Padding="12,7"
+                          Visibility="Collapsed" Click="BtnVoidWithdraw_Click"/>
+                </WrapPanel>
+                <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                  <TextBlock x:Name="VoidTitle" FontSize="13"
+                             FontWeight="SemiBold" TextWrapping="Wrap"/>
+                  <TextBlock x:Name="VoidSub" Style="{StaticResource Label}"
+                             TextWrapping="Wrap" Margin="0,2,0,0"/>
+                </StackPanel>
+              </DockPanel>
+            </Border>
+
             <!-- Handoff. A finished draft used to be the end of the road: a
                  plan on screen and no way into a game. One side hosts the
                  lobby, this reads its id out of the game log, and the other

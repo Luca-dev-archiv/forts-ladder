@@ -23,6 +23,9 @@ public partial class MainWindow
     private void InitQueue()
     {
         _queue.Changed += RefreshQueue;
+        // The counting numbers only. Nothing here may touch a button's content:
+        // doing that on every tick is how a click on Accept gets lost.
+        _queue.Tick += RefreshQueueClock;
         _queue.DraftReady += id =>
         {
             // A found match goes straight to the board. Making someone click
@@ -64,6 +67,16 @@ public partial class MainWindow
         ModeNote.Text = blocked ? Loc.T("queue.mode_unavailable") : "";
         ModeNote.Visibility = blocked ? Visibility.Visible : Visibility.Collapsed;
         BtnQueueToggle.IsEnabled = m is null || m.Available || _queue.InQueue;
+    }
+
+    /// <summary>The two numbers that count, and nothing else.</summary>
+    private void RefreshQueueClock()
+    {
+        var s = _queue.Status;
+        if (s is null) return;
+        if (s.Proposal is { } p) AcceptSeconds.Text = p.SecondsLeftNow.ToString();
+        else if (s.In_Queue)
+            QueueElapsed.Text = TimeSpan.FromSeconds(s.WaitedNow).ToString(@"m\:ss");
     }
 
     private void NavQueue_Click(object sender, RoutedEventArgs e)

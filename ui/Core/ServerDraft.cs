@@ -26,8 +26,20 @@ public sealed class ServerDraft : IDisposable
     public DraftStateDto? State { get; private set; }
     public string? LastError { get; private set; }
 
-    /// <summary>Raised on the UI thread whenever the state was re-read.</summary>
+    /// <summary>
+    /// Raised when the state actually changed — a move, a join, a reveal.
+    ///
+    /// Deliberately *not* raised by the display ticker. Redrawing the board five
+    /// times a second replaced the tile buttons under the mouse, so a click that
+    /// began on one and ended on its replacement never became a click: it took
+    /// three attempts to ban a map. A smooth countdown is not worth an
+    /// unclickable board.
+    /// </summary>
     public event Action? Changed;
+
+    /// <summary>Raised on the display ticker. Only the countdown may listen —
+    /// nothing that rebuilds a control.</summary>
+    public event Action? Tick;
 
     public bool Active => DraftId is not null;
 
@@ -51,7 +63,7 @@ public sealed class ServerDraft : IDisposable
         _display.Tick += (_, _) =>
         {
             if (State is { Done: false, Cancelled: false, Full: true })
-                Changed?.Invoke();
+                Tick?.Invoke();
         };
         _display.Start();
     }
@@ -141,11 +153,20 @@ public sealed class ServerDraft : IDisposable
             if (next is not null)
             {
                 next.ReceivedAt = DateTime.UtcNow;
+                var same = State is not null && Signature(State) == Signature(next);
                 State = next;
                 LastError = null;
                 // Nothing left to poll for once it is decided or abandoned. The
                 // state is kept so the view can say which of the two it was.
                 if (next.Done || next.Cancelled) _timer.Stop();
+                if (same)
+                {
+                    // Nothing to redraw. Announcing it anyway would rebuild the
+                    // board once a second for no reason, and that is what made
+                    // the tiles hard to click.
+                    Tick?.Invoke();
+                    return;
+                }
             }
             else
             {
@@ -172,6 +193,28 @@ public sealed class ServerDraft : IDisposable
         }
         finally { _busy = false; }
     }
+
+    /// <summary>
+    /// Everything the board draws, as one comparable string.
+    ///
+    /// `seconds_left` is not in it on purpose: it changes constantly and nothing
+    /// but the countdown depends on it.
+    /// </summary>
+    private static string Signature(DraftStateDto s) => string.Join("|",
+        s.Step_Index, s.Waiting_On, s.Action, s.Done, s.Cancelled, s.Full,
+        s.Your_Side, s.Your_Pending_Pick, s.Lobby_Id, s.Lobby_Host,
+        s.Revealed_Through, s.Voided, s.Series_Over,
+        string.Join(",", s.Voided_Games),
+        string.Join(",", s.Wins.OrderBy(kv => kv.Key)
+                          .Select(kv => kv.Key + "=" + kv.Value)),
+        string.Join(",", s.Void_Requests.OrderBy(kv => kv.Key)
+                          .Select(kv => kv.Key + "=" + kv.Value.Scope)),
+        string.Join(",", s.Locked_In), string.Join(",", s.Banned_Maps),
+        string.Join(",", s.Banned_Commanders), string.Join(",", s.Options),
+        string.Join(",", s.Seats.OrderBy(kv => kv.Key)
+                          .Select(kv => kv.Key + "=" + kv.Value)),
+        string.Join(",", s.Plan.Select(g =>
+            $"{g.Game}:{g.Map}:{g.Commander_A}:{g.Commander_B}")));
 
     public void Leave()
     {
@@ -200,6 +243,23 @@ public sealed class ServerDraft : IDisposable
     }
 
     /// <summary>
+    /// Claim the host role, before a lobby exists.
+    ///
+    /// Whoever asks first settles it, and the other client stops offering to
+    /// host — otherwise both sides open a lobby and neither is in the other's.
+    /// </summary>
+    public async Task<bool> ClaimHostAsync()
+    {
+        if (DraftId is null) return false;
+        var next = await _api.PostAsync<DraftStateDto>($"/drafts/{DraftId}/host");
+        if (next is null) { LastError = _api.LastError; return false; }
+        next.ReceivedAt = DateTime.UtcNow;
+        State = next;
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>
     /// Tell the server which Steam lobby this series is played in.
     ///
     /// Sent as a string: 64-bit lobby ids do not survive being parsed as JSON
@@ -219,6 +279,53 @@ public sealed class ServerDraft : IDisposable
         }
         State = next;
         Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>
+    /// Report one finished game of the series.
+    ///
+    /// Read from this machine's own game log, because that is the only place the
+    /// result exists. It is what spends the winner's commander, opens the next
+    /// game's commanders, and lets the series end at two wins.
+    /// </summary>
+    public async Task<bool> NoteGameAsync(int game, string winnerSide)
+    {
+        if (DraftId is null) return false;
+        var next = await _api.PostAsync<DraftStateDto>(
+            $"/drafts/{DraftId}/game", new { game, winner = winnerSide });
+        if (next is null) { LastError = _api.LastError; return false; }
+        next.ReceivedAt = DateTime.UtcNow;
+        State = next;
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>
+    /// Ask for a game or the series not to count. Takes effect once the other
+    /// side asks for the same thing.
+    /// </summary>
+    public async Task<bool> RequestVoidAsync(string scope, string reason = "")
+    {
+        if (DraftId is null) return false;
+        var next = await _api.PostAsync<DraftStateDto>(
+            $"/drafts/{DraftId}/void", new { scope, reason });
+        if (next is null) { LastError = _api.LastError; return false; }
+        next.ReceivedAt = DateTime.UtcNow;
+        State = next;
+        Changed?.Invoke();
+        return true;
+    }
+
+    public async Task<bool> WithdrawVoidAsync()
+    {
+        if (DraftId is null) return false;
+        if (!await _api.DeleteAsync($"/drafts/{DraftId}/void"))
+        {
+            LastError = _api.LastError;
+            return false;
+        }
+        await RefreshAsync();
         return true;
     }
 

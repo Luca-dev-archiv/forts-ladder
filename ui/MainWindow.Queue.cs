@@ -306,7 +306,12 @@ public partial class MainWindow
 
         // Free: the poll carries it, and while somebody is queueing it is the
         // freshest number there is.
-        if (s is not null) ShowOnline(s.Online);
+        //
+        // Zero is treated as "not answered" rather than as a count, because you
+        // are always counted yourself — so a real reply is never zero, and a
+        // server too old to send the field would otherwise have the client
+        // announce that nobody is online.
+        if (s is { Online: > 0 }) ShowOnline(s.Online);
 
         AcceptPanel.Visibility = proposal is not null && !s!.Penalised()
             ? Visibility.Visible : Visibility.Collapsed;

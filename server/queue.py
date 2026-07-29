@@ -187,7 +187,15 @@ class QueueService:
 
 
 def _seat_b(session, account: Account):
+    """Seat the second player of a queue match.
+
+    This path bypasses `DraftService.join`, which is where a seat's Steam ID is
+    normally recorded — so it has to be recorded here too, or the guest has no
+    join target when side B ends up hosting.
+    """
     from ladder.draft import Side
 
     from .draft import Seat, _name
+    if account.steam_id:
+        session._steam_ids[account.id] = account.steam_id
     return Seat(Side.B, account.id, _name(account))

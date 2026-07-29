@@ -732,6 +732,41 @@ def test_a_nonsense_scope_is_refused():
             raise AssertionError(f"{scope!r} was accepted as a scope")
 
 
+def test_a_queue_match_records_both_steam_ids():
+    """The queue seats the second player without going through `join`, which is
+    where a Steam ID is normally recorded. Without it the guest has no join
+    target the moment side B hosts."""
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500, "ranked_1v1")
+    q.join(b, 1500, "ranked_1v1")
+    clock[0] += 5
+    q.status(a); q.accept(a)
+    st = q.accept(b)
+    s = q.drafts.get(st["draft_id"])
+    assert s._steam_ids.get(a.id) == a.steam_id
+    assert s._steam_ids.get(b.id) == b.steam_id, "side B was seated without one"
+
+
+def test_a_queue_match_hides_the_opponents_name_until_the_picking_is_done():
+    """Knowing who you are against changes how you ban, and a queue match should
+    be decided by the board. A draft somebody hosted with a code is exempt —
+    they invited a specific person."""
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500, "ranked_1v1")
+    q.join(b, 1500, "ranked_1v1")
+    clock[0] += 5
+    q.status(a); q.accept(a)
+    st = q.accept(b)
+    s = q.drafts.get(st["draft_id"])
+
+    seen = s.public_state(a)["seats"]
+    assert seen["A"] == "A", "your own name should be your own"
+    assert seen["B"] == "Opponent", seen
+
+    play_all(s, a, b)
+    assert s.public_state(a)["seats"]["B"] == "B",         "the name should appear once the picking is over"
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

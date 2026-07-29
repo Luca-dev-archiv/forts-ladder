@@ -12,7 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ladder.matchmaking import (  # noqa: E402
-    ACCEPT_TIMEOUT_S, DECLINE_PENALTY_S, EntryState, MISS_PENALTY_S, PairCap,
+    ACCEPT_TIMEOUT_S, EntryState, PENALTY_BASE_S, PENALTY_FORGET_S,
+    PENALTY_STEP_S, PairCap,
     Queue, allowed_gap,
 )
 
@@ -54,29 +55,76 @@ def test_declining_costs_time_and_the_other_side_keeps_waiting():
     q.join("A", 1500, 0); q.join("B", 1520, 0)
     q.tick(0)
     q.decline("A", 5)
-    assert q.entries["A"].penalty_until == 5 + DECLINE_PENALTY_S
+    assert q.entries["A"].penalty_until == 5 + PENALTY_BASE_S
     assert q.entries["B"].penalty_until == 0, "the uninvolved player was penalised"
     assert q.entries["B"].joined_at == 0, "their wait time was reset"
 
 
 def test_repeated_declining_gets_more_expensive():
+    """Two minutes, then five, then eight. The weight belongs on the pattern,
+    not on the one accident."""
     q = Queue()
     q.join("A", 1500, 0); q.join("B", 1520, 0)
     q.tick(0); q.decline("A", 0)
-    first = q.entries["A"].penalty_until
+    assert q.entries["A"].penalty_until == PENALTY_BASE_S
     q.entries["A"].penalty_until = 0            # lift the block for this test
     q.tick(1); q.decline("A", 1)
-    assert q.entries["A"].penalty_until - 1 > first
+    assert q.entries["A"].penalty_until == 1 + PENALTY_BASE_S + PENALTY_STEP_S
 
 
-def test_not_reacting_is_punished_harder_than_declining():
+def test_the_record_is_forgotten_after_a_clean_day():
+    """Without a horizon the counter is a permanent mark for one bad evening
+    months ago."""
+    q = Queue()
+    q.join("A", 1500, 0); q.join("B", 1520, 0)
+    q.tick(0); q.decline("A", 0)
+
+    later = PENALTY_FORGET_S + 1
+    q.entries["A"].penalty_until = 0
+    q.join("A", 1500, later); q.join("B", 1520, later)
+    q.tick(later); q.decline("A", later)
+    assert q.entries["A"].penalty_until == later + PENALTY_BASE_S, \
+        "a day-old offence still counted"
+
+
+def test_the_record_survives_leaving_and_rejoining():
+    """An Entry is created fresh on every join, so a counter living there could
+    be reset by leaving the queue and coming back."""
+    q = Queue()
+    q.join("A", 1500, 0); q.join("B", 1520, 0)
+    q.tick(0); q.decline("A", 0)
+    q.leave("A")
+    q.join("A", 1500, 1)
+    q.entries["A"].penalty_until = 0
+    q.tick(1); q.decline("A", 1)
+    assert q.entries["A"].penalty_until == 1 + PENALTY_BASE_S + PENALTY_STEP_S
+
+
+def test_declining_and_sleeping_share_one_ledger():
+    """To the player who was waiting they are the same event: the match did not
+    happen. The difference matters only to the person who did it."""
+    q = Queue()
+    q.join("A", 1500, 0); q.join("B", 1520, 0)
+    q.tick(0)
+    q.decline("A", 0)                              # first offence
+    q.entries["A"].penalty_until = 0
+    q.tick(1)
+    q.accept("B", 1)
+    q.tick(1 + ACCEPT_TIMEOUT_S + 1)               # A slept: second offence
+    assert q.entries["A"].penalty_until == \
+        1 + ACCEPT_TIMEOUT_S + 1 + PENALTY_BASE_S + PENALTY_STEP_S
+
+
+def test_not_reacting_costs_the_same_as_declining():
+    """Ten minutes for a missed offer was punishment rather than deterrence: in
+    a scene this size it ends an evening, and it lands hardest on somebody whose
+    game crashed while the offer was on screen."""
     q = Queue()
     q.join("A", 1500, 0); q.join("B", 1520, 0)
     q.tick(0)
     q.accept("A", 1)
     q.tick(ACCEPT_TIMEOUT_S + 1)                # B was asleep
-    assert q.entries["B"].penalty_until > q.entries["A"].penalty_until
-    assert q.entries["B"].penalty_until == ACCEPT_TIMEOUT_S + 1 + MISS_PENALTY_S
+    assert q.entries["B"].penalty_until == ACCEPT_TIMEOUT_S + 1 + PENALTY_BASE_S
     assert q.entries["A"].penalty_until == 0, \
         "whoever accepted must not pay for the other one"
     assert q.entries["A"].state is EntryState.SEARCHING
@@ -87,7 +135,7 @@ def test_a_blocked_player_is_not_paired():
     q.join("A", 1500, 0); q.join("B", 1520, 0)
     q.tick(0); q.decline("A", 0)
     assert q.tick(10) == [], "a penalised player was paired again immediately"
-    assert len(q.tick(DECLINE_PENALTY_S + 1)) == 1
+    assert len(q.tick(PENALTY_BASE_S + 1)) == 1
 
 
 def test_the_weekly_pair_cap_prevents_useless_matches():

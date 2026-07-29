@@ -84,6 +84,30 @@ public partial class MainWindow
     {
         if (sender is not Button b || b.Tag is not string id) return;
 
+        // Signed in before anything else. Asking to watch while holding a dead
+        // session produced a raw HTTP 401 in a message box, which reads as the
+        // program being broken rather than as something to fix in ten seconds.
+        if (!await EnsureReadyAsync())
+        {
+            MessageBox.Show(this, ErrorCodes.Text(ErrorCodes.SessionExpired),
+                            Loc.T("live.headline"), MessageBoxButton.OK,
+                            MessageBoxImage.Information);
+            return;
+        }
+
+        // Your own match is not something to watch: a spectator slot in your own
+        // series shows you the opponent's fort, which is the one thing the blind
+        // pick exists to hide. The row already says so — this catches the case
+        // where the list is a few seconds old.
+        if ((LiveList.ItemsSource as IEnumerable<LiveVm>)?
+                .FirstOrDefault(v => v.Id == id)?.Yours == true)
+        {
+            MessageBox.Show(this, ErrorCodes.Text(ErrorCodes.NotYourMatch),
+                            Loc.T("live.headline"), MessageBoxButton.OK,
+                            MessageBoxImage.Information);
+            return;
+        }
+
         // The terms first, and a real decision about them. A spectator sees both
         // forts; in a rated series that is everything one side is paying to keep
         // hidden, so agreeing to a delay is the condition of being let in — not
@@ -157,6 +181,8 @@ public partial class MainWindow
 public sealed class LiveVm
 {
     public string Id { get; }
+    /// <summary>You are playing in this one, as decided by the server.</summary>
+    public bool Yours { get; }
     public string Title { get; }
     public string Sub { get; }
     public string Extra { get; }
@@ -168,6 +194,7 @@ public sealed class LiveVm
     public LiveVm(LiveMatchDto m, MainWindow w)
     {
         Id = m.Id;
+        Yours = m.Yours;
         Title = string.Join("  vs  ", m.Players);
         var minutes = m.Running_For_S / 60;
         Sub = $"{m.Mode}  ·  " + Loc.T("live.running", $"{minutes} min");
@@ -177,10 +204,11 @@ public sealed class LiveVm
                                  : Loc.T("live.full");
         SlotBrush = w.BrushFor(m.Free_Slots > 0 ? "TextMid" : "Loss");
 
-        CanRequest = m.Accepting_Requests && m.Free_Slots > 0;
+        CanRequest = m.Accepting_Requests && m.Free_Slots > 0 && !m.Yours;
         // Say *why* the button is dead. "Disabled" alone makes people click
         // it again and assume the tool is broken.
-        ActionLabel = m.Free_Slots <= 0 ? Loc.T("live.no_room")
+        ActionLabel = m.Yours ? Loc.T("live.your_match")
+                    : m.Free_Slots <= 0 ? Loc.T("live.no_room")
                     : !m.Accepting_Requests ? Loc.T("live.closed")
                     : Loc.T("live.request");
     }

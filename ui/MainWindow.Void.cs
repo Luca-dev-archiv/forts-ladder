@@ -58,10 +58,15 @@ public partial class MainWindow
         var mine = _watcher.CurrentAccount;
         var bothPresent = ids.Count >= 2 && mine is not null && ids.Contains(mine);
         if (!sameLobby && !bothPresent) return;
-        // Keyed by the game number, not by the match: the same game arrives
-        // twice — once when the result is known and once when the replay name
-        // lands — and the second must be a no-op.
-        if (!_reportedGames.Add($"g{s.Revealed_Through}")) return;
+        // Keyed by the *game*, not by the slot it goes in.
+        //
+        // Keying by number meant an invalid game reported as game 2 blocked the
+        // real game 2 for good: voiding it cleared the server's result, but this
+        // client still believed game 2 had been dealt with and never sent the
+        // replay. The replay of a voided game is a different game — different
+        // length, different defeat times — so it is sent, while the same game
+        // arriving twice (result, then replay name) still only counts once.
+        if (!_reportedGames.Add(m.ReportKey)) return;
 
         // Compared against what was agreed *before* it is reported: the wrong
         // map or the wrong commander is exactly what the draft exists to pin
@@ -77,7 +82,15 @@ public partial class MainWindow
             .Select(pl => pl.SteamId)
             .Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList();
         if (!await _draft.NoteGameAsync(s.Revealed_Through, side, roster))
+        {
             ShowDraftError(_draft.LastError ?? "?");
+            return;
+        }
+        // Written down now, while it is known. Afterwards the grouping would
+        // have to guess, and on a client that is not hosting there is no lobby
+        // id in the log to guess from.
+        _draftedGames.Note(m.ReportKey, s.Id);
+        RebuildSeries();
     }
 
     // ------------------------------------------------------------------ Voiding

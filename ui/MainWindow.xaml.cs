@@ -15,6 +15,9 @@ public partial class MainWindow : Window
     /// <summary>Lobbies this ladder set up — hard boundaries for the series
     /// grouping, so a new lobby is never folded into the previous series.</summary>
     private readonly LadderLobbies _ladderLobbies = new();
+    /// <summary>Which series each reported game belonged to. The grouping asks
+    /// this before it starts guessing from timestamps.</summary>
+    private readonly DraftedGames _draftedGames = new();
     private readonly List<MatchRecord> _matches = new();
     private readonly HashSet<string> _seenKeys = new();
     private readonly ObservableCollection<SeriesVm> _series = new();
@@ -39,6 +42,10 @@ public partial class MainWindow : Window
         InitLanguagePicker();
         TitleVersion.Text = "v" + Updater.CurrentVersion();
         StateChanged += (_, _) => OnWindowStateChanged();
+        // A dead session is not a mystery, and the client used to treat it as
+        // one: every call failed with a bare 401 while it went on believing it
+        // was signed in.
+        _api.SignedOut += () => Dispatcher.Invoke(OnSignedOut);
         _queue = new ServerQueue(_api);
         InitQueue();
         InitObservers();
@@ -300,7 +307,7 @@ public partial class MainWindow : Window
     {
         var selectedKey = _selected?.Matches.FirstOrDefault()?.Key;
         var grouped = Series.Group(_matches, null, _watcher.CurrentAccount,
-                                   _ladderLobbies.All);
+                                   _ladderLobbies.All, _draftedGames.All);
         _series.Clear();
         foreach (var s in grouped) _series.Add(new SeriesVm(s, _identity));
 
@@ -857,6 +864,14 @@ public partial class MainWindow : Window
                 : Loc.T("handoff.lobby_is", s.Lobby_Id!);
             // Nothing to join once you are in it.
             if (here) BtnJoinLobby.Visibility = Visibility.Collapsed;
+            // And tell the server, which stops the join clock. Only this client
+            // knows: the host sees a player connect but not which ladder account
+            // it is. Sent once per series, not once per poll.
+            if (here && s.Handoff.Phase == "guest" && _readyReported != s.Id)
+            {
+                _readyReported = s.Id;
+                _ = _draft.NoteReadyAsync();
+            }
         }
         else if (theirs)
         {
@@ -876,10 +891,145 @@ public partial class MainWindow : Window
             HandoffTitle.Text = Loc.T("handoff.decided");
             HandoffSub.Text = Loc.T("handoff.decided_sub");
         }
+
+        RenderHandoffClock(s, oppName);
+        RenderRestartWarning(s, oppName);
+    }
+
+    /// <summary>
+    /// How long is left, and the two buttons that change it.
+    ///
+    /// A deadline the server keeps but nobody can see is only useful for
+    /// punishing somebody. And a lobby that will not open is usually a port or a
+    /// Steam problem rather than a refusal, so more time is the right answer —
+    /// asked of the opponent, because it comes out of their evening.
+    /// </summary>
+    private void RenderHandoffClock(DraftStateDto s, string oppName)
+    {
+        var h = s.Handoff;
+        var yours = s.ClockOnYou;
+
+        if (h.Expired && h.Running)
+        {
+            HandoffClock.Text = yours
+                ? Loc.T("handoff.clock_expired_you")
+                : Loc.T("handoff.clock_expired_them", oppName);
+            HandoffClock.Foreground = (Brush)FindResource("Loss");
+            HandoffClock.Visibility = Visibility.Visible;
+            // Said only to the side that is waiting: it is their cooldown that
+            // has been waived, not the late side's.
+            if (!yours) HandoffSub.Text = Loc.T("handoff.clock_expired_sub");
+        }
+        else if (h.Running)
+        {
+            var left = TimeSpan.FromSeconds(h.SecondsLeftNow).ToString(@"m\:ss");
+            HandoffClock.Text = yours
+                ? Loc.T(h.Phase == "host" ? "handoff.clock_host"
+                                          : "handoff.clock_guest", left)
+                : Loc.T("handoff.clock_waiting", oppName, left);
+            HandoffClock.Foreground = (Brush)FindResource(
+                h.SecondsLeftNow <= 30 ? "Loss" : "Warn");
+            HandoffClock.Visibility = Visibility.Visible;
+        }
+        else HandoffClock.Visibility = Visibility.Collapsed;
+
+        // Whoever asked cannot grant it to themselves, so exactly one of these
+        // two is ever offered to a given client.
+        var asked = s.Extension_Asked_By;
+        var theyAsked = asked is { Length: > 0 } && asked != s.Your_Side;
+        var youAsked = asked is { Length: > 0 } && asked == s.Your_Side;
+
+        BtnGrantTime.Content = Loc.T("handoff.grant_time", oppName);
+        BtnGrantTime.Visibility = theyAsked && h.Running
+            ? Visibility.Visible : Visibility.Collapsed;
+        BtnAskTime.Visibility = !youAsked && !theyAsked && h.Running
+            ? Visibility.Visible : Visibility.Collapsed;
+        if (youAsked) HandoffSub.Text = Loc.T("handoff.asked_time", oppName);
+        if (theyAsked) HandoffSub.Text = Loc.T("handoff.they_asked_time", oppName);
+    }
+
+    /// <summary>
+    /// Forts has not been restarted, so it is not using the ladder's settings.
+    ///
+    /// The commonest cause of "my opponent never sent me the password": the
+    /// settings file is read while the game starts and at no other time, so a
+    /// running Forts has never seen it. The host is told what to do, and the
+    /// guest is told why nothing is arriving — they cannot see the other
+    /// machine.
+    /// </summary>
+    private void RenderRestartWarning(DraftStateDto s, string oppName)
+    {
+        var mine = s.YouHostLobby && _restartPending;
+        var theirs = !s.YouHostLobby && s.Host_Restart_Pending;
+        RestartWarning.Text = mine ? ErrorCodes.Text(ErrorCodes.GameNotRestarted)
+                                     + "  " + Loc.T("handoff.restart_needed")
+                            : theirs ? Loc.T("handoff.restart_them", oppName)
+                            : "";
+        RestartWarning.Visibility = mine || theirs
+            ? Visibility.Visible : Visibility.Collapsed;
+        BtnCloseForts.Visibility = mine ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>Set when lobby settings were written into a running Forts.</summary>
+    private bool _restartPending;
+
+    /// <summary>
+    /// Whether Forts is up right now.
+    ///
+    /// By process rather than by the log: the log says a game *was* running, and
+    /// what matters here is whether the settings file has been read since it was
+    /// written, which only a fresh start does.
+    /// </summary>
+    private static bool FortsIsRunning()
+    {
+        try
+        {
+            return System.Diagnostics.Process.GetProcessesByName("Forts").Length > 0;
+        }
+        catch (Exception) { return false; }
+    }
+
+    private async void BtnAskTime_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await _draft.AskExtensionAsync()) ShowDraftError(_draft.LastError ?? "?");
+    }
+
+    private async void BtnGrantTime_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await _draft.GrantExtensionAsync()) ShowDraftError(_draft.LastError ?? "?");
+    }
+
+    /// <summary>
+    /// Close Forts so it can be started again and read the settings.
+    ///
+    /// Deliberately only closing, not restarting: the game is launched through
+    /// Steam and starting it behind someone's back is not this program's
+    /// business. Confirmed first, because anything unsaved in it is lost.
+    /// </summary>
+    private void BtnCloseForts_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(this, Loc.T("handoff.close_forts_ask"),
+                            Loc.T("handoff.close_forts"),
+                            MessageBoxButton.OKCancel,
+                            MessageBoxImage.Warning) != MessageBoxResult.OK)
+            return;
+        var closed = 0;
+        foreach (var p in System.Diagnostics.Process.GetProcessesByName("Forts"))
+        {
+            try { p.CloseMainWindow(); if (!p.WaitForExit(4000)) p.Kill(); closed++; }
+            catch (Exception) { /* counted as not closed */ }
+        }
+        if (closed == 0)
+            ShowDraftError(ErrorCodes.Text(ErrorCodes.GameNotRestarted,
+                                           Loc.T("handoff.close_forts_failed")));
     }
 
     /// <summary>Set while waiting for a lobby to appear.</summary>
     private bool _awaitingLobby;
+
+    /// <summary>Draft whose "I am in the lobby" has already been sent, so the
+    /// poll does not send it once a second.</summary>
+    private string? _readyReported;
 
     /// <summary>The lobby id that was already there when we started watching, so
     /// a lobby from an earlier session is not claimed as this series.</summary>
@@ -975,9 +1125,17 @@ public partial class MainWindow : Window
         _lobbyName = $"Ladder: {a} vs {b}";
         var res = LobbySettings.Apply(_lobbyName, _lobbySize);
         _lobbyPassword = res.Password;
-        HandoffSub.Text = res.Ok
-            ? Loc.T("handoff.settings_written", res.Password ?? "-")
-            : Loc.T("handoff.settings_failed", res.Message);
+        // Written, but not necessarily *in effect*. Forts reads multiplayer.lua
+        // while starting and at no other time, so a running game has never seen
+        // this file — and the lobby it opens has the old password, or none. This
+        // is the whole reason a guest sat waiting for a password that did not
+        // exist.
+        _restartPending = res.Ok && FortsIsRunning();
+        HandoffSub.Text = !res.Ok
+            ? Loc.T("handoff.settings_failed", res.Message)
+            : _restartPending
+                ? ErrorCodes.Text(ErrorCodes.GameNotRestarted)
+                : Loc.T("handoff.settings_written", res.Password ?? "-");
     }
 
     private void BtnLaunchForts_Click(object sender, RoutedEventArgs e)
@@ -1032,7 +1190,10 @@ public partial class MainWindow : Window
         _awaitingLobby = false;
         // With the password: the guest cannot get in without it, and the Steam
         // link has nowhere to put it.
-        if (!await _draft.SetLobbyAsync(lobbyId, _lobbyPassword))
+        // The pending restart travels with the lobby: the guest cannot see this
+        // machine, and without being told they conclude the host never sent the
+        // password rather than that the game never read it.
+        if (!await _draft.SetLobbyAsync(lobbyId, _lobbyPassword, _restartPending))
             ShowDraftError(_draft.LastError ?? "?");
         RefreshDraft();
     }
@@ -1155,7 +1316,25 @@ public partial class MainWindow : Window
     private void RefreshDraftClock()
     {
         var s = _draft.State;
-        if (s is null || s.Done || s.Cancelled || !s.Full) return;
+        if (s is null) return;
+
+        // The handoff countdown runs *after* the draft is done, so it is handled
+        // before the early return below. Only text is touched — rebuilding a
+        // control on the display ticker is what made the map tiles unclickable.
+        if (s.Handoff.Running && !s.Handoff.Expired && HandoffClock.Visibility
+                == Visibility.Visible)
+        {
+            var oppName = s.Seats.TryGetValue(s.Your_Side == "A" ? "B" : "A",
+                                              out var o) ? o : Loc.T("draft.them");
+            var rest = TimeSpan.FromSeconds(s.Handoff.SecondsLeftNow)
+                               .ToString(@"m\:ss");
+            HandoffClock.Text = s.ClockOnYou
+                ? Loc.T(s.Handoff.Phase == "host" ? "handoff.clock_host"
+                                                  : "handoff.clock_guest", rest)
+                : Loc.T("handoff.clock_waiting", oppName, rest);
+        }
+
+        if (s.Done || s.Cancelled || !s.Full) return;
         var left = s.SecondsLeftNow;
         TimerBar.Width = Math.Max(0, Math.Min(200, 200 * left / 30.0));
         TimerBar.Background = (Brush)FindResource(left <= 5 ? "Loss" : "Accent");

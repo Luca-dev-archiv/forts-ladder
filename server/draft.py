@@ -95,6 +95,19 @@ class DraftSession:
     voided_games: set[int] = field(default_factory=set)
     #: Set when both sides agreed to throw the whole series away.
     voided: bool = False
+    #: When the draft finished, when the lobby appeared, and when the guest
+    #: reported being in it. The three stamps the handoff clock is made of.
+    done_at: float | None = None
+    lobby_at: float | None = None
+    guest_ready_at: float | None = None
+    #: Extra time both sides agreed to. A game that will not start is usually a
+    #: port or a Steam problem, and the answer to that is more time.
+    extra_seconds: float = 0.0
+    #: Side that has asked for more time and is waiting to be granted it.
+    extension_asked_by: str | None = None
+    #: The host wrote lobby settings into a running Forts, which only reads them
+    #: at start — so the password the guest is waiting for does not exist yet.
+    host_restart_pending: bool = False
     #: Set when a decided series was closed out. Until then it counts as open,
     #: and an open series is what keeps both players out of the queue — a match
     #: that is still being played is not a match you may leave for another.
@@ -114,6 +127,90 @@ class DraftSession:
         """
         return (self.concluded or self.cancelled or self.aborted
                 or self.voided)
+
+    #: Wall clock, deliberately not the engine's monotonic one.
+    #:
+    #: The engine measures step deadlines, which only matter while the process
+    #: lives, so monotonic is right there. These stamps are written to the
+    #: database and read back after a restart, where a monotonic value means
+    #: nothing at all.
+    _now = staticmethod(time.time)
+
+    #: How long each half of the handoff gets, and what an agreed extension
+    #: adds. Three minutes is enough to open a lobby and click a link, and short
+    #: enough that nobody spends their evening waiting on somebody who left.
+    HOST_WINDOW_S = 180.0
+    JOIN_WINDOW_S = 180.0
+    EXTENSION_S = 120.0
+
+    def handoff(self) -> dict:
+        """Which half of the handoff is running, and how long is left.
+
+        One clock, on the server. Two clients counting their own would disagree
+        about when it ran out, which is the one thing a deadline may not do.
+        """
+        if not self.draft.done or self.settled or self.done_at is None:
+            return {"phase": "none", "on": None, "seconds_left": None,
+                    "expired": False, "deadline_s": None}
+
+        host = self.assigned_host()
+        if self.lobby_at is None:
+            phase, on, started, window = "host", host, self.done_at, \
+                self.HOST_WINDOW_S
+        elif self.guest_ready_at is None:
+            guest = "B" if host == "A" else "A"
+            phase, on, started, window = "guest", guest, self.lobby_at, \
+                self.JOIN_WINDOW_S
+        else:
+            return {"phase": "playing", "on": None, "seconds_left": None,
+                    "expired": False, "deadline_s": None}
+
+        window += self.extra_seconds
+        left = started + window - self._now()
+        return {"phase": phase, "on": on,
+                "seconds_left": max(0, round(left)),
+                "expired": left <= 0, "deadline_s": round(window)}
+
+    def late_side(self) -> str | None:
+        """Whose deadline has run out, if anybody's."""
+        h = self.handoff()
+        return h["on"] if h["expired"] else None
+
+    def ask_extension(self, account: Account) -> dict:
+        """Ask the other side for two more minutes.
+
+        Asked of the opponent rather than taken, because the time comes out of
+        their evening. Whoever is waiting can grant it with one click; whoever is
+        late cannot grant it to themselves.
+        """
+        seat = self.seat_of(account)
+        h = self.handoff()
+        if h["phase"] in ("none", "playing"):
+            raise AuthError("there is nothing waiting on a clock right now")
+        self.extension_asked_by = seat.side.value
+        return self.public_state(account)
+
+    def grant_extension(self, account: Account) -> dict:
+        """Agree to the extra time. Only the *other* side may."""
+        seat = self.seat_of(account)
+        if self.extension_asked_by is None:
+            raise AuthError("nobody asked for more time")
+        if self.extension_asked_by == seat.side.value:
+            raise AuthError("the other side has to agree to this")
+        self.extra_seconds += self.EXTENSION_S
+        self.extension_asked_by = None
+        return self.public_state(account)
+
+    def note_ready(self, account: Account) -> dict:
+        """The guest is in the lobby. Stops the join clock.
+
+        Reported by the client that got in, because it is the only one that
+        knows: the host sees a player connect but not which ladder account it is.
+        """
+        self.seat_of(account)
+        if self.lobby_at is not None and self.guest_ready_at is None:
+            self.guest_ready_at = self._now()
+        return self.public_state(account)
 
     def can_conclude(self) -> bool:
         """Whether the series is finished but not yet closed out.
@@ -153,7 +250,15 @@ class DraftSession:
         """
         if account.id not in self.seats or self.series_id is None:
             return False
-        return not self.settled and self.full()
+        if self.settled or not self.full():
+            return False
+        # Whoever was kept waiting leaves for free. Charging them for the other
+        # side's silence would be exactly backwards, and it is the reason the
+        # handoff needed a clock in the first place.
+        late = self.late_side()
+        if late is not None and late != self.seats[account.id].side.value:
+            return False
+        return True
 
     # ------------------------------------------------------------------ Seats
     def seat_of(self, account: Account) -> Seat:
@@ -242,6 +347,13 @@ class DraftSession:
             # Whether this series is over, and whether it is this viewer's turn
             # to say so. Without it the client cannot tell a series that is
             # waiting for a game from one that is waiting for a click.
+            # The handoff clock, so both clients count down the same number.
+            "handoff": self.handoff(),
+            "extension_asked_by": self.extension_asked_by,
+            # The host wrote settings into a running Forts, which only reads them
+            # at start. Carried so the *guest* learns why no password arrived —
+            # they cannot see the other machine.
+            "host_restart_pending": self.host_restart_pending,
             "concluded": self.concluded,
             "can_conclude": self.can_conclude(),
             "settled": self.settled,
@@ -565,6 +677,9 @@ class DraftSession:
         if host is not None and host != seat.side.value:
             raise AuthError(f"side {host} is hosting this series")
         self.lobby_id = int(lobby_id)
+        # Starts the guest's half of the handoff clock.
+        if self.lobby_at is None:
+            self.lobby_at = self._now()
         self.lobby_host = seat.side.value
         self.lobby_host_steam = account.steam_id
         if password:
@@ -590,6 +705,7 @@ class DraftSession:
             self.draft.apply(value, seat.side)
         except ValueError as e:
             raise AuthError(str(e)) from e
+        self._note_done()
         return self.public_state(account)
 
     def tick(self) -> list[str]:
@@ -603,7 +719,19 @@ class DraftSession:
         """
         if not self.full() or self.cancelled:
             return []
-        return self.draft.tick()
+        moved = self.draft.tick()
+        self._note_done()
+        return moved
+
+    def _note_done(self) -> None:
+        """Start the handoff clock the moment the draft is finished.
+
+        Stamped from both the move path and the timeout path: a draft whose last
+        step was decided by the clock is just as finished, and would otherwise
+        have got no deadline at all.
+        """
+        if self.draft.done and self.done_at is None:
+            self.done_at = self._now()
 
 
 class DraftService:
@@ -699,6 +827,10 @@ class DraftService:
                              aborted_reason=row.get("aborted_reason"),
                              voided=bool(row.get("voided")),
                              concluded=bool(row.get("concluded")),
+                             done_at=row.get("done_at"),
+                             lobby_at=row.get("lobby_at"),
+                             guest_ready_at=row.get("guest_ready_at"),
+                             extra_seconds=row.get("extra_seconds") or 0.0,
                              voided_games=set(row.get("voided_games") or []))
             for seat in row["seats"]:
                 s.seats[seat["account_id"]] = Seat(

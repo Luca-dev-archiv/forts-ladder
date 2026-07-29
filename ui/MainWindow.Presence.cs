@@ -43,6 +43,21 @@ public partial class MainWindow
     }
 
     /// <summary>
+    /// The server rejected the session we were holding.
+    ///
+    /// Said once, plainly, in the place people are looking: "not connected" sent
+    /// somebody hunting for a network problem when the fix was to sign in.
+    /// </summary>
+    private void OnSignedOut()
+    {
+        ShowOnline(null);
+        QueueError.Text = ErrorCodes.Text(ErrorCodes.SessionExpired);
+        AccountLine.Text = Loc.T("queue.not_signed_in");
+        BtnLinkSteam.Visibility = Visibility.Collapsed;
+        BtnConsent.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
     /// Draw the count. `null` means unknown, which is not the same as zero:
     /// "0 online" while the server is unreachable is a lie about the community
     /// rather than about the connection.
@@ -51,7 +66,10 @@ public partial class MainWindow
     {
         if (online is null)
         {
-            OnlineText.Text = Loc.T("presence.unknown");
+            // Two different problems, two different sentences. "Not connected"
+            // for a missing sign-in sent people looking at their router.
+            OnlineText.Text = Loc.T(_api.Configured && !_api.LoggedIn
+                ? "presence.signed_out" : "presence.unknown");
             OnlineText.Foreground = BrushFor("TextMid");
             OnlineDot.Fill = BrushFor("TextMid");
             return;

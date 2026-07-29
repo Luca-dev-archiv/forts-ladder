@@ -56,6 +56,10 @@ class QueueService:
         #: player id -> how many series they have walked out of, so the second
         #: time costs more than the first.
         self.dodges: dict[str, int] = {}
+        #: One offence ledger shared by every mode's queue. Per queue it would
+        #: reset by switching from ranked to unranked and back, which would make
+        #: the escalating cooldown something you can opt out of.
+        self.offences: dict = {}
         #: player id -> when they last asked about the queue. The client polls
         #: every second while searching, so this is a heartbeat that costs
         #: nothing extra.
@@ -165,7 +169,9 @@ class QueueService:
                 f"{mode_key} cannot be queued yet — team modes need whole sides "
                 "paired, not two individuals")
         if mode_key not in self.queues:
-            self.queues[mode_key] = Queue()
+            # The same ledger for every mode: a cooldown you can shed by
+            # switching from ranked to unranked is not a cooldown.
+            self.queues[mode_key] = Queue(offences=self.offences)
         return self.queues[mode_key]
 
     def configure(self, map_pool: list[str], commander_pool: list[str]) -> None:

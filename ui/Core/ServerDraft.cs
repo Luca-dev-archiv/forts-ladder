@@ -153,6 +153,7 @@ public sealed class ServerDraft : IDisposable
             if (next is not null)
             {
                 next.ReceivedAt = DateTime.UtcNow;
+        next.Handoff.ReceivedAt = next.ReceivedAt;
                 var same = State is not null && Signature(State) == Signature(next);
                 State = next;
                 LastError = null;
@@ -214,6 +215,8 @@ public sealed class ServerDraft : IDisposable
         s.Step_Index, s.Waiting_On, s.Action, s.Done, s.Cancelled, s.Full,
         s.Your_Side, s.Your_Pending_Pick, s.Lobby_Id, s.Lobby_Host,
         s.Revealed_Through, s.Voided, s.Series_Over, s.Aborted,
+        s.Handoff.Phase, s.Handoff.Expired, s.Extension_Asked_By,
+        s.Host_Restart_Pending,
         s.Lobby_Password,
         string.Join(",", s.Voided_Games),
         string.Join(",", s.Wins.OrderBy(kv => kv.Key)
@@ -253,6 +256,31 @@ public sealed class ServerDraft : IDisposable
         return ok;
     }
 
+    /// <summary>Ask the other side for two more minutes of handoff time.</summary>
+    public Task<bool> AskExtensionAsync() => PostStateAsync("extend");
+
+    /// <summary>Grant the two minutes they asked for.</summary>
+    public Task<bool> GrantExtensionAsync() => PostStateAsync("extend/grant");
+
+    /// <summary>Report being in the lobby, which stops the join clock.
+    ///
+    /// Sent by the client that got in, because it is the only one that knows:
+    /// the host sees a player connect but not which ladder account it is.</summary>
+    public Task<bool> NoteReadyAsync() => PostStateAsync("ready");
+
+    /// <summary>One of the small POSTs that just return the new state.</summary>
+    private async Task<bool> PostStateAsync(string what)
+    {
+        if (DraftId is null) return false;
+        var next = await _api.PostAsync<DraftStateDto>($"/drafts/{DraftId}/{what}");
+        if (next is null) { LastError = _api.LastError; return false; }
+        next.ReceivedAt = DateTime.UtcNow;
+        next.Handoff.ReceivedAt = next.ReceivedAt;
+        State = next;
+        Changed?.Invoke();
+        return true;
+    }
+
     /// <summary>
     /// Close out a decided series.
     ///
@@ -266,6 +294,7 @@ public sealed class ServerDraft : IDisposable
             $"/drafts/{DraftId}/conclude");
         if (next is null) { LastError = _api.LastError; return false; }
         next.ReceivedAt = DateTime.UtcNow;
+        next.Handoff.ReceivedAt = next.ReceivedAt;
         State = next;
         Changed?.Invoke();
         return true;
@@ -283,6 +312,7 @@ public sealed class ServerDraft : IDisposable
         var next = await _api.PostAsync<DraftStateDto>($"/drafts/{DraftId}/host");
         if (next is null) { LastError = _api.LastError; return false; }
         next.ReceivedAt = DateTime.UtcNow;
+        next.Handoff.ReceivedAt = next.ReceivedAt;
         State = next;
         Changed?.Invoke();
         return true;
@@ -294,12 +324,17 @@ public sealed class ServerDraft : IDisposable
     /// Sent as a string: 64-bit lobby ids do not survive being parsed as JSON
     /// numbers, and a rounded id matches no game.
     /// </summary>
-    public async Task<bool> SetLobbyAsync(ulong lobbyId, string? password = null)
+    public async Task<bool> SetLobbyAsync(ulong lobbyId, string? password = null,
+                                         bool restartPending = false)
     {
         if (DraftId is null) return false;
         var next = await _api.PostAsync<DraftStateDto>(
             $"/drafts/{DraftId}/lobby",
-            new { lobby_id = lobbyId.ToString(), password });
+            new
+            {
+                lobby_id = lobbyId.ToString(), password,
+                restart_pending = restartPending,
+            });
         if (next is null)
         {
             LastError = _api.LastError;
@@ -335,6 +370,7 @@ public sealed class ServerDraft : IDisposable
             });
         if (next is null) { LastError = _api.LastError; return false; }
         next.ReceivedAt = DateTime.UtcNow;
+        next.Handoff.ReceivedAt = next.ReceivedAt;
         State = next;
         Changed?.Invoke();
         return true;
@@ -351,6 +387,7 @@ public sealed class ServerDraft : IDisposable
             $"/drafts/{DraftId}/void", new { scope, reason });
         if (next is null) { LastError = _api.LastError; return false; }
         next.ReceivedAt = DateTime.UtcNow;
+        next.Handoff.ReceivedAt = next.ReceivedAt;
         State = next;
         Changed?.Invoke();
         return true;

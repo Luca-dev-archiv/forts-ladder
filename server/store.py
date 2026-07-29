@@ -233,6 +233,12 @@ class Store:
             # A closed-out series. Without this a restart reopens every decided
             # series and locks both players out of the queue again.
             ("concluded", "INTEGER NOT NULL DEFAULT 0"),
+            # The handoff clock. Wall-clock stamps on purpose: a redeploy in the
+            # middle of a handoff must not silently reset or expire it.
+            ("done_at", "REAL"),
+            ("lobby_at", "REAL"),
+            ("guest_ready_at", "REAL"),
+            ("extra_seconds", "REAL NOT NULL DEFAULT 0"),
         ],
     }
 
@@ -398,9 +404,10 @@ class Store:
                     series_id, created_at, lobby_id, lobby_host, cancelled_by,
                     lobby_host_steam, voided, voided_games, results,
                     lobby_password, aborted_side, aborted_reason,
-                    concluded)
+                    concluded, done_at, lobby_at, guest_ready_at,
+                    extra_seconds)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?)
+                       ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    join_code=excluded.join_code,
                    lobby_id=excluded.lobby_id,
@@ -413,7 +420,11 @@ class Store:
                    lobby_password=excluded.lobby_password,
                    aborted_side=excluded.aborted_side,
                    aborted_reason=excluded.aborted_reason,
-                   concluded=excluded.concluded""",
+                   concluded=excluded.concluded,
+                   done_at=excluded.done_at,
+                   lobby_at=excluded.lobby_at,
+                   guest_ready_at=excluded.guest_ready_at,
+                   extra_seconds=excluded.extra_seconds""",
             (session.id, session.join_code,
              json.dumps(session.original_map_pool or d.map_pool),
              json.dumps(d.commander_pool), d.best_of,
@@ -425,7 +436,9 @@ class Store:
              json.dumps({str(g): s.value
                          for g, s in session.draft._results.items()}),
              session.lobby_password, session.aborted_side,
-             session.aborted_reason, int(session.concluded)))
+             session.aborted_reason, int(session.concluded),
+             session.done_at, session.lobby_at, session.guest_ready_at,
+             session.extra_seconds))
 
         self.db.execute("DELETE FROM draft_seats WHERE draft_id = ?", (session.id,))
         self.db.executemany(
@@ -469,6 +482,10 @@ class Store:
                 "aborted_reason": r["aborted_reason"],
                 "voided": bool(r["voided"]),
                 "concluded": bool(r["concluded"]),
+                "done_at": r["done_at"],
+                "lobby_at": r["lobby_at"],
+                "guest_ready_at": r["guest_ready_at"],
+                "extra_seconds": r["extra_seconds"] or 0.0,
                 "voided_games": json.loads(r["voided_games"]),
                 "results": json.loads(r["results"]),
                 "cancelled_by": r["cancelled_by"],

@@ -130,6 +130,24 @@ public sealed class MatchRecord
         {
             if (!string.IsNullOrEmpty(Replay))
                 return "replay:" + Path.GetFileName(Replay.Replace('\\', '/'));
+            return ReportKey;
+        }
+    }
+
+    /// <summary>
+    /// Identity that does not change when the replay name turns up.
+    ///
+    /// <see cref="Key"/> switches to the replay filename as soon as one exists,
+    /// which makes it useless for "have I already reported this game?": the
+    /// answer changes halfway through. This one is built from what the game did
+    /// — the map, who played, when each fort fell, how long it lasted — so the
+    /// result event and the replay event agree, and two different games never
+    /// collide.
+    /// </summary>
+    public string ReportKey
+    {
+        get
+        {
             var ids = Players.Values
                 .Select(p => string.IsNullOrEmpty(p.SteamId) ? p.Name : p.SteamId)
                 .OrderBy(x => x, StringComparer.Ordinal);

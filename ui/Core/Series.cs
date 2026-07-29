@@ -282,9 +282,11 @@ public sealed class Series
     public static List<Series> Group(IEnumerable<MatchRecord> matches,
                                      TimeSpan? gap = null,
                                      string? mySteamId = null,
-                                     IReadOnlySet<ulong>? sealedLobbies = null)
+                                     IReadOnlySet<ulong>? sealedLobbies = null,
+                                     IReadOnlyDictionary<string, string>? draftedGames = null)
     {
         sealedLobbies ??= new HashSet<ulong>();
+        draftedGames ??= new Dictionary<string, string>();
         var maxGap = gap ?? TimeSpan.FromHours(3);
         var playable = matches
             .Where(m => m.Players.Values.Count(p => !string.IsNullOrEmpty(p.SteamId)) >= 2
@@ -300,9 +302,19 @@ public sealed class Series
 
         foreach (var m in playable)
         {
+            // What the ladder itself recorded, before any guessing.
+            //
+            // A client that is not hosting has no lobby id in its log at all, so
+            // every one of its games used to fall through to "same two people
+            // within three hours" — and got appended to whichever series was
+            // last, drafted or not. For a game this client reported there is
+            // nothing to guess about: it knew the series at the time.
+            var known = draftedGames.TryGetValue(m.ReportKey, out var sid)
+                ? "series:" + sid : null;
             // The lobby id goes into the key together with the roster: a
             // lobby can stay up all evening while the opponents change.
-            var key = m.LobbyId is not null ? $"lobby:{m.LobbyId}:{Roster(m)}" : null;
+            var key = known
+                      ?? (m.LobbyId is not null ? $"lobby:{m.LobbyId}:{Roster(m)}" : null);
             if (key is not null)
             {
                 if (!byKey.TryGetValue(key, out var s))
@@ -342,7 +354,12 @@ public sealed class Series
         // A series played in a lobby the ladder set up is sealed: its boundary
         // is known rather than guessed, so it neither absorbs nor is absorbed.
         bool Sealed(Series s) => s.Matches.Any(
-            m => m.LobbyId is not null && sealedLobbies.Contains(m.LobbyId.Value));
+            m => m.LobbyId is not null && sealedLobbies.Contains(m.LobbyId.Value))
+            || s.Matches.Any(m => draftedGames.ContainsKey(m.ReportKey));
+        // The series id the ladder recorded for these games, if it did.
+        string? SeriesIdOf(Series s) => s.Matches
+            .Select(m => draftedGames.TryGetValue(m.ReportKey, out var x) ? x : null)
+            .FirstOrDefault(x => x is not null);
         ulong? LobbyOf(Series s) => s.Matches
             .Select(m => m.LobbyId).FirstOrDefault(x => x is not null);
 
@@ -358,6 +375,16 @@ public sealed class Series
             if (wouldMerge && (Sealed(s) || Sealed(prev!))
                 && LobbyOf(s) != LobbyOf(prev!))
                 wouldMerge = false;
+            // Two recorded series ids are two series, full stop. This is the
+            // one case where nothing is being inferred: the ladder wrote both
+            // ids down as the games were reported.
+            if (wouldMerge)
+            {
+                var here = SeriesIdOf(s);
+                var there = SeriesIdOf(prev!);
+                if (here is not null && there is not null && here != there)
+                    wouldMerge = false;
+            }
 
             if (wouldMerge)
             {

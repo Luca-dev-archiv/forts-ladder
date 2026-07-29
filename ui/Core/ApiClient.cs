@@ -48,6 +48,29 @@ public sealed class ApiClient
     public string? Token { get; private set; }
     public bool LoggedIn => !string.IsNullOrWhiteSpace(Token);
 
+    /// <summary>
+    /// Raised when the server rejected the session we were holding.
+    ///
+    /// Being signed in used to mean "a token file exists", which is a claim and
+    /// not a fact: after the session expired or was revoked, every call failed
+    /// with a bare 401 and the client went on believing it was signed in. The
+    /// dead token is dropped here so the next thing the person sees is "sign in
+    /// again" rather than the same error for the rest of the evening.
+    /// </summary>
+    public event Action? SignedOut;
+
+    /// <summary>Retire a token the server no longer accepts.</summary>
+    private void Invalidate()
+    {
+        if (Token is null) return;
+        Token = null;
+        _http.DefaultRequestHeaders.Authorization = null;
+        try { if (File.Exists(TokenPath)) File.Delete(TokenPath); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        SignedOut?.Invoke();
+    }
+
     private static string SettingsPath =>
         Path.Combine(Path.GetDirectoryName(IdentityStore.DefaultPath())
                      ?? AppContext.BaseDirectory, "server.txt");
@@ -149,7 +172,7 @@ public sealed class ApiClient
         {
             // Server down, wrong address, garbage response — all the same to
             // the user: it does not work, and here is why.
-            LastError = ex.Message;
+            LastError = Unreachable(ex);
             return default;
         }
     }
@@ -173,7 +196,7 @@ public sealed class ApiClient
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
                                       or JsonException)
         {
-            LastError = ex.Message;
+            LastError = Unreachable(ex);
             return default;
         }
     }
@@ -200,7 +223,7 @@ public sealed class ApiClient
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
                                       or JsonException)
         {
-            LastError = ex.Message;
+            LastError = Unreachable(ex);
             return default;
         }
     }
@@ -219,26 +242,64 @@ public sealed class ApiClient
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            LastError = ex.Message;
+            LastError = Unreachable(ex);
             return false;
         }
     }
 
     /// <summary>
-    /// The server puts the reason in `detail`; showing the raw JSON instead
-    /// would hide a perfectly good explanation behind punctuation.
+    /// Turn a failed reply into something a person can act on.
+    ///
+    /// Three things, in order of how much they help: the code, so it can be
+    /// quoted in Discord and looked up in docs/error-codes.md; what to do about
+    /// it; and only then the server's own words, because `detail` is written for
+    /// whoever wrote the route.
+    ///
+    /// A 401 also retires the token — the session is gone, and repeating the
+    /// call cannot fix that.
     /// </summary>
-    private static string Describe(System.Net.HttpStatusCode code, string body)
+    private string Describe(System.Net.HttpStatusCode code, string body)
+    {
+        var detail = Detail(body);
+        switch ((int)code)
+        {
+            case 401:
+                Invalidate();
+                return ErrorCodes.Text(ErrorCodes.SessionExpired);
+            case 403:
+                return ErrorCodes.Text(ErrorCodes.NotAllowed, detail);
+            case 404:
+                return ErrorCodes.Text(ErrorCodes.NotThere, detail);
+            case 409:
+                return ErrorCodes.Text(ErrorCodes.Conflict, detail);
+            case 400:
+            case 422:
+                return ErrorCodes.Text(ErrorCodes.Refused, detail);
+        }
+        if ((int)code >= 500)
+            return ErrorCodes.Text(ErrorCodes.ServerBroke, detail);
+        return ErrorCodes.Text(ErrorCodes.Unexpected, $"HTTP {(int)code} {detail}");
+    }
+
+    /// <summary>
+    /// Nothing answered. Named apart from a refusal because the fix is
+    /// different: one is about permission, the other about the network.
+    /// </summary>
+    private string Unreachable(Exception ex)
+        => ErrorCodes.Text(ErrorCodes.NoServer, $"{BaseUrl} — {ex.Message}");
+
+    /// <summary>The server's own explanation, if it sent one.</summary>
+    private static string Detail(string body)
     {
         try
         {
             using var doc = JsonDocument.Parse(body);
             if (doc.RootElement.TryGetProperty("detail", out var d)
                 && d.ValueKind == JsonValueKind.String)
-                return d.GetString() ?? $"HTTP {(int)code}";
+                return d.GetString() ?? "";
         }
         catch (JsonException) { }
-        return $"HTTP {(int)code}: {body}";
+        return body.Length > 200 ? body[..200] : body;
     }
 
     public async Task<bool> PostAsync(string path)
@@ -249,12 +310,14 @@ public sealed class ApiClient
         {
             var r = await _http.PostAsync($"{BaseUrl}{path}", null);
             if (r.IsSuccessStatusCode) return true;
-            LastError = $"HTTP {(int)r.StatusCode}: {await r.Content.ReadAsStringAsync()}";
+            // Through Describe like every other call. This one produced the raw
+            // `HTTP 401: {"detail":"not logged in"}` the spectate button showed.
+            LastError = Describe(r.StatusCode, await r.Content.ReadAsStringAsync());
             return false;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            LastError = ex.Message;
+            LastError = Unreachable(ex);
             return false;
         }
     }
@@ -342,6 +405,23 @@ public sealed class DraftStateDto
     /// <summary>Whether leaving from here costs a cooldown. Asked so the warning
     /// comes before the click and not after it.</summary>
     public bool Leaving_Penalised { get; set; }
+
+    /// <summary>The handoff clock, kept by the server so both clients count the
+    /// same number down. Two clients counting their own would disagree about
+    /// when it ran out, which is the one thing a deadline may not do.</summary>
+    public HandoffDto Handoff { get; set; } = new();
+
+    /// <summary>Side that has asked for two more minutes, waiting to be
+    /// granted them by the other.</summary>
+    public string? Extension_Asked_By { get; set; }
+
+    /// <summary>The host wrote lobby settings into a running Forts, which only
+    /// reads them at start — so the password the guest is waiting for does not
+    /// exist in the running game.</summary>
+    public bool Host_Restart_Pending { get; set; }
+
+    /// <summary>Is this client the one the clock is on?</summary>
+    public bool ClockOnYou => Handoff.On is not null && Handoff.On == Your_Side;
 
     /// <summary>
     /// The lobby password, for the two players only.
@@ -575,6 +655,34 @@ public sealed class QueueModesDto
 /// A count and never a list: people agreed to have their matches tracked, which
 /// is not the same as publishing when they are sitting at their computer.
 /// </summary>
+/// <summary>
+/// One half of the handoff and how long is left in it.
+///
+/// `phase` is "none" before the draft is finished, "host" while the lobby is
+/// being opened, "guest" while it is being joined, and "playing" once both are
+/// in. `on` is the side the clock is running against.
+/// </summary>
+public sealed class HandoffDto
+{
+    public string Phase { get; set; } = "none";
+    public string? On { get; set; }
+    public int? Seconds_Left { get; set; }
+    public int? Deadline_S { get; set; }
+    public bool Expired { get; set; }
+
+    /// <summary>When this answer arrived, so the seconds can keep moving
+    /// between polls instead of standing still and then jumping.</summary>
+    public DateTime ReceivedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>Counted down locally and never rounded up: a countdown that
+    /// claims more time than exists is the one error that costs a match.</summary>
+    public int SecondsLeftNow => Seconds_Left is null ? 0 : Math.Max(0,
+        Seconds_Left.Value
+        - (int)Math.Max(0, (DateTime.UtcNow - ReceivedAt).TotalSeconds));
+
+    public bool Running => Phase is "host" or "guest";
+}
+
 public sealed class PresenceDto
 {
     public int Online { get; set; }
@@ -590,6 +698,13 @@ public sealed class LiveMatchDto
     public bool Accepting_Requests { get; set; }
     public int Running_For_S { get; set; }
     public string? Tournament { get; set; }
+
+    /// <summary>You are playing in this one.
+    ///
+    /// Decided by the server: the listing has no lobby id, and the guest of a
+    /// series is not recorded on the match at all, so a client cannot tell.
+    /// </summary>
+    public bool Yours { get; set; }
 }
 
 public sealed class LiveListDto

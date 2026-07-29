@@ -297,9 +297,13 @@
                     <Button x:Name="BtnAccept" Content="{core:T queue.accept}"
                             Style="{StaticResource BtnAccent}" Padding="26,9"
                             FontWeight="Bold" Click="BtnAccept_Click"/>
+                    <!-- The queue's own handler. This was wired to the
+                         *observer* decline, which reads a request id off the
+                         button's Tag, found none, and returned without doing
+                         anything — so declining a match silently did nothing. -->
                     <Button x:Name="BtnDecline" Content="{core:T queue.decline}"
                             Style="{StaticResource Btn}" Padding="18,9"
-                            Margin="8,0,0,0" Click="BtnDeclineObserver_Click"/>
+                            Margin="8,0,0,0" Click="BtnDecline_Click"/>
                   </StackPanel>
                 </StackPanel>
               </Border>
@@ -768,6 +772,33 @@
                   <Button x:Name="BtnHostLobby" Content="{core:T handoff.host}"
                           Style="{StaticResource BtnAccent}" Padding="14,8"
                           Margin="8,0,0,0" Click="BtnHostLobby_Click"/>
+                  <!-- The handoff clock. Both sides see the same number: it
+                       comes from the server, because two clients counting their
+                       own would disagree about when it ran out. -->
+                  <TextBlock x:Name="HandoffClock" FontSize="12" Margin="0,4,0,0"
+                             TextWrapping="Wrap" Visibility="Collapsed"
+                             Foreground="{StaticResource Warn}"/>
+                  <Button x:Name="BtnAskTime" Style="{StaticResource Btn}"
+                          Padding="10,3" FontSize="11" Margin="0,4,0,0"
+                          HorizontalAlignment="Left" Visibility="Collapsed"
+                          Content="{core:T handoff.ask_time}"
+                          Click="BtnAskTime_Click"/>
+                  <Button x:Name="BtnGrantTime" Style="{StaticResource BtnAccent}"
+                          Padding="10,3" FontSize="11" Margin="0,4,0,0"
+                          HorizontalAlignment="Left" Visibility="Collapsed"
+                          Click="BtnGrantTime_Click"/>
+                  <!-- Forts reads its multiplayer settings at start and only
+                       then, so writing them into a running game changes
+                       nothing — and the guest waits for a password that does
+                       not exist. -->
+                  <TextBlock x:Name="RestartWarning" FontSize="12" Margin="0,6,0,0"
+                             TextWrapping="Wrap" Visibility="Collapsed"
+                             Foreground="{StaticResource Loss}"/>
+                  <Button x:Name="BtnCloseForts" Style="{StaticResource Btn}"
+                          Padding="10,3" FontSize="11" Margin="0,4,0,0"
+                          HorizontalAlignment="Left" Visibility="Collapsed"
+                          Content="{core:T handoff.close_forts}"
+                          Click="BtnCloseForts_Click"/>
                   <Button x:Name="BtnCopyPassword" Content="{core:T handoff.copy_password}"
                           Style="{StaticResource Btn}" Padding="12,8"
                           Margin="8,0,0,0" Visibility="Collapsed"

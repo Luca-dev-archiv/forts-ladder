@@ -542,6 +542,46 @@ def test_a_player_cannot_plan_a_tournament():
                          data={"do": "add", "name": "X"}).status_code == 403
 
 
+# ------------------------------------------------------- Watching your own match
+# A spectator sees both forts. In your own series that is the one thing the blind
+# pick exists to hide, so it would also be a way round every other rule about
+# who may watch what.
+def published(w: World, headers: dict, lobby: int = 4242) -> str:
+    r = w.client.post("/live", headers=headers, json={
+        "mode_key": "unranked_1v1", "mode_label": "Unranked 1v1",
+        "players": ["one", "two"], "slots_used": 2, "slots_total": 9,
+        "lobby_id": lobby})
+    assert r.status_code == 200, r.text[:200]
+    return r.json()["match_id"]
+
+
+def test_the_host_cannot_watch_their_own_match():
+    w = World()
+    _, host = w.person("Host")
+    mid = published(w, host)
+    r = w.client.post(f"/live/{mid}/observe", headers=host)
+    assert r.status_code == 403, r.status_code
+    assert "playing in this match" in r.text
+
+
+def test_the_listing_marks_your_own_match_for_you_and_not_for_others():
+    w = World()
+    _, host = w.person("Host")
+    _, other = w.person("Someone")
+    mid = published(w, host, lobby=5150)
+
+    def row(headers):
+        rows = w.client.get("/live", headers=headers).json()["matches"]
+        return next(x for x in rows if x["id"] == mid)
+
+    assert row(host)["yours"] is True
+    assert row(other)["yours"] is False
+    # Still public, and still without the lobby id for anyone not admitted.
+    anon = w.client.get("/live").json()["matches"]
+    assert next(x for x in anon if x["id"] == mid)["yours"] is False
+    assert "lobby_id" not in next(x for x in anon if x["id"] == mid)
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

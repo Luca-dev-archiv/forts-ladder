@@ -1084,6 +1084,97 @@ def test_presence_forgets_a_logout_at_once():
     assert not p.is_online("one")
 
 
+# ------------------------------------------------------- The handoff clock
+# Between a finished draft and a running game there was no clock at all: one
+# side could simply not host, and the other had nothing to do but sit there —
+# held out of the queue, and charged a cooldown for leaving somebody else's
+# silence.
+def handing_off():
+    """A queue match, drafted, with a controllable wall clock."""
+    q, clock, s, a, b = queue_match()
+    stamp = [1000.0]
+    s._now = lambda: stamp[0]
+    # The draft finished before the clock was swapped in, so re-stamp it.
+    s.done_at = stamp[0]
+    return s, a, b, stamp
+
+
+def test_the_host_has_three_minutes_to_open_the_lobby():
+    s, a, b, stamp = handing_off()
+    h = s.handoff()
+    assert h["phase"] == "host" and h["on"] == "A", h
+    assert h["seconds_left"] == 180 and not h["expired"]
+
+    stamp[0] += 179
+    assert s.handoff()["seconds_left"] == 1
+    stamp[0] += 2
+    assert s.handoff()["expired"] and s.late_side() == "A"
+
+
+def test_naming_the_lobby_starts_the_guests_clock():
+    s, a, b, stamp = handing_off()
+    stamp[0] += 60
+    s.set_lobby(a, 4242, password="AB3KM")
+    h = s.handoff()
+    assert h["phase"] == "guest" and h["on"] == "B", h
+    assert h["seconds_left"] == 180, "the guest inherited what the host had left"
+
+
+def test_the_guest_reporting_in_stops_the_clock():
+    s, a, b, stamp = handing_off()
+    s.set_lobby(a, 4242)
+    s.note_ready(b)
+    h = s.handoff()
+    assert h["phase"] == "playing" and h["seconds_left"] is None
+    assert s.late_side() is None
+
+
+def test_both_sides_are_told_the_same_number():
+    """The whole reason the clock is on the server: two clients counting their
+    own would disagree about when it ran out."""
+    s, a, b, stamp = handing_off()
+    stamp[0] += 42
+    assert (s.public_state(a)["handoff"]["seconds_left"]
+            == s.public_state(b)["handoff"]["seconds_left"])
+
+
+def test_two_extra_minutes_can_be_asked_for_and_granted():
+    s, a, b, stamp = handing_off()
+    stamp[0] += 170
+    s.ask_extension(a)
+    assert s.public_state(b)["extension_asked_by"] == "A"
+    s.grant_extension(b)
+    assert s.handoff()["seconds_left"] == 180 + 120 - 170
+    assert s.public_state(a)["extension_asked_by"] is None
+
+
+def test_nobody_grants_themselves_more_time():
+    s, a, b, stamp = handing_off()
+    s.ask_extension(a)
+    try:
+        s.grant_extension(a)
+    except AuthError as e:
+        assert "other side" in str(e), str(e)
+    else:
+        raise AssertionError("a player extended their own deadline")
+
+
+def test_whoever_was_kept_waiting_leaves_for_free():
+    """Charging them for the other side's silence would be exactly backwards,
+    and it is the reason the handoff needed a clock."""
+    s, a, b, stamp = handing_off()
+    stamp[0] += 200                       # A never opened a lobby
+    assert s.late_side() == "A"
+    assert s.is_dodge(b) is False, "the waiting player was charged"
+    assert s.is_dodge(a) is True, "the late player got away with it"
+
+
+def test_a_running_clock_still_costs_the_leaver():
+    s, a, b, stamp = handing_off()
+    stamp[0] += 10
+    assert s.is_dodge(a) and s.is_dodge(b)
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

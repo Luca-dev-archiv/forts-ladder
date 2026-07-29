@@ -29,8 +29,22 @@ from .ratings import tier_of
 SEARCH_WINDOW = ((0, 100), (30, 200), (90, 350), (180, 600), (600, 10_000))
 
 ACCEPT_TIMEOUT_S = 25
-DECLINE_PENALTY_S = 120
-MISS_PENALTY_S = 600          # not reacting weighs more than declining
+
+#: The first cooldown for wasting somebody's accept window, and what each
+#: further one adds.
+#:
+#: Declining and letting the offer lapse cost the same, because to the player
+#: waiting they *are* the same: the match did not happen. Ten minutes for a
+#: missed offer was the old rule and it was punishment rather than deterrence —
+#: in a scene this size it ends an evening, and it lands hardest on somebody
+#: whose game crashed while the offer was on screen. Two minutes stops
+#: cherry-picking; the weight belongs on the pattern, so every repeat adds
+#: three more.
+PENALTY_BASE_S = 120
+PENALTY_STEP_S = 180
+#: A clean day wipes the record. Without a horizon the counter is a permanent
+#: mark for one bad evening months ago.
+PENALTY_FORGET_S = 24 * 3600
 
 
 def allowed_gap(waited_s: float) -> int:
@@ -46,6 +60,18 @@ class EntryState(str, Enum):
     PROPOSED = "proposed"
     PLAYING = "playing"
     LEFT = "left"
+
+
+@dataclass
+class Offences:
+    """How often somebody has wasted an offer, and when they last did.
+
+    Kept apart from `Entry` on purpose: an entry is created fresh on every join,
+    so a counter living there could be reset by leaving the queue and coming
+    back — which made the escalation opt-out.
+    """
+    count: int = 0
+    last_at: float = 0.0
 
 
 @dataclass
@@ -88,11 +114,31 @@ class Proposal:
 class Queue:
     """Queue for one ladder (open ladder or tournament mode)."""
 
-    def __init__(self, pair_cap: "PairCap | None" = None) -> None:
+    def __init__(self, pair_cap: "PairCap | None" = None,
+                 offences: "dict[str, Offences] | None" = None) -> None:
         self.entries: dict[str, Entry] = {}
         self.proposals: list[Proposal] = []
         self.pair_cap = pair_cap
         self.log: list[str] = []
+        #: Shared ledger, when the caller passes one. There is a queue per mode,
+        #: so a per-queue counter would reset by switching from ranked to
+        #: unranked and back.
+        self.offences: dict[str, Offences] = \
+            offences if offences is not None else {}
+
+    def _charge(self, player: str, now: float) -> float:
+        """Record an offence and return how long it blocks them.
+
+        One ledger for declining and for not reacting: the difference matters to
+        the person who did it and not at all to the person who was waiting.
+        """
+        rec = self.offences.get(player)
+        if rec is None or now - rec.last_at > PENALTY_FORGET_S:
+            rec = Offences()
+        rec.count += 1
+        rec.last_at = now
+        self.offences[player] = rec
+        return PENALTY_BASE_S + PENALTY_STEP_S * (rec.count - 1)
 
     # ---------------------------------------------------------- Joining
     def join(self, player: str, rating: float, now: float) -> Entry:
@@ -163,9 +209,10 @@ class Queue:
                     e.state = EntryState.SEARCHING
                 else:
                     e.state = EntryState.SEARCHING
-                    e.penalty_until = now + MISS_PENALTY_S
+                    block = self._charge(name, now)
+                    e.penalty_until = now + block
                     self.log.append(f"{now:.0f}: {name} did not react "
-                                    f"— {MISS_PENALTY_S}s block")
+                                    f"— {block:.0f}s block")
             self.proposals.remove(p)
 
     # -------------------------------------------------------- Responding
@@ -192,17 +239,18 @@ class Queue:
                 continue
             e.state = EntryState.SEARCHING
             if name == player:
-                e.declines += 1
                 # Repeated declining gets more expensive: once is an
                 # accident, three times is cherry-picking.
-                e.penalty_until = now + DECLINE_PENALTY_S * e.declines
+                e.declines += 1
+                block = self._charge(name, now)
+                e.penalty_until = now + block
             else:
                 # The other side did nothing wrong and keeps its waiting
                 # time so the search window does not snap back.
                 pass
         self.proposals.remove(p)
         self.log.append(f"{now:.0f}: {player} declined "
-                        f"({DECLINE_PENALTY_S * self.entries[player].declines}s block)")
+                        f"({self.entries[player].penalty_until - now:.0f}s block)")
 
     def _proposal_for(self, player: str) -> Proposal | None:
         return next((p for p in self.proposals if player in p.players), None)

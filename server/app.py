@@ -472,9 +472,19 @@ class PublishBody(BaseModel):
 
 
 @app.get("/live")
-def live_list():
-    """Public — without the lobby ID, which only admitted people get."""
-    return {"matches": live.listing()}
+def live_list(ladder_session: str | None = Cookie(None),
+              authorization: str | None = Header(None)):
+    """Public — without the lobby ID, which only admitted people get.
+
+    The session is read if there is one, purely to mark the caller's own match.
+    A client cannot work that out for itself: the listing carries no lobby id,
+    and the guest of a series is not recorded on the match at all.
+    """
+    acc = current(session_token(ladder_session, authorization))
+    rows = live.listing()
+    for row in rows:
+        row["yours"] = acc is not None and _plays_in(acc, row["id"])
+    return {"matches": rows}
 
 
 @app.post("/live")
@@ -536,10 +546,34 @@ def observer_terms():
     return {"terms": LiveService.OBSERVER_TERMS}
 
 
+def _plays_in(acc, match_id: str) -> bool:
+    """Whether this account is one of the players in that live match.
+
+    The host is known directly. The other side is not recorded on the match at
+    all — only display names are — so it is found through the series: a drafted
+    seat whose series is being played in this lobby is a player in it.
+    """
+    m = live.matches.get(match_id)
+    if m is None:
+        return False
+    if m.host_account_id == acc.id:
+        return True
+    if m.lobby_id is None:
+        return False
+    return any(acc.id in s.seats and not s.settled
+               and s.lobby_id == m.lobby_id
+               for s in drafts.sessions.values())
+
+
 @app.post("/live/{match_id}/observe")
 def observe(match_id: str, ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):
     acc = require(session_token(ladder_session, authorization))
+    # Watching your own match is not watching. It would also be a way around
+    # every rule above this one: a spectator slot in your own series shows you
+    # the opponent's fort, which is the one thing a blind pick is for.
+    if _plays_in(acc, match_id):
+        raise HTTPException(403, "you are playing in this match")
     r = guard(live.request_observer, acc, match_id)
     return {"request_id": r.id, "state": r.state.value, "reason": r.reason}
 
@@ -791,6 +825,50 @@ def draft_cancel(draft_id: str, ladder_session: str | None = Cookie(None),
     return state
 
 
+@app.post("/drafts/{draft_id}/extend")
+def draft_ask_extension(draft_id: str,
+                        ladder_session: str | None = Cookie(None),
+                        authorization: str | None = Header(None)):
+    """Ask the other side for two more minutes of handoff time.
+
+    A game that will not start is usually a port or a Steam problem rather than
+    a refusal, and the answer to that is more time — not a penalty.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    s = guard(drafts.get, draft_id)
+    state = guard(s.ask_extension, acc)
+    store.save_draft(s)
+    return state
+
+
+@app.post("/drafts/{draft_id}/extend/grant")
+def draft_grant_extension(draft_id: str,
+                          ladder_session: str | None = Cookie(None),
+                          authorization: str | None = Header(None)):
+    """Grant it. Only the side that was *not* asking may."""
+    acc = require(session_token(ladder_session, authorization))
+    s = guard(drafts.get, draft_id)
+    state = guard(s.grant_extension, acc)
+    store.save_draft(s)
+    return state
+
+
+@app.post("/drafts/{draft_id}/ready")
+def draft_note_ready(draft_id: str,
+                     ladder_session: str | None = Cookie(None),
+                     authorization: str | None = Header(None)):
+    """The guest is in the lobby, which stops the join clock.
+
+    Reported by the client that got in, because it is the only one that knows:
+    the host sees a player connect but not which ladder account it is.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    s = guard(drafts.get, draft_id)
+    state = guard(s.note_ready, acc)
+    store.save_draft(s)
+    return state
+
+
 @app.post("/drafts/{draft_id}/conclude")
 def draft_conclude(draft_id: str, ladder_session: str | None = Cookie(None),
                    authorization: str | None = Header(None)):
@@ -892,6 +970,11 @@ class LobbyBody(BaseModel):
     #: for it and the game asks on entry, so without this the guest is sent to a
     #: prompt for something only the host knows.
     password: str | None = None
+    #: The host wrote these settings into a *running* Forts, which reads them
+    #: only while starting. Carried so the guest learns why no password arrives
+    #: — they cannot see the other machine, and "he never sent it" was the
+    #: conclusion they drew instead.
+    restart_pending: bool = False
 
 
 @app.post("/drafts/{draft_id}/lobby")
@@ -910,6 +993,10 @@ def draft_lobby(draft_id: str, body: LobbyBody,
     except ValueError as e:
         raise HTTPException(400, "lobby id must be a number") from e
     state = guard(s.set_lobby, acc, lobby, body.password)
+    s.host_restart_pending = bool(body.restart_pending)
+    # Recomputed after the flag is set, or the answer to the host describes the
+    # state one field out of date.
+    state = s.public_state(acc)
     store.save_draft(s)
     # Sanctioned here rather than by the client: the server knows this lobby
     # came out of a draft it ran, which is exactly what sanctioning means.

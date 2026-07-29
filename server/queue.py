@@ -56,6 +56,41 @@ class QueueService:
         #: player id -> how many series they have walked out of, so the second
         #: time costs more than the first.
         self.dodges: dict[str, int] = {}
+        #: player id -> when they last asked about the queue. The client polls
+        #: every second while searching, so this is a heartbeat that costs
+        #: nothing extra.
+        self.seen: dict[str, float] = {}
+
+    #: How long an entry survives without its client asking about it.
+    #:
+    #: Closing the client used to leave the account in the queue for good: it
+    #: kept being paired, and each pairing burned a whole accept window of
+    #: somebody who *was* at the keyboard. Twenty-five seconds is many times
+    #: the slowest poll and still gone before the next person notices.
+    STALE_AFTER_S = 25.0
+
+    def _sweep(self, now: float) -> list[str]:
+        """Drop entries whose client stopped asking.
+
+        Called from `status`, which every client hits constantly — so the
+        players still there are the ones who clear out the ones who are not.
+        """
+        dropped = []
+        for pid, mode_key in list(self.joined.items()):
+            if now - self.seen.get(pid, 0.0) <= self.STALE_AFTER_S:
+                continue
+            # Mid-proposal is left alone: the accept window is short, it expires
+            # on its own, and the penalty for letting one lapse is the queue's
+            # own business rather than something a sweep should pre-empt.
+            queue = self.queues.get(mode_key)
+            if queue is not None and queue._proposal_for(pid) is not None:
+                continue
+            if queue is not None:
+                queue.leave(pid)
+            self.joined.pop(pid, None)
+            self.seen.pop(pid, None)
+            dropped.append(pid)
+        return dropped
 
     #: A first dodge, doubling per repeat and capped. Long enough to be worth
     #: avoiding, short enough that an accident does not end someone's evening —
@@ -169,10 +204,12 @@ class QueueService:
         if (prev := self.joined.get(account.id)) and prev != mode_key:
             self.queues[prev].leave(account.id)
         self.joined[account.id] = mode_key
+        self.seen[account.id] = self._now()
         q.join(account.id, rating, self._now())
         return self.status(account)
 
     def leave(self, account: Account) -> dict:
+        self.seen.pop(account.id, None)
         if (mode_key := self.joined.pop(account.id, None)):
             self.queues[mode_key].leave(account.id)
         self.ready.pop(account.id, None)
@@ -198,6 +235,10 @@ class QueueService:
 
     def status(self, account: Account) -> dict:
         now = self._now()
+        # Asking is the heartbeat. Stamped before the sweep, or a client would
+        # be swept by its own poll.
+        self.seen[account.id] = now
+        self._sweep(now)
         # Every queue is ticked, not just the caller's: whoever polls keeps the
         # whole thing moving, and a mode nobody is looking at should not stall.
         for key, q in self.queues.items():

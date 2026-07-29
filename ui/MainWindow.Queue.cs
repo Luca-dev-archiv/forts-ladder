@@ -304,6 +304,10 @@ public partial class MainWindow
         var s = _queue.Status;
         var proposal = s?.Proposal;
 
+        // Free: the poll carries it, and while somebody is queueing it is the
+        // freshest number there is.
+        if (s is not null) ShowOnline(s.Online);
+
         AcceptPanel.Visibility = proposal is not null && !s!.Penalised()
             ? Visibility.Visible : Visibility.Collapsed;
         SearchStats.Visibility = s?.In_Queue == true && proposal is null

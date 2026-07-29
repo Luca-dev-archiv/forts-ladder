@@ -1012,6 +1012,78 @@ def test_a_series_nobody_ever_finished_stops_blocking_the_queue():
     assert q.status(a)["in_queue"]
 
 
+# ------------------------------------------------- Closing the client
+# An entry nobody is asking about is nobody at the keyboard. Before the sweep,
+# closing the client left the account in the queue for good: it kept being
+# paired, and every pairing burned a whole accept window of somebody who *was*
+# there.
+def test_a_client_that_stops_asking_leaves_the_queue():
+    """The poller is in a *different* mode on purpose.
+
+    Two accounts in one queue are paired the instant either of them polls, which
+    would measure the pairing rather than the sweep. A searcher in another mode
+    ticks every queue without ever being matched against this one.
+    """
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500, "ranked_1v1")
+    q.join(b, 1500, "unranked_1v1")
+
+    # A closes the client. B keeps looking, and B's poll is what sweeps.
+    clock[0] += q.STALE_AFTER_S + 1
+    q.status(b)
+    assert a.id not in q.joined, "a closed client stayed in the queue"
+    assert q.status(a)["in_queue"] is False
+    # And is free to come straight back: closing a client is not an offence.
+    q.join(a, 1500, "ranked_1v1")
+    assert q.status(a)["in_queue"]
+
+
+def test_polling_keeps_you_in_the_queue():
+    """The other half, or the sweep would throw out the people who are there."""
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500, "ranked_1v1")
+    q.join(b, 1500, "unranked_1v1")
+    for _ in range(5):
+        clock[0] += q.STALE_AFTER_S - 1
+        q.status(a)
+        q.status(b)
+    assert a.id in q.joined and b.id in q.joined
+
+
+def test_a_pending_proposal_is_not_swept():
+    """A match offer expires on its own, with a penalty that is the queue's own
+    business — a sweep must not pre-empt either."""
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500)
+    q.join(b, 1500)
+    assert q.status(a)["proposal"] is not None, "no proposal to test with"
+    clock[0] += q.STALE_AFTER_S + 1
+    q.status(a)
+    assert b.id in q.joined, "an entry holding a live offer was swept"
+
+
+def test_presence_counts_clients_inside_the_window():
+    from server.presence import Presence
+    clock = [1000.0]
+    p = Presence(now=lambda: clock[0])
+    p.seen("one")
+    p.seen("two")
+    assert p.online() == 2
+    clock[0] += p.WINDOW_S + 1
+    assert p.online() == 0, "somebody who stopped asking is still counted"
+    assert p.last_seen == {}, "the dictionary grows for every account ever seen"
+
+
+def test_presence_forgets_a_logout_at_once():
+    """Logging out is a statement, not a timeout."""
+    from server.presence import Presence
+    p = Presence()
+    p.seen("one")
+    p.gone("one")
+    assert p.online() == 0
+    assert not p.is_online("one")
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

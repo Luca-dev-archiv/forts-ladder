@@ -44,6 +44,7 @@ from .auth import (
 )
 from .draft import DraftService
 from .live import LiveService
+from .presence import Presence
 from .queue import QueueService
 from .ranking import Ranking
 from .results import ResultService
@@ -68,6 +69,10 @@ auth = store.restore_auth(AuthService())
 if (_owner := auth.apply_owner_bootstrap()) is not None:
     store.save_account(_owner)
 live = LiveService()
+# Who is at their client right now. In memory on purpose: presence is true for
+# a minute at a time, and a stored one would survive a redeploy claiming people
+# are there who closed the client hours ago.
+presence = Presence()
 drafts = DraftService()
 # Restored at startup: a draft that only survived while the process did would
 # not survive the thing persistence is for — a redeploy mid-tournament.
@@ -294,8 +299,14 @@ def auth_pair_claim(body: PairClaim):
 @app.post("/auth/logout")
 def logout(response: Response, ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):
-    if session_token(ladder_session, authorization):
-        auth.logout(session_token(ladder_session, authorization))
+    if (token := session_token(ladder_session, authorization)):
+        # Logging out is a statement, not a timeout: leaving the queue and
+        # going offline should happen now rather than in half a minute. Done
+        # before the session dies, or there is no account left to act on.
+        if (acc := current(token)) is not None:
+            presence.gone(acc.id)
+            queue.leave(acc)
+        auth.logout(token)
     response.delete_cookie(SESSION_COOKIE)
     return {"ok": True}
 
@@ -955,7 +966,28 @@ def queue_leave(ladder_session: str | None = Cookie(None),
 @app.get("/queue")
 def queue_status(ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):
-    return guard(queue.status, require(session_token(ladder_session, authorization)))
+    acc = require(session_token(ladder_session, authorization))
+    presence.seen(acc.id)
+    state = guard(queue.status, acc)
+    # Carried on the poll that is already happening, so the client never has to
+    # ask twice for two numbers.
+    state["online"] = presence.online()
+    return state
+
+
+@app.post("/presence")
+def presence_ping(ladder_session: str | None = Cookie(None),
+                  authorization: str | None = Header(None)):
+    """"I am still here" — and how many others are.
+
+    The queue poll only runs while somebody is queueing, so a client sitting on
+    any other screen needs a way to say so. A count comes back, never a list:
+    people agreed to have their matches tracked, which is not the same as
+    publishing when they are at their computer.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    presence.seen(acc.id)
+    return {"online": presence.online()}
 
 
 @app.post("/queue/accept")

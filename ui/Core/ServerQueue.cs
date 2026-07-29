@@ -179,6 +179,10 @@ public sealed class QueueStatusDto
     /// so it reported "0 waiting" for the rest of the session.</summary>
     public Dictionary<string, int> Waiting { get; set; } = new();
 
+    /// <summary>How many clients are online, carried on the poll that is
+    /// already happening rather than asked for separately.</summary>
+    public int Online { get; set; }
+
     /// <summary>The series keeping this account out of the queue, if any.
     ///
     /// A refusal with no reason reads as the client being broken, and the way

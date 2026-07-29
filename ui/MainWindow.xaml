@@ -149,6 +149,22 @@
               </Grid>
             </StackPanel>
           </Border>
+          <!-- Who is around. One number, because in a community this size it
+               is the whole difference between "nobody plays this any more" and
+               "two people are on, queue up". -->
+          <Border Margin="0,14,0,0" CornerRadius="6" Padding="10,7"
+                  Background="{StaticResource BgHover}">
+            <StackPanel Orientation="Horizontal">
+              <Ellipse x:Name="OnlineDot" Width="8" Height="8" Margin="0,0,8,0"
+                       Fill="{StaticResource TextMid}"
+                       VerticalAlignment="Center"/>
+              <TextBlock x:Name="OnlineText" FontSize="12"
+                         Text="{core:T presence.unknown}"
+                         Foreground="{StaticResource TextMid}"
+                         TextTrimming="CharacterEllipsis"
+                         VerticalAlignment="Center"/>
+            </StackPanel>
+          </Border>
           <!-- Nav. The active item carries an accent bar on its left edge, set
                from code — a filled background alone was too quiet to find at a
                glance while a draft timer is running. -->

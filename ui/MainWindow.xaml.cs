@@ -42,6 +42,7 @@ public partial class MainWindow : Window
         _queue = new ServerQueue(_api);
         InitQueue();
         InitObservers();
+        InitPresence();
 
         _watcher = new LogWatcher(TimeSpan.FromSeconds(1));
         _watcher.StatusChanged += (s, ok) => Dispatcher.Invoke(() => SetStatus(s, ok));

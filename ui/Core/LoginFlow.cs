@@ -247,6 +247,15 @@ public sealed class LoginFlow
 
     public Task<QueueModesDto?> ModesAsync() => _api.GetAsync<QueueModesDto>("/queue/modes");
 
+    /// <summary>"I am still here" — and how many others are.
+    ///
+    /// The queue poll only runs while somebody is queueing, so a client on any
+    /// other screen needs its own way of saying so. It is also what takes an
+    /// account *out* of the queue when the client is closed: an entry nobody is
+    /// asking about is nobody at the keyboard.
+    /// </summary>
+    public Task<PresenceDto?> PingAsync() => _api.PostAsync<PresenceDto>("/presence");
+
     public Task<PoolStatusDto?> PoolsAsync() => _api.GetAsync<PoolStatusDto>("/queue/pools");
 
     /// <summary>

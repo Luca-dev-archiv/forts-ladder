@@ -570,6 +570,16 @@ public sealed class QueueModesDto
     public List<QueueModeDto> Modes { get; set; } = new();
 }
 
+/// <summary>How many clients are currently connected.
+///
+/// A count and never a list: people agreed to have their matches tracked, which
+/// is not the same as publishing when they are sitting at their computer.
+/// </summary>
+public sealed class PresenceDto
+{
+    public int Online { get; set; }
+}
+
 public sealed class LiveMatchDto
 {
     public string Id { get; set; } = "";

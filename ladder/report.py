@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .eligibility import Eligibility
+from . import teams
 from .identity import Registry
 from .paths import active_user_dir, user_dirs
 from .rules import check_series, report_line
@@ -70,29 +71,46 @@ class Series:
     def is_team(self) -> bool:
         return len(self.steam_ids) > 2
 
+    def team_map(self) -> dict[str, int]:
+        """Steam ID -> team (1 or 2). See `ladder.teams` for why this exists."""
+        return teams.team_map(self.matches)
+
+    def team_of_side(self, match: dict, side: int) -> int:
+        """Which team a side number belonged to in one game, or 0."""
+        return teams.team_of_side(match, side, self.team_map())
+
     def sides(self) -> dict[int, list[dict]]:
-        """Players per side, collected across the whole series.
+        """Players per **team**, collected across the whole series.
 
         Across all games because a single one can be missing a player —
         roster lines are sometimes absent during loading.
         """
+        team = self.team_map()
         out: dict[int, dict[str, dict]] = {}
         for m in self.matches:
             for p in m.get("players", []):
-                s = p.get("side")
-                if s and s > 0 and p.get("steam_id"):
-                    out.setdefault(s, {})[p["steam_id"]] = p
+                sid = p.get("steam_id")
+                if not sid or sid not in team:
+                    continue
+                out.setdefault(team[sid], {})[sid] = p
         return {s: list(v.values()) for s, v in sorted(out.items())}
 
     def score(self) -> tuple[dict[int, int], int]:
-        """(wins per side, number of undecided games)."""
+        """(wins per team, number of undecided games).
+
+        By team, not by side number: with the sides swapping, one team winning
+        both games of a Bo3 was counted as 1-1.
+        """
         wins: dict[int, int] = {}
         unclear = 0
         for m in self.matches:
             out = m.get("outcome") or {}
             if out.get("status") == "decided":
-                w = out["winner_side"]
-                wins[w] = wins.get(w, 0) + 1
+                team = self.team_of_side(m, out["winner_side"])
+                if team:
+                    wins[team] = wins.get(team, 0) + 1
+                else:
+                    unclear += 1
             else:
                 unclear += 1
         for s in self.sides():
@@ -107,16 +125,14 @@ class Series:
         of both clients on a desync) and mark them as local. That produced
         "vs <your own name>" with the score the wrong way round.
         """
+        team = self.team_map()
         my_steam_id = my_steam_id or _own_steam_id()
-        if my_steam_id:
-            for m in self.matches:
-                for p in m.get("players", []):
-                    if p.get("steam_id") == my_steam_id and p.get("side"):
-                        return p["side"]
+        if my_steam_id and my_steam_id in team:
+            return team[my_steam_id]
         for m in self.matches:
             for p in m.get("players", []):
-                if p.get("local") and p.get("side"):
-                    return p["side"]
+                if p.get("local") and p.get("steam_id") in team:
+                    return team[p["steam_id"]]
         return None
 
     # ------------------------------------------------------------- Rendering
@@ -128,7 +144,8 @@ class Series:
         return sorted(out)
 
     def report(self, reg: Registry,
-               elig: Eligibility | None = None) -> tuple[str, list[str]]:
+               elig: Eligibility | None = None,
+               my_steam_id: str | None = None) -> tuple[str, list[str]]:
         """(report line, warnings). Warnings are never silent.
 
         Passing `elig` turns this into the gated path: no line is produced
@@ -147,7 +164,7 @@ class Series:
             if not verdict:
                 return "", warnings + verdict.reasons
 
-        own_side = self.local_side() or min(sides)
+        own_side = self.local_side(my_steam_id) or min(sides)
         other = next(s for s in sides if s != own_side)
         wins, unclear = self.score()
         if unclear:

@@ -35,46 +35,123 @@ public sealed class Series
         .Select(p => p.SteamId).Distinct().OrderBy(x => x, StringComparer.Ordinal)
         .ToList();
 
+    /// <summary>
+    /// The two teams, keyed 1 and 2 — not the game's side numbers.
+    ///
+    /// **Sides swap between games in Forts.** Grouping the whole series by side
+    /// number therefore put the same people in both buckets, which is how a
+    /// series came out reading "rapper and lafpaf vs rapper and lafpaf". It also
+    /// made the score wrong in a way nobody would notice: one team winning twice
+    /// counted as one win for side 1 and one for side 2, so a 2-0 was reported
+    /// as 1-1.
+    ///
+    /// The first game decides who is on whose team; after that people are
+    /// followed by Steam ID, whatever side they happen to be playing.
+    /// </summary>
     public Dictionary<int, List<PlayerRecord>> Sides()
     {
-        var byId = new Dictionary<int, Dictionary<string, PlayerRecord>>();
-        foreach (var m in Matches)
+        var team = TeamMap();
+        var byTeam = new Dictionary<int, Dictionary<string, PlayerRecord>>();
+        foreach (var m in Matches.OrderBy(x => x.PlayedAt))
             foreach (var p in m.Players.Values)
             {
                 if (p.Side <= 0 || string.IsNullOrEmpty(p.SteamId)) continue;
-                if (!byId.TryGetValue(p.Side, out var d))
-                    byId[p.Side] = d = new Dictionary<string, PlayerRecord>();
+                if (!team.TryGetValue(p.SteamId, out var n)) continue;
+                if (!byTeam.TryGetValue(n, out var d))
+                    byTeam[n] = d = new Dictionary<string, PlayerRecord>();
                 d[p.SteamId] = p;
             }
-        return byId.OrderBy(kv => kv.Key)
-                   .ToDictionary(kv => kv.Key, kv => kv.Value.Values.ToList());
+        return byTeam.OrderBy(kv => kv.Key)
+                     .ToDictionary(kv => kv.Key, kv => kv.Value.Values.ToList());
     }
 
+    /// <summary>
+    /// Steam ID -> team (1 or 2), from the first game that has two sides.
+    ///
+    /// Anyone who only appears later is put on the team they did *not* play
+    /// against, which is the best available answer for a substitute.
+    /// </summary>
+    public Dictionary<string, int> TeamMap()
+    {
+        var map = new Dictionary<string, int>();
+        foreach (var m in Matches.OrderBy(x => x.PlayedAt))
+        {
+            var sides = m.Players.Values
+                .Where(p => p.Side > 0 && !string.IsNullOrEmpty(p.SteamId))
+                .GroupBy(p => p.Side).OrderBy(g => g.Key).ToList();
+            if (sides.Count < 2) continue;
+
+            if (map.Count == 0)
+            {
+                foreach (var p in sides[0]) map[p.SteamId] = 1;
+                foreach (var p in sides[1]) map[p.SteamId] = 2;
+                continue;
+            }
+            // A later game: work out which side is which team from whoever is
+            // already known, then place the newcomers with them.
+            foreach (var g in sides)
+            {
+                var known = g.Select(p => map.GetValueOrDefault(p.SteamId))
+                             .Where(x => x != 0).ToList();
+                if (known.Count == 0) continue;
+                var n = known.GroupBy(x => x).OrderByDescending(x => x.Count())
+                             .First().Key;
+                foreach (var p in g)
+                    if (!map.ContainsKey(p.SteamId)) map[p.SteamId] = n;
+            }
+        }
+        return map;
+    }
+
+    /// <summary>Which team a side number belonged to in this game, or 0.</summary>
+    public int TeamOfSide(MatchRecord m, int side)
+    {
+        var team = TeamMap();
+        foreach (var p in m.Players.Values)
+            if (p.Side == side && !string.IsNullOrEmpty(p.SteamId)
+                && team.TryGetValue(p.SteamId, out var n))
+                return n;
+        return 0;
+    }
+
+    /// <summary>Which team won a game, or 0 when it was not decided.</summary>
+    public int TeamOfWinner(MatchRecord m) =>
+        m.Status == MatchStatus.Decided ? TeamOfSide(m, m.WinnerSide) : 0;
+
+    /// <summary>
+    /// Wins per team, keyed the same way as <see cref="Sides"/>.
+    ///
+    /// Counted by team rather than by the game's side number: the sides swap
+    /// between games, so counting numbers turned one team winning twice into
+    /// 1-1.
+    /// </summary>
     public (Dictionary<int, int> Wins, int Unclear) Score()
     {
         var wins = new Dictionary<int, int>();
         var unclear = 0;
         foreach (var m in Matches)
         {
-            if (m.Status == MatchStatus.Decided)
-                wins[m.WinnerSide] = wins.GetValueOrDefault(m.WinnerSide) + 1;
+            var team = TeamOfWinner(m);
+            if (team != 0) wins[team] = wins.GetValueOrDefault(team) + 1;
             else unclear++;
         }
         foreach (var s in Sides().Keys) wins.TryAdd(s, 0);
         return (wins, unclear);
     }
 
+    /// <summary>Which team is mine — not which side I played in some game.</summary>
     public int? LocalSide()
     {
-        if (!string.IsNullOrEmpty(MySteamId))
-        {
-            var mine = Matches.SelectMany(m => m.Players.Values)
-                .FirstOrDefault(p => p.SteamId == MySteamId && p.Side > 0);
-            if (mine is not null) return mine.Side;
-        }
+        var team = TeamMap();
+        if (!string.IsNullOrEmpty(MySteamId)
+            && team.TryGetValue(MySteamId!, out var mine))
+            return mine;
         // Fallback for games without a known own Steam ID.
-        return Matches.SelectMany(m => m.Players.Values)
-            .FirstOrDefault(p => p.Local && p.Side > 0)?.Side;
+        var local = Matches.SelectMany(m => m.Players.Values)
+            .FirstOrDefault(p => p.Local && p.Side > 0
+                                 && !string.IsNullOrEmpty(p.SteamId));
+        return local is not null && team.TryGetValue(local.SteamId, out var n)
+            ? n : null;
     }
 
     public List<string> Names(IdentityStore ids, int side) =>
@@ -111,8 +188,12 @@ public sealed class Series
         if (missing.Count > 0)
             warnings.Add(Loc.T("warn.unlinked", string.Join(", ", missing)));
 
-        // Rule check as far as the log allows: a commander must not be
-        // played again after winning with it.
+        // Rule check as far as the log allows: a commander must not be played
+        // again after winning with it.
+        //
+        // Tracked per *team*, not per side number. The sides swap between games,
+        // so keying on the number split one player's history across two buckets:
+        // a genuine reuse went unnoticed and an innocent one was reported.
         var burned = new Dictionary<int, HashSet<string>>();
         var i = 0;
         foreach (var m in Matches.OrderBy(m => m.PlayedAt))
@@ -120,12 +201,14 @@ public sealed class Series
             i++;
             foreach (var (side, cmdr) in m.Commanders)
             {
-                if (!burned.TryGetValue(side, out var used))
-                    burned[side] = used = new HashSet<string>();
+                var team = TeamOfSide(m, side);
+                if (team == 0) continue;      // nobody on it we can identify
+                if (!burned.TryGetValue(team, out var used))
+                    burned[team] = used = new HashSet<string>();
                 if (used.Contains(cmdr))
                     // Named the way the game names it: a warning that says
                     // "da-overclocker" makes the reader look it up.
-                    warnings.Add(Loc.T("warn.commander_reuse", i, side,
+                    warnings.Add(Loc.T("warn.commander_reuse", i, team,
                                        CommanderNames.Display(cmdr)));
                 if (m.Status == MatchStatus.Decided && m.WinnerSide == side)
                     used.Add(cmdr);

@@ -208,6 +208,12 @@ public sealed class LoginFlow
     public Task<bool> FinishLiveAsync(string matchId) =>
         _api.DeleteAsync($"/live/{matchId}");
 
+    /// <summary>Open or close a match to spectator requests.</summary>
+    public async Task<bool> SetAcceptingAsync(string matchId, bool value) =>
+        await _api.PostAsync<object>(
+            $"/live/{matchId}/accepting?value={(value ? "true" : "false")}")
+        is not null;
+
     /// <summary>Who is asking to watch a match of mine.</summary>
     public Task<ObserverInboxDto?> ObserverInboxAsync() =>
         _api.GetAsync<ObserverInboxDto>("/observe/requests");

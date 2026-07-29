@@ -70,6 +70,10 @@ public partial class MainWindow
         {
             _publishedMatchId = id;
             HandoffSub.Text = Loc.T("live.published");
+            // The switch only means anything once there is a match to open or
+            // close, so it appears with one.
+            BtnSpectators.Visibility = Visibility.Visible;
+            BtnSpectators.Content = Loc.T("live.spectators_on");
         }
         else if (_api.LastError is { Length: > 0 } err)
         {
@@ -89,6 +93,7 @@ public partial class MainWindow
         {
             await _login.FinishLiveAsync(_publishedMatchId);
             _publishedMatchId = null;
+            BtnSpectators.Visibility = Visibility.Collapsed;
             return;
         }
         await _login.HeartbeatLiveAsync(_publishedMatchId);

@@ -160,7 +160,7 @@
             <Button x:Name="NavDraft" Content="{core:T nav.draft}" Style="{StaticResource Btn}"
                     HorizontalContentAlignment="Left" Margin="0,0,0,4"
                     Padding="12,7" Background="Transparent" Click="NavDraft_Click"/>
-            <Button x:Name="NavSeries" Content="{core:T nav.series}" Style="{StaticResource Btn}"
+            <Button x:Name="NavSeries" Content="{core:T nav.replays}" Style="{StaticResource Btn}"
                     HorizontalContentAlignment="Left" Margin="0,0,0,4"
                     Padding="12,7" Background="{StaticResource BgHover}"
                     Click="NavSeries_Click"/>
@@ -212,7 +212,7 @@
         <Button DockPanel.Dock="Right" x:Name="BtnRescan" Content="{core:T series.rescan}"
                 Style="{StaticResource Btn}" Click="BtnRescan_Click"/>
         <StackPanel>
-          <TextBlock Text="{core:T series.headline}" FontSize="21" FontWeight="Bold"/>
+          <TextBlock Text="{core:T replays.headline}" FontSize="21" FontWeight="Bold"/>
           <TextBlock x:Name="SeriesSubtitle" Text="{core:T series.sub}"
                      Foreground="{StaticResource TextMid}" FontSize="12"
                      Margin="0,2,0,0" TextWrapping="Wrap"/>
@@ -365,6 +365,10 @@
                             Style="{StaticResource Btn}" Padding="12,6"
                             FontSize="12" Margin="6,0,0,0" Visibility="Collapsed"
                             Click="BtnManage_Click"/>
+                    <Button x:Name="BtnSpectators" Content="{core:T live.spectators_on}"
+                            Style="{StaticResource Btn}" Padding="12,6"
+                            FontSize="12" Margin="6,0,0,0" Visibility="Collapsed"
+                            Click="BtnSpectators_Click"/>
                     <Button x:Name="BtnWebsite" Content="{core:T queue.open_site}"
                             Style="{StaticResource Btn}" Padding="12,6"
                             FontSize="12" Margin="6,0,0,0"
@@ -688,10 +692,16 @@
                  why this shows what the other one asked for. -->
             <Border DockPanel.Dock="Bottom" x:Name="VoidBar"
                     Visibility="Collapsed" Background="{StaticResource BgPanel}"
-                    Padding="20,12" BorderBrush="{StaticResource Warn}"
-                    BorderThickness="0,2,0,0">
+                    Padding="20,8">
               <DockPanel>
-                <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right">
+                <!-- Folded away by default. It is the rarest thing on this
+                     screen and was drawn like the most important one. -->
+                <Button x:Name="BtnVoidOpen" DockPanel.Dock="Left"
+                        Content="{core:T void.open}" Style="{StaticResource Btn}"
+                        Padding="10,4" FontSize="11" Margin="0,0,12,0"
+                        Click="BtnVoidOpen_Click"/>
+                <WrapPanel x:Name="VoidActions" DockPanel.Dock="Right"
+                           HorizontalAlignment="Right" Visibility="Collapsed">
                   <Button x:Name="BtnVoidGame" Content="{core:T void.game}"
                           Style="{StaticResource Btn}" Padding="12,7"
                           Margin="0,0,8,0" Click="BtnVoidGame_Click"/>
@@ -737,6 +747,13 @@
                              FontWeight="SemiBold" TextWrapping="Wrap"/>
                   <TextBlock x:Name="HandoffSub" Style="{StaticResource Label}"
                              TextWrapping="Wrap" Margin="0,2,0,0"/>
+                  <!-- What was played differently from what was agreed.
+                       Reported, not enforced: the client cannot stop any of it
+                       and should not pretend to. -->
+                  <TextBlock x:Name="SeriesWarnings" FontSize="12"
+                             Foreground="{StaticResource Warn}"
+                             TextWrapping="Wrap" Margin="0,6,0,0"
+                             Visibility="Collapsed"/>
                 </StackPanel>
               </DockPanel>
             </Border>

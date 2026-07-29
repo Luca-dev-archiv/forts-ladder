@@ -16,13 +16,20 @@ from ladder.report import group_series  # noqa: E402
 A, B, C = "76561199000000001", "76561199000000002", "76561199000000003"
 
 
-def match(when, lobby, winner=1, opponent=B, map_name="Vanilla"):
+def match(when, lobby, winner=1, opponent=B, map_name="Vanilla",
+          swap=False, commanders=None):
+    """One game.
+
+    `swap` puts A on side 2 and the opponent on side 1, which is what Forts does
+    between games of a series — and which every test here used to ignore.
+    """
+    a_side, b_side = (2, 1) if swap else (1, 2)
     return {
         "map": map_name, "played_at": when, "lobby_id": lobby,
-        "players": [{"name": "A", "steam_id": A, "side": 1},
-                    {"name": "B", "steam_id": opponent, "side": 2}],
+        "players": [{"name": "A", "steam_id": A, "side": a_side},
+                    {"name": "B", "steam_id": opponent, "side": b_side}],
         "outcome": {"status": "decided", "winner_side": winner},
-        "duration_s": 300, "commanders": {},
+        "duration_s": 300, "commanders": commanders or {},
     }
 
 
@@ -82,6 +89,59 @@ def test_report_is_written_from_the_local_players_view():
     # Without a known own SteamID it falls back to the lowest side; what
     # matters is that a line with a score comes out at all.
     assert " vs " in line and ("0-1" in line or "1-0" in line)
+
+
+# --------------------------------------------------- Sides swap between games
+def test_a_series_has_two_teams_even_when_the_sides_swap():
+    """Forts swaps the sides between games. Grouping the series by side number
+    put the same people in both buckets, so a duel read "A and B vs A and B"."""
+    s = group_series([match("2026-07-28T20:00:00", 111),
+                      match("2026-07-28T20:30:00", 111, swap=True)])[0]
+    sides = s.sides()
+    assert len(sides) == 2, sides
+    ids = {team: {p["steam_id"] for p in players}
+           for team, players in sides.items()}
+    assert ids[1] == {A} and ids[2] == {B}, ids
+
+
+def test_one_team_winning_twice_is_two_nil_not_one_all():
+    """The consequence nobody would have noticed: counting wins by side number
+    turned a 2-0 into a 1-1, and that goes straight into the report line."""
+    # A wins game 1 as side 1, then wins game 2 as side 2.
+    s = group_series([match("2026-07-28T20:00:00", 111, winner=1),
+                      match("2026-07-28T20:30:00", 111, winner=2, swap=True)])[0]
+    wins, unclear = s.score()
+    assert unclear == 0
+    assert wins == {1: 2, 2: 0}, wins
+
+
+def test_the_report_line_names_my_team_first_after_a_swap():
+    reg = Registry()
+    s = group_series([match("2026-07-28T20:00:00", 111, winner=1),
+                      match("2026-07-28T20:30:00", 111, winner=2, swap=True)])[0]
+    line, _ = s.report(reg, my_steam_id=A)
+    assert " 2-0" in line, line
+    assert line.index("A") < line.index("B"), line
+
+
+def test_a_commander_reused_after_a_win_is_caught_across_a_swap():
+    """Tracked per team: keyed by side number, one player's history was split in
+    two and a genuine reuse went unnoticed."""
+    reg = Registry()
+    cmd = "commander-da-overclocker"
+    s = group_series([
+        match("2026-07-28T20:00:00", 111, winner=1,
+              commanders={"side1": cmd, "side2": "commander-ee-fireman"}),
+        # A won with it, swapped side, and played it again.
+        match("2026-07-28T20:30:00", 111, winner=2, swap=True,
+              commanders={"side2": cmd, "side1": "commander-iba-spy"}),
+    ])[0]
+    line, warnings = s.report(reg, my_steam_id=A)
+    reuse = [w for w in warnings if w.startswith("commander reuse")]
+    assert len(reuse) == 1, warnings
+    assert cmd in reuse[0], reuse[0]
+    # And the score is right in the same breath: 2-0, not 1-1.
+    assert line.endswith(" 2-0"), line
 
 
 def _run_all() -> int:

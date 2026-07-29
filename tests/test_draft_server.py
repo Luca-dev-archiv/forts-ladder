@@ -108,7 +108,10 @@ def test_your_own_pick_comes_back_to_you():
     assert s.public_state(a)["your_pending_pick"] == chosen
 
 
-def test_both_picks_appear_only_after_both_locked_in():
+def test_your_own_pick_comes_back_but_never_theirs_before_the_game():
+    """Locking in together used to reveal both. It should not: game 1 is the
+    game the blind pick is *for*, and you find out what you are against when it
+    loads — not while there is still time to plan around it."""
     svc, s, a, b = started()
     play_maps(s, a, b)
     play_commander_bans(s, a, b)
@@ -118,6 +121,13 @@ def test_both_picks_appear_only_after_both_locked_in():
 
     pick_b = s.draft.legal_options(Side.B)[1]
     s.apply(b, pick_b)
+    plan = s.public_state(b)["plan"]
+    assert plan[0]["commander_b"] == pick_b, "own pick should come back"
+    assert plan[0]["commander_a"] is None, "the opponent's pick was revealed"
+
+    # Once the game has been played there is nothing left to protect.
+    play_all(s, a, b)
+    s.note_game(a, 1, "A")
     plan = s.public_state(b)["plan"]
     assert plan[0]["commander_a"] == pick_a
     assert plan[0]["commander_b"] == pick_b
@@ -486,19 +496,39 @@ def test_the_lobby_cannot_be_repointed_at_a_different_game():
         raise AssertionError("the lobby id was overwritten")
 
 
-def test_only_one_side_hosts_and_the_other_cannot_name_the_lobby():
-    """Both clients used to offer "I am hosting" until one pressed it, which is
-    two people about to open the same match."""
+def test_hosting_is_assigned_not_raced_for():
+    """Both clients used to show "I am hosting" until somebody pressed it, which
+    is two people about to open the same match — and whoever pressed second got
+    an error for doing what the screen invited. Side A hosts."""
+    svc, s, a, b = started()
+    assert s.public_state(a)["lobby_host"] is None, "nothing to host yet"
+    play_all(s, a, b)
+    assert s.public_state(a)["lobby_host"] == "A"
+    assert s.public_state(b)["lobby_host"] == "A"
+    # And the guest is given a join target straight away.
+    assert s.public_state(b)["lobby_host_steam"] == a.steam_id
+
+
+def test_the_other_side_can_take_hosting_over_until_a_lobby_exists():
+    """The assigned host sometimes cannot host — no port forwarding, a bad line
+    — and then the series must not be stuck. Once a lobby is open it is too
+    late: taking over would send the other side somewhere pointless."""
     svc, s, a, b = started()
     play_all(s, a, b)
-    s.claim_host(a)
-    assert s.public_state(b)["lobby_host"] == "A"
+    s.claim_host(b)
+    assert s.public_state(a)["lobby_host"] == "B"
+    s.set_lobby(b, 555)
     try:
-        s.claim_host(b)
+        s.claim_host(a)
     except AuthError as e:
-        assert "already hosting" in str(e), str(e)
+        assert "already opened a lobby" in str(e), str(e)
     else:
-        raise AssertionError("both sides claimed the host role")
+        raise AssertionError("hosting changed after a lobby was open")
+
+
+def test_the_guest_cannot_name_the_lobby():
+    svc, s, a, b = started()
+    play_all(s, a, b)
     try:
         s.set_lobby(b, 999)
     except AuthError as e:
@@ -527,28 +557,24 @@ def test_the_opponents_later_commanders_stay_hidden():
 
     view = s.public_state(a)
     assert view["revealed_through"] == 1
-    game1, game2, game3 = view["plan"]
-    # Game 1 is open to both.
-    assert game1["commander_a"] and game1["commander_b"]
-    # Later games: your own pick, never theirs.
-    assert game2["commander_a"] is not None, "own pick should stay visible"
-    assert game2["commander_b"] is None, "the opponent's game 2 was revealed"
-    assert game3["commander_b"] is None
+    for i, game in enumerate(view["plan"], start=1):
+        assert game["commander_a"] is not None, f"own pick hidden in game {i}"
+        assert game["commander_b"] is None, f"the opponent's game {i} was shown"
 
     # And mirrored for the other side.
-    other = s.public_state(b)["plan"]
-    assert other[1]["commander_b"] is not None
-    assert other[1]["commander_a"] is None
+    for game in s.public_state(b)["plan"]:
+        assert game["commander_b"] is not None
+        assert game["commander_a"] is None
 
 
-def test_reporting_a_game_opens_the_next_one():
+def test_reporting_a_game_opens_that_game_and_no_further():
     svc, s, a, b = started()
     play_all(s, a, b)
     s.note_game(a, 1, "A")
-    view = s.public_state(a)
+    view = s.public_state(b)
     assert view["revealed_through"] == 2
-    assert view["plan"][1]["commander_b"] is not None, "game 2 did not open"
-    assert view["plan"][2]["commander_b"] is None, "game 3 opened too early"
+    assert view["plan"][0]["commander_a"] is not None, "the played game stayed hidden"
+    assert view["plan"][1]["commander_a"] is None, "game 2 opened before it was played"
     assert view["wins"] == {"A": 1, "B": 0}
     assert view["series_over"] is False
 

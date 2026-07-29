@@ -793,8 +793,11 @@ public partial class MainWindow : Window
         }
         else if (theirs)
         {
-            HandoffTitle.Text = Loc.T("handoff.they_host", oppName);
-            HandoffSub.Text = Loc.T("handoff.they_host_sub");
+            // Explicitly "not yet": starting Forts before the lobby exists is
+            // the mistake this replaces, and the guest had no way to tell.
+            HandoffTitle.Text = Loc.T("handoff.waiting_for_lobby", oppName);
+            HandoffTitle.Foreground = (Brush)FindResource("Warn");
+            HandoffSub.Text = Loc.T("handoff.waiting_for_lobby_sub");
         }
         else if (_awaitingLobby)
         {
@@ -818,6 +821,69 @@ public partial class MainWindow : Window
     /// <summary>Password written into the host's lobby settings, shown so it can
     /// be passed on.</summary>
     private string? _lobbyPassword;
+    private int _lobbySize = 5;
+    private string _lobbyName = "";
+
+    /// <summary>
+    /// What was played differently from what was agreed.
+    ///
+    /// Two kinds. The lobby settings are read back out of the file, because the
+    /// game rewrites it when the host changes something on the host screen — so
+    /// looking afterwards is the only way to know what the series was actually
+    /// played under. And each finished game is compared against the drafted
+    /// plan: the wrong map or the wrong commander is exactly what the draft
+    /// exists to pin down.
+    ///
+    /// Reported, never enforced. The client cannot stop any of it, and pretending
+    /// otherwise would be worse than saying plainly what happened.
+    /// </summary>
+    private readonly List<string> _seriesWarnings = new();
+
+    private void CheckLobbySettings()
+    {
+        if (_lobbyPassword is null) return;      // we never wrote them
+        foreach (var d in LobbySettings.Deviations(_lobbyName, _lobbySize,
+                                                  _lobbyPassword))
+        {
+            var line = Loc.T("series.lobby_changed", d);
+            if (!_seriesWarnings.Contains(line)) _seriesWarnings.Add(line);
+        }
+    }
+
+    /// <summary>Compare one finished game against the game it was supposed to
+    /// be.</summary>
+    private void CheckAgainstPlan(MatchRecord m, int game)
+    {
+        var s = _draft.State;
+        if (s is null || game < 1 || game > s.Plan.Count) return;
+        var planned = s.Plan[game - 1];
+
+        if (planned.Map is { Length: > 0 } map && m.Map is { Length: > 0 } played
+            && !played.Equals(map, StringComparison.OrdinalIgnoreCase))
+            Warn(Loc.T("series.plan_mismatch",
+                       $"{Loc.T("draft.game_of", game, s.Plan.Count)}: "
+                       + $"{map} → {played}"));
+
+        // Only own side: the opponent's planned commander is withheld until the
+        // game has been reported, so there is nothing to compare it against yet.
+        var mySide = s.Your_Side == "B" ? 2 : 1;
+        var mine = s.Your_Side == "B" ? planned.Commander_B : planned.Commander_A;
+        if (mine is { Length: > 0 } want
+            && m.Commanders.TryGetValue(mySide, out var got)
+            && got != want)
+            Warn(Loc.T("series.plan_mismatch",
+                       $"{Loc.T("draft.game_of", game, s.Plan.Count)}: "
+                       + $"{CommanderNames.Display(want)} → "
+                       + CommanderNames.Display(got)));
+    }
+
+    private void Warn(string line)
+    {
+        if (_seriesWarnings.Contains(line)) return;
+        _seriesWarnings.Add(line);
+        SeriesWarnings.Text = string.Join(Environment.NewLine, _seriesWarnings);
+        SeriesWarnings.Visibility = Visibility.Visible;
+    }
 
     /// <summary>
     /// Write the league settings the host screen would otherwise be clicked
@@ -835,8 +901,12 @@ public partial class MainWindow : Window
         if (s is null) return;
         var a = s.Seats.TryGetValue("A", out var na) ? na : "A";
         var b = s.Seats.TryGetValue("B", out var nb) ? nb : "B";
-        var size = Math.Max(2, s.Seats.Count);
-        var res = LobbySettings.Apply($"Ladder: {a} vs {b}", size);
+        // Players plus room to watch. Forts counts a spectator as a client, so a
+        // 1v1 with two seats has nowhere for one to go — which is why every
+        // observer request came back "no room". Nine is the game's hard limit.
+        _lobbySize = Math.Min(9, Math.Max(2, s.Seats.Count) + 3);
+        _lobbyName = $"Ladder: {a} vs {b}";
+        var res = LobbySettings.Apply(_lobbyName, _lobbySize);
         _lobbyPassword = res.Password;
         HandoffSub.Text = res.Ok
             ? Loc.T("handoff.settings_written", res.Password ?? "-")
@@ -845,6 +915,16 @@ public partial class MainWindow : Window
 
     private void BtnLaunchForts_Click(object sender, RoutedEventArgs e)
     {
+        // If a lobby is already open and this is not the host, starting the game
+        // on its own drops them into the main menu — which is what happened, and
+        // reads as the button not working. The join link starts Forts *and*
+        // joins, so it is the better answer whenever there is one.
+        var s = _draft.State;
+        if (s is not null && !s.YouHostLobby && s.Lobby_Id is { Length: > 0 })
+        {
+            BtnJoinLobby_Click(sender, e);
+            return;
+        }
         try
         {
             // Through Steam rather than the exe: Forts needs the Steam client

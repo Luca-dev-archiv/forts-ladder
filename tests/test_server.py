@@ -381,7 +381,9 @@ def live_setup():
                              ("3", "Caster", Role.CASTER),
                              ("4", "Referee", Role.ADMIN))
     live = LiveService()
-    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1",
+    # Unranked, because that is what a spectated match is: a rated series is
+    # closed to watchers except for admins, which has its own tests below.
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1",
                      ["Host", "Opponent"], slots_used=2, slots_total=9,
                      lobby_id=109775240000000001)
     return auth, acc, live, m
@@ -412,7 +414,7 @@ def test_an_approved_observer_gets_the_join_link():
 def test_a_declined_observer_gets_nothing():
     _, acc, live, m = live_setup()
     r = live.request_observer(acc["Caster"], m.id)
-    live.answer(acc["Host"], r.id, approve=False, reason="gleich Turnierspiel")
+    live.answer(acc["Host"], r.id, approve=False, reason="tournament game starting")
     try:
         live.join_info(acc["Caster"], r.id)
     except AuthError:
@@ -497,7 +499,7 @@ def test_a_silent_client_drops_out_of_the_listing():
     clock = Clock()
     auth, acc = service_with(("1", "Host", Role.PLAYER))
     live = LiveService(now=clock)
-    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1", ["Host"], 1, 9)
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["Host"], 1, 9)
     assert len(live.listing()) == 1
     clock.t += STALE_AFTER_S + 1
     assert live.listing() == []
@@ -509,7 +511,7 @@ def test_a_pending_request_expires_with_its_match():
     auth, acc = service_with(("1", "Host", Role.PLAYER),
                              ("2", "Caster", Role.CASTER))
     live = LiveService(now=clock)
-    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1", ["Host"], 1, 9)
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["Host"], 1, 9)
     r = live.request_observer(acc["Caster"], m.id)
     clock.t += STALE_AFTER_S + 1
     live.prune()
@@ -523,7 +525,7 @@ def test_a_requester_can_find_out_what_happened():
     auth, acc = service_with(("1", "Host", Role.PLAYER),
                              ("2", "Caster", Role.PLAYER))
     live = LiveService()
-    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1",
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1",
                      ["Host", "Guest"], 2, 9, lobby_id=109775240000000001)
 
     r = live.request_observer(acc["Caster"], m.id)
@@ -544,7 +546,7 @@ def test_a_declined_requester_is_told_why():
     auth, acc = service_with(("1", "Host", Role.PLAYER),
                              ("2", "Caster", Role.PLAYER))
     live = LiveService()
-    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1",
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1",
                      ["Host", "Guest"], 9, 9, lobby_id=1)
     live.request_observer(acc["Caster"], m.id)
     mine = live.requests_for(acc["Caster"])
@@ -558,8 +560,8 @@ def test_only_your_own_requests_come_back():
                              ("2", "One", Role.PLAYER),
                              ("3", "Two", Role.PLAYER))
     live = LiveService()
-    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1", ["a", "b"], 2, 9,
-                     lobby_id=1)
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["a", "b"],
+                     2, 9, lobby_id=1)
     live.request_observer(acc["One"], m.id)
     live.request_observer(acc["Two"], m.id)
     assert len(live.requests_for(acc["One"])) == 1
@@ -572,12 +574,53 @@ def test_the_join_url_names_the_lobby_owner():
     auth, acc = service_with(("1", "Host", Role.PLAYER),
                              ("2", "Caster", Role.PLAYER))
     live = LiveService()
-    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1", ["a", "b"], 2, 9,
-                     lobby_id=42)
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["a", "b"],
+                     2, 9, lobby_id=42)
     r = live.request_observer(acc["Caster"], m.id)
     live.answer(acc["Host"], r.id, approve=True)
     info = live.join_info(acc["Caster"], r.id)
     assert info["join_url"] == f"steam://joinlobby/410900/42/{acc['Host'].steam_id}"
+
+
+def test_a_ranked_match_is_not_open_to_spectators():
+    """A watcher in a rated series is one more person who knows the board."""
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Caster", Role.PLAYER))
+    live = LiveService()
+    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1", ["a", "b"], 2, 9,
+                     lobby_id=1)
+    r = live.request_observer(acc["Caster"], m.id)
+    assert r.state is RequestState.DECLINED
+    assert "ranked" in r.reason, r.reason
+
+
+def test_an_unranked_match_is():
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Caster", Role.PLAYER))
+    live = LiveService()
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["a", "b"],
+                     2, 9, lobby_id=1)
+    assert live.request_observer(acc["Caster"], m.id).state is RequestState.PENDING
+
+
+def test_an_admin_is_not_blocked_from_a_ranked_match():
+    """Arbitrating needs seeing, which is why the grant exists. They still ask
+    the host — being allowed to watch is not the same as walking in."""
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Ref", Role.ADMIN))
+    live = LiveService()
+    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1", ["a", "b"], 2, 9,
+                     lobby_id=1)
+    r = live.request_observer(acc["Ref"], m.id)
+    assert r.state is RequestState.PENDING, r.reason
+
+    # And when the host has closed requests they are admitted anyway, which is
+    # the actual override. A fresh account, because one pending request per
+    # person is all the service allows — rightly.
+    auth2, acc2 = service_with(("9", "Ref2", Role.ADMIN))
+    live.set_accepting(acc["Host"], m.id, False)
+    r2 = live.request_observer(acc2["Ref2"], m.id)
+    assert r2.state is RequestState.APPROVED
 
 
 def _run_all() -> int:

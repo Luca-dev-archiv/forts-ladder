@@ -71,6 +71,85 @@ public static class LobbySettings
 
     public sealed record Result(bool Ok, string Message, string? Password = null);
 
+    /// <summary>
+    /// What a ladder lobby has to be set to.
+    ///
+    /// One list, used both to write the file and to read it back — a check that
+    /// repeats the expected values in a second place drifts from the first.
+    /// </summary>
+    public static Dictionary<string, string> Wanted(
+            string lobbyName, int maxPlayers, string password) => new()
+    {
+        // Room for the players *and* the spectators. Forts counts a watcher as
+        // a client, so a 1v1 set to two seats has nowhere for one to go — which
+        // is the whole reason the observer flow found no room.
+        ["MaxPlayers"] = maxPlayers.ToString(),
+        ["Password"] = $"L\"{Escape(password)}\"",
+        ["ServerName"] = $"L\"{Escape(lobbyName)}\"",
+        // Nobody changes side or fort once the draft has decided them.
+        ["TeamsUnlocked"] = "false",
+        ["FortsUnlocked"] = "false",
+        // The host has no network latency to their own game and everyone else
+        // does. This is the game's own way of levelling that, and in a rated
+        // match it is not optional.
+        ["ArtificialHostLag"] = "true",
+    };
+
+    /// <summary>
+    /// Read the settings back out of the file.
+    ///
+    /// The point is not trust in the person: the game rewrites this file when
+    /// the host changes something on the host screen, so the only way to know
+    /// what was actually played under is to look afterwards.
+    /// </summary>
+    public static Dictionary<string, string> Read()
+    {
+        var out_ = new Dictionary<string, string>();
+        var dir = UserDir();
+        if (dir is null) return out_;
+        var path = Path.Combine(dir, "multiplayer.lua");
+        try
+        {
+            if (!File.Exists(path)) return out_;
+            foreach (var line in File.ReadAllLines(path))
+            {
+                var m = ReEntry.Match(line);
+                if (m.Success)
+                    out_[m.Groups[2].Value] = m.Groups[4].Value.TrimEnd(',').Trim();
+            }
+        }
+        catch (IOException) { /* nothing to compare against */ }
+        return out_;
+    }
+
+    /// <summary>
+    /// Settings that differ from what a ladder lobby should be.
+    ///
+    /// Returned as "key: expected, found" lines, for the report — a difference
+    /// nobody is told about might as well not have been detected.
+    /// </summary>
+    public static List<string> Deviations(string lobbyName, int maxPlayers,
+                                          string password)
+    {
+        var have = Read();
+        var want = Wanted(lobbyName, maxPlayers, password);
+        var out_ = new List<string>();
+        foreach (var (key, value) in want)
+        {
+            // The name is cosmetic and the password is the host's to change if
+            // they must; the rest decides how the game is played.
+            if (key is "ServerName" or "Password") continue;
+            if (!have.TryGetValue(key, out var found))
+            {
+                out_.Add(Loc.T("lobby.deviation_missing", key, value));
+                continue;
+            }
+            if (!string.Equals(found, value, StringComparison.OrdinalIgnoreCase))
+                out_.Add(Loc.T("lobby.deviation", key, value, found));
+        }
+        return out_;
+    }
+
     private static readonly Regex ReEntry =
         new(@"^(\s*)(\w+)(\s*=\s*)(.+?)(,?)\s*$", RegexOptions.Compiled);
 
@@ -93,17 +172,7 @@ public static class LobbySettings
         if (!File.Exists(path)) return new Result(false, Loc.T("lobby.no_file"));
 
         password ??= NewPassword();
-        var wanted = new Dictionary<string, string>
-        {
-            // Exactly the series size: an extra seat is an extra way for the
-            // wrong person to end up in a rated match.
-            ["MaxPlayers"] = maxPlayers.ToString(),
-            ["Password"] = $"L\"{Escape(password)}\"",
-            ["ServerName"] = $"L\"{Escape(lobbyName)}\"",
-            // Nobody changes side or fort once the draft has decided them.
-            ["TeamsUnlocked"] = "false",
-            ["FortsUnlocked"] = "false",
-        };
+        var wanted = Wanted(lobbyName, maxPlayers, password);
 
         try
         {

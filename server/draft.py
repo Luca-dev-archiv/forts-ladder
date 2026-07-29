@@ -127,9 +127,10 @@ class DraftSession:
             "cancelled": self.cancelled,
             "cancelled_by": self.cancelled_by,
             "lobby_id": str(self.lobby_id) if self.lobby_id else None,
-            "lobby_host": self.lobby_host,
-            "lobby_host_steam": self.lobby_host_steam,
-            "seats": {s.side.value: s.display for s in self.seats.values()},
+            # Who is *meant* to host, which is a decision and not a race.
+            "lobby_host": self.assigned_host(),
+            "lobby_host_steam": self.lobby_host_steam or self._host_steam(),
+            "seats": self._seat_names(seat),
             "full": self.full(),
             "done": d.done,
             "step_index": d.step_index,
@@ -168,6 +169,19 @@ class DraftSession:
                               in self.void_requests.items()},
         }
 
+    def _host_steam(self) -> str | None:
+        """The assigned host's Steam ID, so the guest has a join target as soon
+        as the lobby appears rather than one poll later."""
+        side = self.assigned_host()
+        if side is None:
+            return None
+        seat = next((s for s in self.seats.values() if s.side.value == side), None)
+        return self._steam_ids.get(seat.account_id) if seat else None
+
+    #: account_id -> SteamID64, filled when a seat is taken. The session does not
+    #: hold Account objects, and the guest needs the host's id to join.
+    _steam_ids: dict[str, str] = field(default_factory=dict)
+
     def wins(self) -> dict[str, int]:
         """Games won per side, from the results reported so far.
 
@@ -183,6 +197,23 @@ class DraftSession:
         """Has somebody taken it? A Bo3 ends at two, not after three games."""
         needed = self.draft.best_of // 2 + 1
         return max(self.wins().values()) >= needed
+
+    def _seat_names(self, seat: Seat | None) -> dict[str, str]:
+        """Who is in which seat — with the opponent anonymous while picking.
+
+        Knowing who you are against changes how you ban, and a queue match is
+        supposed to be decided by the board rather than by the name. Once the
+        picking is over it is pointless to hide: you are about to play them.
+
+        Not applied to a draft somebody hosted with a join code — they invited a
+        specific person and already know who it is.
+        """
+        names = {s.side.value: s.display for s in self.seats.values()}
+        if self.draft.done or self.series_id is None or seat is None:
+            return names
+        return {side: (name if side == seat.side.value
+                       else "Opponent")
+                for side, name in names.items()}
 
     def _plan_for(self, seat: Seat | None) -> list[dict]:
         """The plan, with the opponent's later commanders withheld.
@@ -202,8 +233,11 @@ class DraftSession:
             through = self.draft.revealed_through() - 1
             return [self._hide(g, None) if g["game"] > through else g
                     for g in plan]
-        through = self.draft.revealed_through()
-        return [g if g["game"] <= through else self._hide(g, seat.side)
+        # Strictly what has been played. Game 1 used to open the moment the
+        # draft ended — the very game about to be played, which is the one the
+        # blind pick is for. You learn the opponent's commander in the game.
+        played = self.draft.revealed_through() - 1
+        return [g if g["game"] <= played else self._hide(g, seat.side)
                 for g in plan]
 
     @staticmethod
@@ -233,21 +267,37 @@ class DraftSession:
             self.cancelled_by = seat.side.value
         return self.public_state(account)
 
-    def claim_host(self, account: Account) -> dict:
-        """Say that this side will open the lobby.
+    def assigned_host(self) -> str | None:
+        """Whose job hosting is, decided rather than offered.
 
-        First come, first served, and then it is settled: the point is that the
-        other client stops offering to host and starts waiting for a join link.
-        Re-claiming by the same side is harmless, so a double click is not an
-        error.
+        Side A, once the draft is finished. First-come-first-served left both
+        clients showing "I am hosting" until somebody pressed it, which is two
+        people about to open the same match — and the person who pressed second
+        got an error for doing what the screen invited.
+
+        The other side may still take it over (`claim_host`) for the case that
+        the assigned host cannot host.
+        """
+        if not self.draft.done or self.cancelled:
+            return None
+        return self.lobby_host or Side.A.value
+
+    def claim_host(self, account: Account) -> dict:
+        """Take over hosting from whoever it was assigned to.
+
+        Normally nobody needs this: side A hosts. It exists because the assigned
+        host sometimes cannot — no port forwarding, a bad connection — and then
+        the series should not be stuck.
         """
         seat = self.seat_of(account)
         if self.cancelled:
             raise AuthError("this draft was cancelled")
         if not self.draft.done:
             raise AuthError("the draft is not finished yet")
-        if self.lobby_host is not None and self.lobby_host != seat.side.value:
-            raise AuthError(f"side {self.lobby_host} is already hosting")
+        if self.lobby_id is not None and self.lobby_host != seat.side.value:
+            # Once a lobby is open, taking over would send the other side to a
+            # lobby that no longer matters.
+            raise AuthError(f"side {self.lobby_host} already opened a lobby")
         self.lobby_host = seat.side.value
         self.lobby_host_steam = account.steam_id
         return self.public_state(account)
@@ -360,8 +410,12 @@ class DraftSession:
             raise AuthError("the draft is not finished yet")
         if self.lobby_id is not None and self.lobby_id != lobby_id:
             raise AuthError(f"this draft is already in lobby {self.lobby_id}")
-        if self.lobby_host is not None and self.lobby_host != seat.side.value:
-            raise AuthError(f"side {self.lobby_host} is hosting this series")
+        # Against the *assigned* host, not the stored field: with nobody having
+        # taken hosting over the field is empty, and comparing it let the guest
+        # register the lobby.
+        host = self.assigned_host()
+        if host is not None and host != seat.side.value:
+            raise AuthError(f"side {host} is hosting this series")
         self.lobby_id = int(lobby_id)
         self.lobby_host = seat.side.value
         self.lobby_host_steam = account.steam_id
@@ -433,6 +487,8 @@ class DraftService:
                          created_at=self._now(),
                          original_map_pool=list(map_pool))
         s.seats[host.id] = Seat(Side.A, host.id, _name(host))
+        if host.steam_id:
+            s._steam_ids[host.id] = host.steam_id
         self.sessions[s.id] = s
         return s
 
@@ -447,6 +503,8 @@ class DraftService:
         if s.full():
             raise AuthError("this draft already has two players")
         s.seats[account.id] = Seat(Side.B, account.id, _name(account))
+        if account.steam_id:
+            s._steam_ids[account.id] = account.steam_id
         # The first step gets its whole window from here, not from whenever
         # someone last looked at the lobby.
         s.draft._step_started = None

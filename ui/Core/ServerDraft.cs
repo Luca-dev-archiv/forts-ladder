@@ -156,9 +156,18 @@ public sealed class ServerDraft : IDisposable
                 var same = State is not null && Signature(State) == Signature(next);
                 State = next;
                 LastError = null;
-                // Nothing left to poll for once it is decided or abandoned. The
-                // state is kept so the view can say which of the two it was.
-                if (next.Done || next.Cancelled) _timer.Stop();
+                // NOT stopped when the draft is done: the whole handoff happens
+                // afterwards. Stopping there is why the guest never saw the
+                // lobby open, why "Start Forts" did nothing useful for them, and
+                // why a void request from one side never reached the other.
+                //
+                // Slower once the picking is over — the remaining traffic is a
+                // lobby id, a game result and the occasional void — and stopped
+                // for good once there is nothing left to learn.
+                if (next.Cancelled || next.Voided || next.Series_Over)
+                    _timer.Stop();
+                else
+                    _timer.Interval = TimeSpan.FromSeconds(next.Done ? 3 : 1);
                 if (same)
                 {
                     // Nothing to redraw. Announcing it anyway would rebuild the

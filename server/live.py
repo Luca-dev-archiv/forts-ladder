@@ -194,6 +194,20 @@ class LiveService:
         account.require("request_observer")
         m = self._match(match_id)
 
+        # Ranked games are not a spectator sport here. A watcher in a rated
+        # series is one more person who knows what is on the board, and the
+        # scene's own habit is to keep those closed. Admins and casters are the
+        # exception because arbitrating needs seeing.
+        if m.mode_key.startswith("ranked")                 and not account.may("override_observer_lock"):
+            r = ObserverRequest(secrets.token_hex(6), match_id, account.id,
+                                account.ufer_name or account.discord_name or "?",
+                                self._now())
+            r.state = RequestState.DECLINED
+            r.reason = ("ranked matches are not open to spectators — "
+                        "unranked and tournament games are")
+            self.requests[r.id] = r
+            return r
+
         if any(r.account_id == account.id and r.match_id == match_id
                and r.state is RequestState.PENDING for r in self.requests.values()):
             raise AuthError("a request is already pending")

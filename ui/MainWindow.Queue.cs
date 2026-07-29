@@ -28,8 +28,12 @@ public partial class MainWindow
         _queue.Tick += RefreshQueueClock;
         _queue.DraftReady += id =>
         {
-            // A found match goes straight to the board. Making someone click
-            // through to it wastes part of a step timer that is already running.
+            // Out of the queue first. It kept polling and counting while a
+            // draft was already running, so the screen showed a search that had
+            // already succeeded.
+            _ = _queue.LeaveAsync();
+            // Then straight to the board: making someone click through wastes
+            // part of a step timer that is already running.
             _ = _draft.AdoptAsync(id);
             ShowView("draft");
         };
@@ -180,6 +184,30 @@ public partial class MainWindow
         await RefreshAccountAsync();
     }
 
+    /// <summary>
+    /// Whether people may ask to watch. Off is a real answer, so it is a switch
+    /// rather than something buried in a rule.
+    ///
+    /// Only meaningful for a published match — a ranked series is closed to
+    /// spectators regardless, which the label says.
+    /// </summary>
+    private async void BtnSpectators_Click(object sender, RoutedEventArgs e)
+    {
+        if (_publishedMatchId is null or "-")
+        {
+            QueueError.Text = Loc.T("live.nothing_published");
+            return;
+        }
+        _spectatorsWelcome = !_spectatorsWelcome;
+        if (!await _login.SetAcceptingAsync(_publishedMatchId, _spectatorsWelcome))
+            QueueError.Text = _api.LastError ?? "?";
+        BtnSpectators.Content = Loc.T(_spectatorsWelcome
+            ? "live.spectators_on" : "live.spectators_off");
+    }
+
+    /// <summary>Whether this host is currently taking requests.</summary>
+    private bool _spectatorsWelcome = true;
+
     private void BtnWebsite_Click(object sender, RoutedEventArgs e)
         => OpenInBrowser("/");
 
@@ -205,6 +233,11 @@ public partial class MainWindow
             await _queue.LeaveAsync();
             return;
         }
+        // Say something immediately. Three round trips run before the queue is
+        // actually joined — login check, account, pools — and a button that sits
+        // there for two seconds reads as a button that did not register.
+        BtnQueueToggle.IsEnabled = false;
+        QueueBigState.Text = Loc.T("queue.joining");
         // Same route as the draft: ask Discord, fall back to the browser.
         if (!await EnsureReadyAsync())
         {
@@ -212,6 +245,7 @@ public partial class MainWindow
             return;
         }
 
+        BtnQueueToggle.IsEnabled = true;
         // Your own open-ladder rating if the table knows it, so the first
         // pairing is not against someone hundreds of points away.
         var rating = _table.Me?.OpenRating ?? _table.Me?.UferRating ?? 1000.0;

@@ -41,6 +41,12 @@ public partial class MainWindow
         if (m.Status != MatchStatus.Decided) return;
         if (!_reportedGames.Add(m.Key)) return;
 
+        // Compared against what was agreed *before* it is reported: the wrong
+        // map or the wrong commander is exactly what the draft exists to pin
+        // down, and it is only visible once the game has been played.
+        CheckAgainstPlan(m, s.Revealed_Through);
+        CheckLobbySettings();
+
         // The log numbers sides 1 and 2; the draft calls them A and B.
         var side = m.WinnerSide == 1 ? "A" : "B";
         if (!await _draft.NoteGameAsync(s.Revealed_Through, side))
@@ -58,6 +64,14 @@ public partial class MainWindow
             return;
         }
         VoidBar.Visibility = Visibility.Visible;
+        // Opened by the button, or on its own when the other side has asked for
+        // something — then it is the most important thing on the screen.
+        var theirAsk = s.TheirVoidRequest;
+        if (theirAsk is not null) _voidOpen = true;
+        VoidActions.Visibility = _voidOpen
+            ? Visibility.Visible : Visibility.Collapsed;
+        BtnVoidOpen.Visibility = _voidOpen
+            ? Visibility.Collapsed : Visibility.Visible;
 
         if (s.Voided)
         {
@@ -105,6 +119,14 @@ public partial class MainWindow
                   + Loc.T("void.voided_games", string.Join(", ", s.Voided_Games))
                 : Loc.T("void.sub");
         }
+    }
+
+    private bool _voidOpen;
+
+    private void BtnVoidOpen_Click(object sender, RoutedEventArgs e)
+    {
+        _voidOpen = true;
+        if (_draft.State is not null) RenderVoid(_draft.State);
     }
 
     private string Describe(string scope) =>

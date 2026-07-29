@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
+from . import teams
 from .ratings import tier_of
 
 # Duels use the season's ranked pool minus one permanently banned map. The
@@ -138,6 +139,8 @@ def check_series(games: list[dict], *, pool: list[str] | None = None,
     """
     chk = SeriesCheck()
     allowed = set(pool) if pool else (set(FPL_MAP_POOL) if brawl else None)
+    # Empty when the games carry no roster, which the loop below allows for.
+    team = teams.team_map(games)
 
     if len(games) > MAX_GAMES_PER_SERIES:
         chk.violations.append(Violation(
@@ -164,18 +167,29 @@ def check_series(games: list[dict], *, pool: list[str] | None = None,
                 f"{chk.maps_played[map_name]} times (allowed: "
                 f"{MAX_TIMES_PER_MAP})", "block"))
 
-        # A commander is spent for a side once they win with it.
+        # A commander is spent for a *team* once they win with it.
+        #
+        # Keyed by team rather than by the side number in the log: the sides swap
+        # between games, so a side key split one player's history in two — a
+        # genuine reuse went unnoticed and an innocent one was flagged. When the
+        # games carry no roster (older fixtures, hand-written checks) there is
+        # nothing to map with, and the side key is all there is.
         commanders = g.get("commanders") or {}
         winner = (g.get("outcome") or {}).get("winner_side")
         for key, cmdr in commanders.items():
             side = key.replace("side", "")
-            used = chk.commander_wins.setdefault(side, set())
+            owner = teams.commander_owner(g, key, team) if team else 0
+            bucket = str(owner) if owner else side
+            used = chk.commander_wins.setdefault(bucket, set())
             if cmdr in used:
                 chk.violations.append(Violation(
                     "commander reuse",
                     f"game {i}: side {side} plays {cmdr} again after already "
                     "winning with it", "block"))
-            if winner is not None and str(winner) == side:
+            won = (teams.team_of_side(g, winner, team) == owner
+                   if team and owner and winner is not None
+                   else winner is not None and str(winner) == side)
+            if won:
                 used.add(cmdr)
 
     return chk

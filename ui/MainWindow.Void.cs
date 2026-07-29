@@ -49,7 +49,12 @@ public partial class MainWindow
 
         // The log numbers sides 1 and 2; the draft calls them A and B.
         var side = m.WinnerSide == 1 ? "A" : "B";
-        if (!await _draft.NoteGameAsync(s.Revealed_Through, side))
+        // Everyone the log listed, so the server can check that the people who
+        // played are the people who drafted.
+        var roster = m.Players.Values
+            .Select(pl => pl.SteamId)
+            .Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList();
+        if (!await _draft.NoteGameAsync(s.Revealed_Through, side, roster))
             ShowDraftError(_draft.LastError ?? "?");
     }
 

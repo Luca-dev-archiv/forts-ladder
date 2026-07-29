@@ -772,6 +772,26 @@ public partial class MainWindow : Window
 
         var oppName = s.Seats.TryGetValue(s.Your_Side == "A" ? "B" : "A",
                                           out var o) ? o : Loc.T("draft.them");
+        // The password, where whoever needs it can read and copy it.
+        var pw = s.Lobby_Password;
+        LobbyPassword.Text = pw is { Length: > 0 }
+            ? Loc.T("handoff.password", pw) : "";
+        LobbyPassword.Visibility = pw is { Length: > 0 } && haveLobby
+            ? Visibility.Visible : Visibility.Collapsed;
+        BtnCopyPassword.Visibility = LobbyPassword.Visibility;
+
+        if (s.Aborted)
+        {
+            HandoffTitle.Text = s.AbortedByYou
+                ? Loc.T("handoff.aborted_you") : Loc.T("handoff.aborted_them");
+            HandoffTitle.Foreground = (Brush)FindResource("Loss");
+            HandoffSub.Text = s.Aborted_Reason ?? "";
+            BtnHostLobby.Visibility = Visibility.Collapsed;
+            BtnJoinLobby.Visibility = Visibility.Collapsed;
+            BtnLaunchForts.Visibility = Visibility.Collapsed;
+            return;
+        }
+
         if (haveLobby)
         {
             // Whether *this* machine is in that lobby, which the guest could not
@@ -963,7 +983,9 @@ public partial class MainWindow : Window
         if (!_awaitingLobby || _draft.State is null || !_draft.State.Done) return;
         if (lobbyId == _lobbyBefore) return;   // the one from before we watched
         _awaitingLobby = false;
-        if (!await _draft.SetLobbyAsync(lobbyId))
+        // With the password: the guest cannot get in without it, and the Steam
+        // link has nowhere to put it.
+        if (!await _draft.SetLobbyAsync(lobbyId, _lobbyPassword))
             ShowDraftError(_draft.LastError ?? "?");
         RefreshDraft();
     }
@@ -997,6 +1019,20 @@ public partial class MainWindow : Window
     /// <summary>Last lobby this machine was seen in, so the handoff panel is
     /// only redrawn when that actually changes.</summary>
     private string? _lastSeenLobby;
+
+    private void BtnCopyPassword_Click(object sender, RoutedEventArgs e)
+    {
+        if (_draft.State?.Lobby_Password is not { Length: > 0 } pw) return;
+        try
+        {
+            Clipboard.SetText(pw);
+            BtnCopyPassword.Content = Loc.T("series.copied");
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            // Another program can hold the clipboard; it is on screen either way.
+        }
+    }
 
     private void BtnJoinLobby_Click(object sender, RoutedEventArgs e)
     {

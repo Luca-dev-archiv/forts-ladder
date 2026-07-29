@@ -164,7 +164,8 @@ public sealed class ServerDraft : IDisposable
                 // Slower once the picking is over — the remaining traffic is a
                 // lobby id, a game result and the occasional void — and stopped
                 // for good once there is nothing left to learn.
-                if (next.Cancelled || next.Voided || next.Series_Over)
+                if (next.Cancelled || next.Voided || next.Series_Over
+                    || next.Aborted)
                     _timer.Stop();
                 else
                     _timer.Interval = TimeSpan.FromSeconds(next.Done ? 3 : 1);
@@ -212,7 +213,8 @@ public sealed class ServerDraft : IDisposable
     private static string Signature(DraftStateDto s) => string.Join("|",
         s.Step_Index, s.Waiting_On, s.Action, s.Done, s.Cancelled, s.Full,
         s.Your_Side, s.Your_Pending_Pick, s.Lobby_Id, s.Lobby_Host,
-        s.Revealed_Through, s.Voided, s.Series_Over,
+        s.Revealed_Through, s.Voided, s.Series_Over, s.Aborted,
+        s.Lobby_Password,
         string.Join(",", s.Voided_Games),
         string.Join(",", s.Wins.OrderBy(kv => kv.Key)
                           .Select(kv => kv.Key + "=" + kv.Value)),
@@ -274,12 +276,12 @@ public sealed class ServerDraft : IDisposable
     /// Sent as a string: 64-bit lobby ids do not survive being parsed as JSON
     /// numbers, and a rounded id matches no game.
     /// </summary>
-    public async Task<bool> SetLobbyAsync(ulong lobbyId)
+    public async Task<bool> SetLobbyAsync(ulong lobbyId, string? password = null)
     {
         if (DraftId is null) return false;
         var next = await _api.PostAsync<DraftStateDto>(
             $"/drafts/{DraftId}/lobby",
-            new { lobby_id = lobbyId.ToString() });
+            new { lobby_id = lobbyId.ToString(), password });
         if (next is null)
         {
             LastError = _api.LastError;
@@ -298,11 +300,21 @@ public sealed class ServerDraft : IDisposable
     /// result exists. It is what spends the winner's commander, opens the next
     /// game's commanders, and lets the series end at two wins.
     /// </summary>
-    public async Task<bool> NoteGameAsync(int game, string winnerSide)
+    public async Task<bool> NoteGameAsync(int game, string winnerSide,
+                                         IEnumerable<string>? steamIds = null)
     {
         if (DraftId is null) return false;
         var next = await _api.PostAsync<DraftStateDto>(
-            $"/drafts/{DraftId}/game", new { game, winner = winnerSide });
+            $"/drafts/{DraftId}/game",
+            new
+            {
+                game,
+                winner = winnerSide,
+                // Everyone the log listed. The server checks them against the
+                // two accounts that drafted: a game played by somebody else is
+                // not that match.
+                steam_ids = (steamIds ?? Array.Empty<string>()).ToList(),
+            });
         if (next is null) { LastError = _api.LastError; return false; }
         next.ReceivedAt = DateTime.UtcNow;
         State = next;

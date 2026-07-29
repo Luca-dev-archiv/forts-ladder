@@ -767,6 +767,90 @@ def test_a_queue_match_hides_the_opponents_name_until_the_picking_is_done():
     assert s.public_state(a)["seats"]["B"] == "B",         "the name should appear once the picking is over"
 
 
+# ------------------------------------------------- Who is actually in the lobby
+def test_a_stranger_in_the_lobby_aborts_the_series():
+    """The draft binds two accounts with proven Steam IDs. A game played by
+    somebody else is not that match — a friend at the keyboard, a second
+    account, or simply the wrong lobby — and it must not become a rating
+    change."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    st = s.note_game(a, 1, "A", steam_ids=[a.steam_id, "76561199000009999"])
+    assert st["aborted"] is True
+    assert st["aborted_side"] == "A", "the reporting side should be named"
+    assert "did not draft" in st["aborted_reason"], st["aborted_reason"]
+    assert st["wins"] == {"A": 0, "B": 0}, "the game was counted anyway"
+
+
+def test_the_expected_roster_is_accepted():
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    st = s.note_game(a, 1, "A", steam_ids=[a.steam_id, b.steam_id])
+    assert st["aborted"] is False
+    assert st["wins"] == {"A": 1, "B": 0}
+
+
+def test_an_aborted_series_takes_no_further_results():
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.note_game(a, 1, "A", steam_ids=["76561199000009999"])
+    try:
+        s.note_game(b, 1, "B", steam_ids=[a.steam_id, b.steam_id])
+    except AuthError as e:
+        assert "aborted" in str(e), str(e)
+    else:
+        raise AssertionError("an aborted series accepted a result")
+
+
+def test_both_sides_are_told_which_one_it_was():
+    """The other side did nothing wrong, and a shared "aborted" would read as a
+    shared fault."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.note_game(b, 1, "B", steam_ids=["76561199000009999"])
+    assert s.public_state(a)["aborted_side"] == "B"
+    assert s.public_state(b)["aborted_side"] == "B"
+
+
+def test_no_roster_no_abort():
+    """A client that sends nothing must not be treated as sending strangers, or
+    an older version would abort every series it reported."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    st = s.note_game(a, 1, "A")
+    assert st["aborted"] is False
+    assert st["wins"] == {"A": 1, "B": 0}
+
+
+def test_accounts_without_a_linked_steam_id_are_not_punished_for_it():
+    """Nothing to compare against is not evidence of anything."""
+    svc, s, a, b = started()
+    s._steam_ids.clear()
+    play_all(s, a, b)
+    st = s.note_game(a, 1, "A", steam_ids=["76561199000009999"])
+    assert st["aborted"] is False
+
+
+# ---------------------------------------------------------- The lobby password
+def test_the_password_reaches_the_other_player():
+    """Steam's join link has no field for it and the game asks on entry, so
+    without this the guest was sent to a prompt for something only the host
+    knew."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.set_lobby(a, 4242, password="AB3KM")
+    assert s.public_state(b)["lobby_password"] == "AB3KM"
+    assert s.public_state(a)["lobby_password"] == "AB3KM"
+
+
+def test_the_password_is_not_handed_to_anyone_else():
+    """It keeps strangers out of the lobby, which is the only thing it is for."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    s.set_lobby(a, 4242, password="AB3KM")
+    assert s.public_state(None)["lobby_password"] is None
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

@@ -329,6 +329,25 @@ public sealed class DraftStateDto
     /// <summary>Decided — a Bo3 ends at two, not after three games.</summary>
     public bool Series_Over { get; set; }
 
+    /// <summary>
+    /// The lobby password, for the two players only.
+    ///
+    /// The Steam join link has no field for it and Forts asks on entry, so
+    /// without carrying it the guest was sent to a prompt for something only the
+    /// host knew.
+    /// </summary>
+    public string? Lobby_Password { get; set; }
+
+    /// <summary>Ended on a fact rather than an agreement: the people in the
+    /// lobby were not the people who drafted.</summary>
+    public bool Aborted { get; set; }
+    public string? Aborted_Side { get; set; }
+    public string? Aborted_Reason { get; set; }
+
+    /// <summary>Was it this client's side that caused the abort?</summary>
+    public bool AbortedByYou =>
+        Aborted_Side is not null && Aborted_Side == Your_Side;
+
     /// <summary>Both sides agreed to throw the whole series away.</summary>
     public bool Voided { get; set; }
     /// <summary>Games both sides agreed not to count; they are played again.</summary>

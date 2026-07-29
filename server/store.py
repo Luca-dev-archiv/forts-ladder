@@ -208,6 +208,9 @@ class Store:
             ("lobby_id", "INTEGER"),
             ("lobby_host", "TEXT"),
             ("lobby_host_steam", "TEXT"),
+            ("lobby_password", "TEXT"),
+            ("aborted_side", "TEXT"),
+            ("aborted_reason", "TEXT"),
             # Agreements, not derived state: a void both players settled on
             # must not come back to life after a restart.
             ("voided", "INTEGER NOT NULL DEFAULT 0"),
@@ -370,8 +373,10 @@ class Store:
             """INSERT INTO drafts (id, join_code, map_pool, commander_pool,
                     best_of, bans_per_side, step_seconds, strike_seed,
                     series_id, created_at, lobby_id, lobby_host, cancelled_by,
-                    lobby_host_steam, voided, voided_games, results)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    lobby_host_steam, voided, voided_games, results,
+                    lobby_password, aborted_side, aborted_reason)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    join_code=excluded.join_code,
                    lobby_id=excluded.lobby_id,
@@ -380,7 +385,10 @@ class Store:
                    lobby_host_steam=excluded.lobby_host_steam,
                    voided=excluded.voided,
                    voided_games=excluded.voided_games,
-                   results=excluded.results""",
+                   results=excluded.results,
+                   lobby_password=excluded.lobby_password,
+                   aborted_side=excluded.aborted_side,
+                   aborted_reason=excluded.aborted_reason""",
             (session.id, session.join_code,
              json.dumps(session.original_map_pool or d.map_pool),
              json.dumps(d.commander_pool), d.best_of,
@@ -390,7 +398,9 @@ class Store:
              session.lobby_host_steam, int(session.voided),
              json.dumps(sorted(session.voided_games)),
              json.dumps({str(g): s.value
-                         for g, s in session.draft._results.items()})))
+                         for g, s in session.draft._results.items()}),
+             session.lobby_password, session.aborted_side,
+             session.aborted_reason))
 
         self.db.execute("DELETE FROM draft_seats WHERE draft_id = ?", (session.id,))
         self.db.executemany(
@@ -429,6 +439,9 @@ class Store:
                 "series_id": r["series_id"], "created_at": r["created_at"],
                 "lobby_id": r["lobby_id"], "lobby_host": r["lobby_host"],
                 "lobby_host_steam": r["lobby_host_steam"],
+                "lobby_password": r["lobby_password"],
+                "aborted_side": r["aborted_side"],
+                "aborted_reason": r["aborted_reason"],
                 "voided": bool(r["voided"]),
                 "voided_games": json.loads(r["voided_games"]),
                 "results": json.loads(r["results"]),

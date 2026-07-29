@@ -799,6 +799,10 @@ class GameBody(BaseModel):
     game: int
     #: "A" or "B" — the side that won, as the draft numbers them.
     winner: str
+    #: Every SteamID64 the game log listed for this match. Checked against the
+    #: two accounts that drafted: a game played by somebody else is not that
+    #: match, and must not become a rating change.
+    steam_ids: list[str] = []
 
 
 @app.post("/drafts/{draft_id}/game")
@@ -814,13 +818,17 @@ def draft_note_game(draft_id: str, body: GameBody,
     """
     acc = require(session_token(ladder_session, authorization))
     s = guard(drafts.get, draft_id)
-    state = guard(s.note_game, acc, body.game, body.winner)
+    state = guard(s.note_game, acc, body.game, body.winner, body.steam_ids)
     store.save_draft(s)
     return state
 
 
 class LobbyBody(BaseModel):
     lobby_id: str
+    #: The password the host's client generated. Steam's join link has no field
+    #: for it and the game asks on entry, so without this the guest is sent to a
+    #: prompt for something only the host knows.
+    password: str | None = None
 
 
 @app.post("/drafts/{draft_id}/lobby")
@@ -838,7 +846,7 @@ def draft_lobby(draft_id: str, body: LobbyBody,
         lobby = int(body.lobby_id)
     except ValueError as e:
         raise HTTPException(400, "lobby id must be a number") from e
-    state = guard(s.set_lobby, acc, lobby)
+    state = guard(s.set_lobby, acc, lobby, body.password)
     store.save_draft(s)
     # Sanctioned here rather than by the client: the server knows this lobby
     # came out of a draft it ran, which is exactly what sanctioning means.

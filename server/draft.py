@@ -63,9 +63,28 @@ class DraftSession:
     #: lobby. Steam's join URL wants the owner's account; a zero there makes it
     #: guess, and it guessed wrong.
     lobby_host_steam: str | None = None
+    #: The lobby password the host's client generated.
+    #:
+    #: Steam's join URL has no field for it and the game asks for it on entry, so
+    #: without passing it here the guest was sent to a prompt for something only
+    #: the host knew. Handed to the two seats and to nobody else — it keeps
+    #: strangers out of the lobby, which is the only thing it is for.
+    lobby_password: str | None = None
     #: Set when someone walked away. Kept rather than deleted, so the other
     #: side is told what happened instead of getting "unknown draft".
     cancelled_by: str | None = None
+
+    #: Set when the people in the lobby were not the people who drafted.
+    #:
+    #: The match is over at that point — not voided by agreement, aborted on a
+    #: fact. Which side it was is named, because the other one did nothing wrong
+    #: and a shared "aborted" would read as a shared fault.
+    aborted_side: str | None = None
+    aborted_reason: str | None = None
+
+    @property
+    def aborted(self) -> bool:
+        return self.aborted_side is not None
 
     #: Open void requests, side -> (scope, reason). A void needs *both* sides,
     #: because "that game did not count" is exactly the claim a losing player
@@ -130,6 +149,9 @@ class DraftSession:
             # Who is *meant* to host, which is a decision and not a race.
             "lobby_host": self.assigned_host(),
             "lobby_host_steam": self.lobby_host_steam or self._host_steam(),
+            # Only the two of them. A spectator gets in through the host, and a
+            # password handed to anyone who asks for the state protects nothing.
+            "lobby_password": self.lobby_password if seat else None,
             "seats": self._seat_names(seat),
             "full": self.full(),
             "done": d.done,
@@ -162,6 +184,9 @@ class DraftSession:
             "series_over": self.series_over(),
             "voided": self.voided,
             "voided_games": sorted(self.voided_games),
+            "aborted": self.aborted,
+            "aborted_side": self.aborted_side,
+            "aborted_reason": self.aborted_reason,
             # Who has asked for what, so a client can say "your opponent wants
             # to void game 2 — crash" and offer to agree.
             "void_requests": {side: {"scope": scope, "reason": reason}
@@ -364,7 +389,35 @@ class DraftSession:
         self.void_requests.pop(seat.side.value, None)
         return self.public_state(account)
 
-    def note_game(self, account: Account, game: int, winner: str) -> dict:
+    def check_roster(self, account: Account,
+                     steam_ids: list[str]) -> list[str]:
+        """Who is actually in the lobby against who drafted.
+
+        The draft binds two accounts, each with a proven Steam ID. A game played
+        by somebody else is not that match — whether it is a friend at the
+        keyboard, a second account, or simply the wrong lobby, the result cannot
+        be rated as if the drafted pair had played it.
+
+        Returns the ids that do not belong. Empty means the roster is the one
+        that drafted.
+        """
+        expected = {s for s in self._steam_ids.values() if s}
+        if not expected:
+            # Nothing to compare against: accounts without a linked Steam ID
+            # cannot be checked, and refusing on that basis would punish the
+            # wrong thing.
+            return []
+        return sorted(set(steam_ids) - expected)
+
+    def abort(self, side: str, reason: str) -> None:
+        """End the series on a fact rather than on an agreement."""
+        if self.aborted:
+            return
+        self.aborted_side = side
+        self.aborted_reason = reason[:200]
+
+    def note_game(self, account: Account, game: int, winner: str,
+                  steam_ids: list[str] | None = None) -> dict:
         """Record one finished game of the series.
 
         Reported by the clients from their own game log, which is the only place
@@ -375,11 +428,25 @@ class DraftSession:
         Idempotent per game, and the first report wins — both clients report the
         same game, and they should agree.
         """
-        self.seat_of(account)
+        seat = self.seat_of(account)
         if not self.draft.done:
             raise AuthError("the draft is not finished yet")
         if self.voided:
             raise AuthError("this series was voided by both players")
+        if self.aborted:
+            raise AuthError(f"this series was aborted: {self.aborted_reason}")
+
+        # Who actually played. Checked before the result is counted, because a
+        # game played by the wrong people must not become a rating change.
+        if steam_ids:
+            strangers = self.check_roster(account, steam_ids)
+            if strangers:
+                # Named against the side that reported it: the client reports its
+                # own log, so the unexpected id came from that machine's lobby.
+                self.abort(seat.side.value,
+                           f"{len(strangers)} player(s) in the lobby did not "
+                           "draft this series")
+                return self.public_state(account)
         if game in self.draft.played_games():
             return self.public_state(account)
         try:
@@ -396,7 +463,8 @@ class DraftSession:
         self.draft.note_result(game, side)
         return self.public_state(account)
 
-    def set_lobby(self, account: Account, lobby_id: int) -> dict:
+    def set_lobby(self, account: Account, lobby_id: int,
+                  password: str | None = None) -> dict:
         """Name the lobby the series will be played in.
 
         Only a seat may, and only once: the id is what decides which recorded
@@ -419,6 +487,8 @@ class DraftSession:
         self.lobby_id = int(lobby_id)
         self.lobby_host = seat.side.value
         self.lobby_host_steam = account.steam_id
+        if password:
+            self.lobby_password = password.strip()[:32]
         return self.public_state(account)
 
     def apply(self, account: Account, value: str) -> dict:
@@ -544,6 +614,9 @@ class DraftService:
                              lobby_host=row.get("lobby_host"),
                              lobby_host_steam=row.get("lobby_host_steam"),
                              cancelled_by=row.get("cancelled_by"),
+                             lobby_password=row.get("lobby_password"),
+                             aborted_side=row.get("aborted_side"),
+                             aborted_reason=row.get("aborted_reason"),
                              voided=bool(row.get("voided")),
                              voided_games=set(row.get("voided_games") or []))
             for seat in row["seats"]:

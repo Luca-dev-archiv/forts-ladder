@@ -737,6 +737,10 @@
                   <Button x:Name="BtnHostLobby" Content="{core:T handoff.host}"
                           Style="{StaticResource BtnAccent}" Padding="14,8"
                           Margin="8,0,0,0" Click="BtnHostLobby_Click"/>
+                  <Button x:Name="BtnCopyPassword" Content="{core:T handoff.copy_password}"
+                          Style="{StaticResource Btn}" Padding="12,8"
+                          Margin="8,0,0,0" Visibility="Collapsed"
+                          Click="BtnCopyPassword_Click"/>
                   <Button x:Name="BtnJoinLobby" Content="{core:T handoff.join}"
                           Style="{StaticResource BtnAccent}" Padding="14,8"
                           Margin="8,0,0,0" Visibility="Collapsed"
@@ -750,6 +754,10 @@
                   <!-- What was played differently from what was agreed.
                        Reported, not enforced: the client cannot stop any of it
                        and should not pretend to. -->
+                  <TextBlock x:Name="LobbyPassword" FontSize="14"
+                             FontFamily="Consolas" FontWeight="Bold"
+                             Foreground="{StaticResource Accent}"
+                             Margin="0,4,0,0" Visibility="Collapsed"/>
                   <TextBlock x:Name="SeriesWarnings" FontSize="12"
                              Foreground="{StaticResource Warn}"
                              TextWrapping="Wrap" Margin="0,6,0,0"

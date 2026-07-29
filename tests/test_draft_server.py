@@ -768,18 +768,39 @@ def test_a_queue_match_hides_the_opponents_name_until_the_picking_is_done():
 
 
 # ------------------------------------------------- Who is actually in the lobby
-def test_a_stranger_in_the_lobby_aborts_the_series():
-    """The draft binds two accounts with proven Steam IDs. A game played by
-    somebody else is not that match — a friend at the keyboard, a second
-    account, or simply the wrong lobby — and it must not become a rating
-    change."""
+def test_somebody_else_in_one_of_the_seats_aborts_the_series():
+    """The draft binds two accounts with proven Steam IDs. Somebody else playing
+    in one of those places — a friend at the keyboard, a second account, the
+    wrong lobby — cannot be rated as if the drafted pair had played."""
     svc, s, a, b = started()
     play_all(s, a, b)
+    # B did not play; somebody else did.
     st = s.note_game(a, 1, "A", steam_ids=[a.steam_id, "76561199000009999"])
     assert st["aborted"] is True
-    assert st["aborted_side"] == "A", "the reporting side should be named"
-    assert "did not draft" in st["aborted_reason"], st["aborted_reason"]
+    assert st["aborted_side"] == "B", "the absent side should be named"
+    assert "different Steam account" in st["aborted_reason"], st["aborted_reason"]
     assert st["wins"] == {"A": 0, "B": 0}, "the game was counted anyway"
+
+
+def test_an_extra_player_in_the_roster_is_not_fraud():
+    """A spectator connects as a client and the log lists them like everybody
+    else. Treating an unknown id as fraud made admitting a caster abort the
+    series, which is two of this project's own features contradicting each
+    other."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    st = s.note_game(a, 1, "A",
+                     steam_ids=[a.steam_id, b.steam_id, "76561199000009999"])
+    assert st["aborted"] is False, st["aborted_reason"]
+    assert st["wins"] == {"A": 1, "B": 0}
+
+
+def test_the_side_that_reported_it_is_not_the_side_blamed():
+    """The reporter is usually the one who noticed."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    st = s.note_game(b, 1, "B", steam_ids=[b.steam_id, "76561199000009999"])
+    assert st["aborted_side"] == "A"
 
 
 def test_the_expected_roster_is_accepted():
@@ -793,7 +814,7 @@ def test_the_expected_roster_is_accepted():
 def test_an_aborted_series_takes_no_further_results():
     svc, s, a, b = started()
     play_all(s, a, b)
-    s.note_game(a, 1, "A", steam_ids=["76561199000009999"])
+    s.note_game(a, 1, "A", steam_ids=[a.steam_id])   # B never played
     try:
         s.note_game(b, 1, "B", steam_ids=[a.steam_id, b.steam_id])
     except AuthError as e:
@@ -807,9 +828,9 @@ def test_both_sides_are_told_which_one_it_was():
     shared fault."""
     svc, s, a, b = started()
     play_all(s, a, b)
-    s.note_game(b, 1, "B", steam_ids=["76561199000009999"])
-    assert s.public_state(a)["aborted_side"] == "B"
-    assert s.public_state(b)["aborted_side"] == "B"
+    s.note_game(b, 1, "B", steam_ids=[b.steam_id])   # A never played
+    assert s.public_state(a)["aborted_side"] == "A"
+    assert s.public_state(b)["aborted_side"] == "A"
 
 
 def test_no_roster_no_abort():

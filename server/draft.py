@@ -389,25 +389,35 @@ class DraftSession:
         self.void_requests.pop(seat.side.value, None)
         return self.public_state(account)
 
-    def check_roster(self, account: Account,
-                     steam_ids: list[str]) -> list[str]:
-        """Who is actually in the lobby against who drafted.
+    def check_roster(self, steam_ids: list[str]) -> list[str]:
+        """Which drafted sides did not actually play.
 
-        The draft binds two accounts, each with a proven Steam ID. A game played
-        by somebody else is not that match — whether it is a friend at the
-        keyboard, a second account, or simply the wrong lobby, the result cannot
-        be rated as if the drafted pair had played it.
+        The draft binds two accounts, each with a proven Steam ID. What must not
+        happen is somebody else playing in one of those places: a friend at the
+        keyboard, a second account, or simply the wrong lobby. None of that can
+        be rated as if the drafted pair had played.
 
-        Returns the ids that do not belong. Empty means the roster is the one
-        that drafted.
+        The test is **absence, not surplus**. Each drafted id has to be in the
+        roster; an extra id proves nothing, because a spectator connects as a
+        client and the game log lists them like everybody else. The first version
+        of this check treated any unknown id as fraud, which would have made
+        admitting a caster abort the series — two of this project's own features
+        contradicting each other.
+
+        Returns the sides whose player is missing. Empty means both played.
         """
-        expected = {s for s in self._steam_ids.values() if s}
-        if not expected:
-            # Nothing to compare against: accounts without a linked Steam ID
-            # cannot be checked, and refusing on that basis would punish the
-            # wrong thing.
-            return []
-        return sorted(set(steam_ids) - expected)
+        present = set(steam_ids)
+        missing = []
+        for seat in self.seats.values():
+            expected = self._steam_ids.get(seat.account_id)
+            if not expected:
+                # Nothing to compare against. An account with no linked Steam ID
+                # cannot be checked, and refusing on that basis would punish the
+                # wrong thing.
+                continue
+            if expected not in present:
+                missing.append(seat.side.value)
+        return sorted(missing)
 
     def abort(self, side: str, reason: str) -> None:
         """End the series on a fact rather than on an agreement."""
@@ -439,13 +449,14 @@ class DraftSession:
         # Who actually played. Checked before the result is counted, because a
         # game played by the wrong people must not become a rating change.
         if steam_ids:
-            strangers = self.check_roster(account, steam_ids)
-            if strangers:
-                # Named against the side that reported it: the client reports its
-                # own log, so the unexpected id came from that machine's lobby.
-                self.abort(seat.side.value,
-                           f"{len(strangers)} player(s) in the lobby did not "
-                           "draft this series")
+            missing = self.check_roster(steam_ids)
+            if missing:
+                # The side whose player was absent — not the side that reported
+                # it. The reporter is usually the one who noticed, and blaming the
+                # messenger would be exactly backwards.
+                self.abort(missing[0],
+                           f"side {', '.join(missing)} was played by a "
+                           "different Steam account than the one that drafted")
                 return self.public_state(account)
         if game in self.draft.played_games():
             return self.public_state(account)

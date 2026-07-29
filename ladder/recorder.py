@@ -141,6 +141,32 @@ class Match:
                     "loser_sides": [s for s in sides if s != surviving[0]],
                     "basis": "defeat-lines"}
 
+        # Everyone defeated. This is the normal end of a real game, not an
+        # oddity: when the match finishes Forts records a defeat for the
+        # remaining forts too, so a 1v1 ends with both players in the list —
+        # 0:07 and 0:08 apart in the game this was found in. Reading that as
+        # "more than one side has survivors" made every real match unclear, and
+        # a match that is unclear is never reported.
+        #
+        # The first fort to fall is the side that lost. Timestamps come from the
+        # simulation, so both clients agree on them.
+        if len(sides) >= 2 and defeated and not surviving:
+            first: dict[int, int] = {}
+            for d in self.defeats:
+                for s, names in sides.items():
+                    if d["name"] in names:
+                        first[s] = min(first.get(s, 10**9), d["at_s"])
+            if len(first) == len(sides):
+                order = sorted(first.items(), key=lambda kv: kv[1])
+                # A tie decides nothing: simultaneous defeats are a draw or a
+                # disconnect, and guessing would be worse than saying so.
+                if len(order) < 2 or order[0][1] < order[1][1]:
+                    loser = order[0][0]
+                    winner = next(s for s in sides if s != loser)
+                    return {"status": "decided", "winner_side": winner,
+                            "loser_sides": [loser],
+                            "basis": "first fort to fall"}
+
         # One side only means the opponent was the built-in AI, which has no
         # client. Irrelevant for a ladder, but named rather than treated as
         # an error.

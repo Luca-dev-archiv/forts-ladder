@@ -35,11 +35,33 @@ public partial class MainWindow
     private async void MaybeReportSeriesGame(MatchRecord m)
     {
         var s = _draft.State;
-        if (s is null || !s.Done || s.Voided || s.Series_Over) return;
+        // `Settled` is the whole list in one field: decided, closed out, walked
+        // away from, aborted or voided. A cancelled series used to fall through
+        // it and take one more result.
+        if (s is null || !s.Done || s.Settled || s.Series_Over) return;
         if (s.Lobby_Id is not { Length: > 0 } lobby) return;
-        if (m.LobbyId is null || m.LobbyId.Value.ToString() != lobby) return;
         if (m.Status != MatchStatus.Decided) return;
-        if (!_reportedGames.Add(m.Key)) return;
+
+        // Which games belong to this series.
+        //
+        // The lobby id is the strongest signal but only the *host* has one:
+        // "Setting lobby" is written when hosting, so the guest's log has no
+        // lobby id at all and every game of theirs was silently ignored.
+        //
+        // So the roster decides when there is no id: a game containing both
+        // people who drafted, while their series is waiting for results, is that
+        // series. Nothing else in a session looks like that.
+        var sameLobby = m.LobbyId is not null
+                        && m.LobbyId.Value.ToString() == lobby;
+        var ids = m.Players.Values.Select(pl => pl.SteamId)
+                   .Where(x => !string.IsNullOrEmpty(x)).ToHashSet();
+        var mine = _watcher.CurrentAccount;
+        var bothPresent = ids.Count >= 2 && mine is not null && ids.Contains(mine);
+        if (!sameLobby && !bothPresent) return;
+        // Keyed by the game number, not by the match: the same game arrives
+        // twice — once when the result is known and once when the replay name
+        // lands — and the second must be a no-op.
+        if (!_reportedGames.Add($"g{s.Revealed_Through}")) return;
 
         // Compared against what was agreed *before* it is reported: the wrong
         // map or the wrong commander is exactly what the draft exists to pin

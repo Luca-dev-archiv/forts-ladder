@@ -160,6 +160,10 @@ CREATE TABLE IF NOT EXISTS results (
     rated       INTEGER NOT NULL DEFAULT 1,
     reasons     TEXT NOT NULL DEFAULT '[]',
     replays     TEXT NOT NULL DEFAULT '[]',
+    -- A player asked for a human to look. Stored on the row rather than as a
+    -- separate table: it is a property of that series, and one note is enough.
+    flagged     INTEGER NOT NULL DEFAULT 0,
+    flag_note   TEXT NOT NULL DEFAULT '',
     created_at  REAL NOT NULL
 );
 
@@ -193,7 +197,16 @@ class Store:
             ("steam_name", "TEXT"),
             ("ufer_claim", "TEXT"),
         ],
+        "results": [
+            ("flagged", "INTEGER NOT NULL DEFAULT 0"),
+            ("flag_note", "TEXT NOT NULL DEFAULT ''"),
+        ],
         "tournaments": [
+            # A tournament that is still being built. Entrants can be added,
+            # dropped and reordered while this is 1; starting it fixes them,
+            # because from then on the pairings and every stored result rest on
+            # those names.
+            ("planning", "INTEGER NOT NULL DEFAULT 0"),
             # How the host wanted it seeded and how long a series is. Without
             # these a restored tournament re-seeds by rating and reverts to the
             # mode's series length, quietly changing the event.
@@ -217,6 +230,9 @@ class Store:
             ("voided_games", "TEXT NOT NULL DEFAULT '[]'"),
             ("results", "TEXT NOT NULL DEFAULT '{}'"),
             ("cancelled_by", "TEXT"),
+            # A closed-out series. Without this a restart reopens every decided
+            # series and locks both players out of the queue again.
+            ("concluded", "INTEGER NOT NULL DEFAULT 0"),
         ],
     }
 
@@ -349,6 +365,12 @@ class Store:
              json.dumps(r.replays), r.created_at))
         self.db.commit()
 
+    def update_result_flag(self, r) -> None:
+        self.db.execute(
+            "UPDATE results SET flagged = ?, flag_note = ? WHERE id = ?",
+            (int(r.flagged), r.flag_note, r.id))
+        self.db.commit()
+
     def load_results(self) -> list:
         from .results import Reported
         return [Reported(
@@ -357,7 +379,8 @@ class Store:
             games=r["games"], score_low=r["score_low"],
             played_at=r["played_at"], reported_by=r["reported_by"],
             rated=bool(r["rated"]), reasons=json.loads(r["reasons"]),
-            replays=json.loads(r["replays"]), created_at=r["created_at"])
+            replays=json.loads(r["replays"]), created_at=r["created_at"],
+            flagged=bool(r["flagged"]), flag_note=r["flag_note"] or "")
             for r in self.db.execute(
                 "SELECT * FROM results ORDER BY played_at, created_at")]
 
@@ -374,9 +397,10 @@ class Store:
                     best_of, bans_per_side, step_seconds, strike_seed,
                     series_id, created_at, lobby_id, lobby_host, cancelled_by,
                     lobby_host_steam, voided, voided_games, results,
-                    lobby_password, aborted_side, aborted_reason)
+                    lobby_password, aborted_side, aborted_reason,
+                    concluded)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?)
+                       ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    join_code=excluded.join_code,
                    lobby_id=excluded.lobby_id,
@@ -388,7 +412,8 @@ class Store:
                    results=excluded.results,
                    lobby_password=excluded.lobby_password,
                    aborted_side=excluded.aborted_side,
-                   aborted_reason=excluded.aborted_reason""",
+                   aborted_reason=excluded.aborted_reason,
+                   concluded=excluded.concluded""",
             (session.id, session.join_code,
              json.dumps(session.original_map_pool or d.map_pool),
              json.dumps(d.commander_pool), d.best_of,
@@ -400,7 +425,7 @@ class Store:
              json.dumps({str(g): s.value
                          for g, s in session.draft._results.items()}),
              session.lobby_password, session.aborted_side,
-             session.aborted_reason))
+             session.aborted_reason, int(session.concluded)))
 
         self.db.execute("DELETE FROM draft_seats WHERE draft_id = ?", (session.id,))
         self.db.executemany(
@@ -443,6 +468,7 @@ class Store:
                 "aborted_side": r["aborted_side"],
                 "aborted_reason": r["aborted_reason"],
                 "voided": bool(r["voided"]),
+                "concluded": bool(r["concluded"]),
                 "voided_games": json.loads(r["voided_games"]),
                 "results": json.loads(r["results"]),
                 "cancelled_by": r["cancelled_by"],
@@ -461,13 +487,14 @@ class Store:
 
     # -------------------------------------------------------- Tournaments
     def create_tournament(self, tid: str, t: Tournament,
-                          created_by: str | None = None) -> None:
+                          created_by: str | None = None,
+                          planning: bool = False) -> None:
         self.db.execute(
             "INSERT INTO tournaments (id, name, mode_key, created_by, "
-            "created_at, finished, seeding, best_of) "
-            "VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+            "created_at, finished, seeding, best_of, planning) "
+            "VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)",
             (tid, t.name, t.mode.key, created_by, time.time(),
-             t.seeding, t.best_of))
+             t.seeding, t.best_of, int(planning)))
         self.db.executemany(
             "INSERT INTO tournament_participants VALUES (?, ?, ?, ?, ?)",
             [(tid, i, p.name, p.rating, json.dumps(p.members))
@@ -511,7 +538,10 @@ class Store:
 
         t = Tournament(row["name"], participants, mode=mode,
                        seeding=row["seeding"] or "rating",
-                       best_of=row["best_of"])
+                       best_of=row["best_of"],
+                       # Or a plan with one entrant could be written but never
+                       # read back.
+                       planning=bool(row["planning"]))
 
         # Apply results in report order; the bracket rebuilds itself.
         for r in self.db.execute(
@@ -522,6 +552,39 @@ class Store:
             t.report(r["match_id"], r["winner"], score,
                      json.loads(r["match_keys"]))
         return t
+
+    def is_planning(self, tid: str) -> bool:
+        row = self.db.execute(
+            "SELECT planning FROM tournaments WHERE id = ?", (tid,)).fetchone()
+        return bool(row and row["planning"])
+
+    def set_planning(self, tid: str, value: bool) -> None:
+        self.db.execute("UPDATE tournaments SET planning = ? WHERE id = ?",
+                        (int(value), tid))
+        self.db.commit()
+
+    def replace_participants(self, tid: str, people: list) -> None:
+        """Swap the entrant list wholesale.
+
+        Only meaningful while planning: the seats are what the bracket is built
+        from, so rewriting them after a result exists would move a result onto a
+        different player.
+        """
+        self.db.execute(
+            "DELETE FROM tournament_participants WHERE tournament_id = ?", (tid,))
+        self.db.executemany(
+            "INSERT INTO tournament_participants VALUES (?, ?, ?, ?, ?)",
+            [(tid, i, p.name, p.rating, json.dumps(p.members))
+             for i, p in enumerate(people)])
+        self.db.commit()
+
+    def set_tournament_format(self, tid: str, name: str, mode_key: str,
+                              seeding: str, best_of: int | None) -> None:
+        self.db.execute(
+            "UPDATE tournaments SET name = ?, mode_key = ?, seeding = ?, "
+            "best_of = ? WHERE id = ?",
+            (name, mode_key, seeding, best_of, tid))
+        self.db.commit()
 
     def list_tournaments(self) -> list[dict]:
         return [dict(r) for r in self.db.execute(

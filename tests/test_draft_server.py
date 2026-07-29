@@ -872,6 +872,146 @@ def test_the_password_is_not_handed_to_anyone_else():
     assert s.public_state(None)["lobby_password"] is None
 
 
+# ------------------------------------------------------- The end of a series
+# Three holes of the same shape: a draft could be walked out of for free, it had
+# no way of being *finished*, and neither of those stopped anyone queueing
+# again — so the loser of game 1 could leave, queue instantly, and the other
+# player was left in front of a board that would never move.
+def queue_match():
+    """A pairing made by the queue, drafted to the end.
+
+    Deliberately through `QueueService`, not `DraftService.create`: what
+    distinguishes a queue match from two friends with a join code is the thing
+    the penalty hangs on.
+    """
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500)
+    q.join(b, 1500)
+    clock[0] += 1
+    q.status(a)
+    q.accept(a)
+    st = q.accept(b)
+    s = q.drafts.get(st["draft_id"])
+    play_all(s, a, b)
+    return q, clock, s, a, b
+
+
+def test_a_decided_series_can_be_closed_out():
+    q, clock, s, a, b = queue_match()
+    s.note_game(a, 1, "A")
+    assert not s.can_conclude(), "closed out a series after one game of three"
+    s.note_game(a, 2, "A")
+    assert s.can_conclude(), "a 2:0 Bo3 is not offering to be closed"
+    st = s.conclude(b)                        # either side may
+    assert st["concluded"] and st["settled"]
+
+
+def test_an_undecided_series_cannot_be_closed_out():
+    """Otherwise the way out of a match you are losing is to declare it over."""
+    q, clock, s, a, b = queue_match()
+    s.note_game(a, 1, "A")
+    try:
+        s.conclude(a)
+    except AuthError as e:
+        assert "not decided" in str(e), str(e)
+    else:
+        raise AssertionError("a 1:0 Bo3 was closed out")
+
+
+def test_a_live_series_keeps_both_players_out_of_the_queue():
+    q, clock, s, a, b = queue_match()
+    for who in (a, b):
+        try:
+            q.join(who, 1500)
+        except AuthError as e:
+            assert s.id in str(e), str(e)
+        else:
+            raise AssertionError("queued while a series was still being played")
+
+
+def test_closing_the_series_frees_both_to_queue_again():
+    q, clock, s, a, b = queue_match()
+    s.note_game(a, 1, "A")
+    s.note_game(a, 2, "A")
+    s.conclude(a)
+    q.join(a, 1500)
+    q.join(b, 1500)               # refuses by raising, so reaching here is the
+    assert q.status(a)["in_queue"]                                # whole test
+
+
+def test_a_voided_series_frees_them_too():
+    """A void is an agreement that it did not happen, so it cannot also be the
+    thing that keeps them from playing."""
+    q, clock, s, a, b = queue_match()
+    s.request_void(a, "series", "crash")
+    s.request_void(b, "series", "crash")
+    q.join(a, 1500)
+    assert q.status(a)["in_queue"]
+
+
+def test_walking_out_of_a_live_queue_match_costs_a_cooldown():
+    q, clock, s, a, b = queue_match()
+    assert s.is_dodge(a), "leaving a live queue match counted as harmless"
+    q.note_dodge(a)
+    s.cancel(a)
+    try:
+        q.join(a, 1500)
+    except AuthError as e:
+        assert "left a series early" in str(e), str(e)
+    else:
+        raise AssertionError("a dodger queued again immediately")
+    # The other player is not punished for being left.
+    q.join(b, 1500)
+    assert q.status(b)["in_queue"]
+
+
+def test_the_second_dodge_costs_more_than_the_first():
+    q, clock, s, a, b = queue_match()
+    first = q.note_dodge(a) - clock[0]
+    q.cooldowns.clear()
+    second = q.note_dodge(a) - clock[0]
+    assert second > first, f"{second}s is no worse than {first}s"
+
+
+def test_leaving_a_private_draft_costs_nothing():
+    """Two people who arranged a match between themselves may also call it off
+    between themselves."""
+    svc, s, a, b = started()
+    play_all(s, a, b)
+    assert not s.is_dodge(a)
+
+
+def test_leaving_after_the_other_side_already_left_costs_nothing():
+    q, clock, s, a, b = queue_match()
+    s.cancel(b)
+    assert not s.is_dodge(a), "punished for leaving a draft nobody was in"
+
+
+def test_the_way_back_to_a_live_series_survives_leaving_the_queue():
+    """The client leaves the queue the moment a draft starts, which used to take
+    the draft id with it — and with it the way back to your own board."""
+    q, clock, s, a, b = queue_match()
+    q.leave(a)
+    st = q.status(a)
+    assert st["draft_id"] == s.id, st["draft_id"]
+    assert st["blocked_by_series"] == s.id
+
+
+def test_a_series_nobody_ever_finished_stops_blocking_the_queue():
+    """The bug this rule could have caused, tested rather than argued about.
+
+    Nothing prunes drafts, a client can be closed mid-series and a server can be
+    redeployed — so without a cutoff an unfinished draft would keep a player out
+    of the queue permanently, which is worse than the dodging it prevents.
+    """
+    q, clock, s, a, b = queue_match()
+    assert q.open_series(a) is s
+    clock[0] += q.SERIES_BLOCK_MAX_S + 1
+    assert q.open_series(a) is None
+    q.join(a, 1500)
+    assert q.status(a)["in_queue"]
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

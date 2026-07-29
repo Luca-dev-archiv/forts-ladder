@@ -95,10 +95,65 @@ class DraftSession:
     voided_games: set[int] = field(default_factory=set)
     #: Set when both sides agreed to throw the whole series away.
     voided: bool = False
+    #: Set when a decided series was closed out. Until then it counts as open,
+    #: and an open series is what keeps both players out of the queue — a match
+    #: that is still being played is not a match you may leave for another.
+    concluded: bool = False
 
     @property
     def cancelled(self) -> bool:
         return self.cancelled_by is not None
+
+    @property
+    def settled(self) -> bool:
+        """Nothing more will happen here.
+
+        The one question the queue needs answered: may these two play something
+        else? Everything that ends a series says yes — decided and closed out,
+        walked away from, aborted on a fact, or voided by agreement.
+        """
+        return (self.concluded or self.cancelled or self.aborted
+                or self.voided)
+
+    def can_conclude(self) -> bool:
+        """Whether the series is finished but not yet closed out.
+
+        Decided, not merely played: a Bo3 ends at two wins, and the third game
+        is not played at all. Waiting for `best_of` results would leave every
+        2:0 series open for ever.
+        """
+        return not self.settled and self.full() and self.series_over()
+
+    def conclude(self, account: Account) -> dict:
+        """Close out a decided series.
+
+        Either side may, because both are equally stuck until somebody does, and
+        there is nothing left to disagree about — the result is already in.
+        """
+        self.seat_of(account)
+        if self.settled:
+            return self.public_state(account)
+        if not self.series_over():
+            need = self.draft.best_of // 2 + 1
+            have = max(self.wins().values())
+            raise AuthError(
+                f"this series is not decided yet — {have} of {need} games won. "
+                "Report the games you have played, or agree a void.")
+        self.concluded = True
+        return self.public_state(account)
+
+    def is_dodge(self, account: Account) -> bool:
+        """Whether leaving right now abandons a match.
+
+        True only for a queue match that is still live: the other player was
+        paired with you by the server, has drafted against you, and gets nothing
+        out of the evening if you walk off. A draft made with a join code is
+        excluded — two people who arranged a match between themselves may also
+        call it off between themselves.
+        """
+        if account.id not in self.seats or self.series_id is None:
+            return False
+        return not self.settled and self.full()
 
     # ------------------------------------------------------------------ Seats
     def seat_of(self, account: Account) -> Seat:
@@ -184,6 +239,16 @@ class DraftSession:
             "series_over": self.series_over(),
             "voided": self.voided,
             "voided_games": sorted(self.voided_games),
+            # Whether this series is over, and whether it is this viewer's turn
+            # to say so. Without it the client cannot tell a series that is
+            # waiting for a game from one that is waiting for a click.
+            "concluded": self.concluded,
+            "can_conclude": self.can_conclude(),
+            "settled": self.settled,
+            # Whether walking away from here costs a cooldown, so the client can
+            # say so *before* the button is pressed rather than after.
+            "leaving_penalised": (self.series_id is not None
+                                  and not self.settled and self.full()),
             "aborted": self.aborted,
             "aborted_side": self.aborted_side,
             "aborted_reason": self.aborted_reason,
@@ -445,6 +510,10 @@ class DraftSession:
             raise AuthError("this series was voided by both players")
         if self.aborted:
             raise AuthError(f"this series was aborted: {self.aborted_reason}")
+        if self.concluded:
+            raise AuthError("this series was already closed out")
+        if self.cancelled:
+            raise AuthError(f"side {self.cancelled_by} left this series")
 
         # Who actually played. Checked before the result is counted, because a
         # game played by the wrong people must not become a rating change.
@@ -629,6 +698,7 @@ class DraftService:
                              aborted_side=row.get("aborted_side"),
                              aborted_reason=row.get("aborted_reason"),
                              voided=bool(row.get("voided")),
+                             concluded=bool(row.get("concluded")),
                              voided_games=set(row.get("voided_games") or []))
             for seat in row["seats"]:
                 s.seats[seat["account_id"]] = Seat(

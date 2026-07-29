@@ -254,6 +254,24 @@ public sealed class ServerDraft : IDisposable
     }
 
     /// <summary>
+    /// Close out a decided series.
+    ///
+    /// Either side may. Until somebody does, both are bound to a board that is
+    /// over — and an open series is what keeps them out of the queue.
+    /// </summary>
+    public async Task<bool> ConcludeAsync()
+    {
+        if (DraftId is null) return false;
+        var next = await _api.PostAsync<DraftStateDto>(
+            $"/drafts/{DraftId}/conclude");
+        if (next is null) { LastError = _api.LastError; return false; }
+        next.ReceivedAt = DateTime.UtcNow;
+        State = next;
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>
     /// Claim the host role, before a lobby exists.
     ///
     /// Whoever asks first settles it, and the other client stops offering to

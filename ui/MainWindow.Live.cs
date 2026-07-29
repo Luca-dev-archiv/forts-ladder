@@ -83,6 +83,19 @@ public partial class MainWindow
     private async void BtnObserve_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button b || b.Tag is not string id) return;
+
+        // The terms first, and a real decision about them. A spectator sees both
+        // forts; in a rated series that is everything one side is paying to keep
+        // hidden, so agreeing to a delay is the condition of being let in — not
+        // a line of small print after the fact.
+        var terms = await _login.ObserverTermsAsync();
+        var answer = MessageBox.Show(
+            this, (terms?.Terms ?? "") + Environment.NewLine + Environment.NewLine
+                  + Loc.T("live.terms_ask"),
+            Loc.T("live.terms_title"), MessageBoxButton.OKCancel,
+            MessageBoxImage.Information);
+        if (answer != MessageBoxResult.OK) return;
+
         b.IsEnabled = false;
         var ok = await _api.PostAsync($"/live/{id}/observe");
         b.Content = ok ? Loc.T("live.requested") : Loc.T("live.request");

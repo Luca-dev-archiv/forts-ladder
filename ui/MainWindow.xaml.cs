@@ -43,7 +43,7 @@ public partial class MainWindow : Window
         InitQueue();
         InitObservers();
 
-        _watcher = new LogWatcher(TimeSpan.FromSeconds(2));
+        _watcher = new LogWatcher(TimeSpan.FromSeconds(1));
         _watcher.StatusChanged += (s, ok) => Dispatcher.Invoke(() => SetStatus(s, ok));
         _watcher.AccountDetected += (id, persona) =>
             Dispatcher.Invoke(() => OnAccount(id, persona));
@@ -54,6 +54,10 @@ public partial class MainWindow : Window
             // server needs to hear about it to open the next commanders.
             MaybeReportSeriesGame(m);
         });
+        // The result as soon as the game says so, rather than when the replay
+        // name turns up: the score does not need the filename, and waiting for it
+        // left a finished game looking like it was still running.
+        _watcher.MatchDecided += m => Dispatcher.Invoke(() => MaybeReportSeriesGame(m));
         _watcher.LobbySeen += id => Dispatcher.Invoke(() => OnLobbySeen(id));
 
         // lobby.dat carries the id the moment the lobby exists, which the log
@@ -434,6 +438,41 @@ public partial class MainWindow : Window
             : res.Rated
                 ? Loc.T("series.report_rated")
                 : Loc.T("series.report_unrated", string.Join(" · ", res.Reasons));
+        // Offered whatever the answer was: a series that counted can be wrong
+        // too, and one that did not is exactly what somebody should look at.
+        _lastReportedId = res?.Id;
+        BtnFlag.Visibility = res is null
+            ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>The id of the last series this client reported, so it can be
+    /// handed to a human if the answer was wrong.</summary>
+    private string? _lastReportedId;
+
+    /// <summary>
+    /// Ask a person to look at this series.
+    ///
+    /// The reason an unrated series is kept rather than dropped: "it did not
+    /// count" is sometimes the software being wrong, and the player it happened
+    /// to is the only one who knows. Without this they would have to find an
+    /// admin on Discord and describe a match from memory.
+    /// </summary>
+    private async void BtnFlag_Click(object sender, RoutedEventArgs e)
+    {
+        if (_lastReportedId is not { Length: > 0 } id)
+        {
+            ReportStatus.Text = Loc.T("series.flag_needs_report");
+            return;
+        }
+        BtnFlag.IsEnabled = false;
+        var note = _selected is null ? "" : Loc.T("series.flag_note",
+            string.Join(" vs ", _selected.Sides().Keys
+                .Select(k => string.Join(", ", _selected.Names(_identity, k)))),
+            _selected.Matches.Count);
+        ReportStatus.Text = await _login.FlagResultAsync(id, note)
+            ? Loc.T("series.flagged") : Loc.T("series.flag_failed",
+                                              _api.LastError ?? "?");
+        BtnFlag.IsEnabled = true;
     }
 
     private void BtnCollect_Click(object sender, RoutedEventArgs e)
@@ -716,9 +755,16 @@ public partial class MainWindow : Window
         if (_draft.LastError is { Length: > 0 } err) ShowDraftError(err);
         else DraftErrorBar.Visibility = Visibility.Collapsed;
 
-        // Leaving is offered while there is something to leave, and taken away
-        // the moment the draft is done — at that point the way out is playing.
-        BtnCancelDraft.Visibility = running && !s!.Done && !s.Cancelled
+        // Leaving stays available for as long as the series is live — not
+        // only during the picking. A series now holds both players out of the
+        // queue, so somebody whose opponent walked off has to have a way out;
+        // what changed is that it costs a cooldown, and the button says so.
+        BtnCancelDraft.Visibility = running && !s!.Settled
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        // Offered exactly when the series is decided and still open. Both sides
+        // see it, because both are equally stuck until one of them presses it.
+        BtnFinishSeries.Visibility = running && s!.Can_Conclude
             ? Visibility.Visible : Visibility.Collapsed;
 
         if (!running) return;
@@ -1063,8 +1109,38 @@ public partial class MainWindow : Window
 
     private async void BtnCancelDraft_Click(object sender, RoutedEventArgs e)
     {
+        // Asked once, because the answer is a cooldown and the other player
+        // loses the whole match. Only for a queue match: two people who
+        // arranged a game between themselves may also call it off.
+        if (_draft.State?.Leaving_Penalised == true)
+        {
+            var answer = MessageBox.Show(
+                this, Loc.T("draft.leave_penalty_ask"),
+                Loc.T("draft.leave_penalty_title"),
+                MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.OK) return;
+        }
         if (!await _draft.CancelAsync()) ShowDraftError(_draft.LastError ?? "?");
         RefreshDraft();
+    }
+
+    /// <summary>
+    /// Close out a decided series.
+    ///
+    /// The one act that releases both players: until it happens they are bound
+    /// to a board that is over, and neither may look for another match.
+    /// </summary>
+    private async void BtnFinishSeries_Click(object sender, RoutedEventArgs e)
+    {
+        BtnFinishSeries.IsEnabled = false;
+        var ok = await _draft.ConcludeAsync();
+        BtnFinishSeries.IsEnabled = true;
+        if (!ok) { ShowDraftError(_draft.LastError ?? "?"); return; }
+        RefreshDraft();
+        // Straight to where the next match is found. Staying on a finished
+        // board is the state this button exists to leave.
+        ShowView("queue");
+        _ = RefreshAccountAsync();
     }
 
     /// <summary>
@@ -1220,8 +1296,18 @@ public partial class MainWindow : Window
         PlanList.ItemsSource = s.Plan.Select(g => new
         {
             Title = Loc.T("draft.game", g.Game, g.Map ?? "—"),
-            Tag = g.Decider ? Loc.T("draft.decider")
+            // Which one is being played right now, said in the row rather than
+            // left to be worked out from which commanders are still hidden.
+            Tag = g.Game == s.Revealed_Through && s.Done && !s.Series_Over
+                    ? Loc.T("draft.now_playing")
+                : s.Games_Played.Contains(g.Game) ? Loc.T("draft.game_done")
+                : g.Decider ? Loc.T("draft.decider")
                 : g.Map_Picked_By is null ? "" : Loc.T("draft.picked_by", g.Map_Picked_By),
+            Fill = (Brush)FindResource(
+                g.Game == s.Revealed_Through && s.Done && !s.Series_Over
+                    ? "BgHover" : "BgPanel"),
+            Thickness = g.Game == s.Revealed_Through && s.Done && !s.Series_Over
+                ? new Thickness(2) : new Thickness(0, 0, 0, 2),
             // Own side first and both named: "A vs B" left the reader to work
             // out which of the two was theirs.
             Commanders = g.Commander_A is null && g.Commander_B is null
@@ -1231,7 +1317,9 @@ public partial class MainWindow : Window
                                                       : g.Commander_A) ?? "?"),
                         s.Display((s.Your_Side == "B" ? g.Commander_A
                                                       : g.Commander_B) ?? "?")),
-            Accent = (Brush)FindResource(g.Decider ? "Warn" : "Stroke"),
+            Accent = (Brush)FindResource(
+                g.Game == s.Revealed_Through && s.Done && !s.Series_Over
+                    ? "Accent" : g.Decider ? "Warn" : "Stroke"),
         }).ToList();
     }
 

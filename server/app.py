@@ -499,6 +499,32 @@ def live_accepting(match_id: str, value: bool,
 
 
 # ------------------------------------------------------- Spectator requests
+@app.post("/live/{match_id}/spectators")
+def live_allow_spectators(match_id: str, value: bool,
+                          ladder_session: str | None = Cookie(None),
+                          authorization: str | None = Header(None)):
+    """Allow or forbid spectators for this match at all.
+
+    Different from `/accepting`, which means "not right now": a match closed here
+    declines everybody, a caster included.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    guard(live.set_spectators_allowed, acc, match_id, value)
+    return {"allow_spectators": value}
+
+
+@app.get("/observe/terms")
+def observer_terms():
+    """What a spectator accepts by being admitted.
+
+    Public, because it has to be readable before asking. A spectator sees both
+    forts, and in a rated series that is everything one side is paying to keep
+    hidden — the delay is what makes casting possible without turning the stream
+    into a scouting feed.
+    """
+    return {"terms": LiveService.OBSERVER_TERMS}
+
+
 @app.post("/live/{match_id}/observe")
 def observe(match_id: str, ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):
@@ -733,13 +759,39 @@ def draft_state(draft_id: str, ladder_session: str | None = Cookie(None),
 @app.delete("/drafts/{draft_id}")
 def draft_cancel(draft_id: str, ladder_session: str | None = Cookie(None),
                  authorization: str | None = Header(None)):
-    """Leave a draft. Either side may; the other is told who left."""
+    """Leave a draft. Either side may; the other is told who left.
+
+    Leaving a *queue* match that is still live is a dodge and costs a cooldown:
+    the other player was paired with you by the server and gets nothing out of
+    the match if you walk off. Asked before the state changes, because a draft
+    the opponent already left is not one you are abandoning.
+    """
     acc = require(session_token(ladder_session, authorization))
     s = guard(drafts.get, draft_id)
+    dodge = s.is_dodge(acc)
     state = guard(s.cancel, acc)
     store.save_draft(s)
     # Whoever left is out of the queue too, or the client would offer to
     # rejoin a match it just abandoned.
+    queue.leave(acc)
+    if dodge:
+        queue.note_dodge(acc)
+        state["dodge_cooldown_s"] = queue.cooldown_left(acc)
+    return state
+
+
+@app.post("/drafts/{draft_id}/conclude")
+def draft_conclude(draft_id: str, ladder_session: str | None = Cookie(None),
+                   authorization: str | None = Header(None)):
+    """Close out a decided series, freeing both sides to queue again.
+
+    Either side may — both are equally stuck until somebody does, and the result
+    is already in, so there is nothing left to disagree about.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    s = guard(drafts.get, draft_id)
+    state = guard(s.conclude, acc)
+    store.save_draft(s)
     queue.leave(acc)
     return state
 
@@ -1048,10 +1100,55 @@ def _admin_page(acc, error: str = "") -> HTMLResponse:
     claims = [{"id": a.id, "discord": a.discord_name, "claim": a.ufer_claim,
                "steam_id": a.steam_id, "steam_name": a.steam_name}
               for a in auth.pending_claims()]
+    flags = [{"id": r.id, "played_at": r.played_at, "games": r.games,
+              "score_low": r.score_low, "rated": r.rated,
+              "reasons": r.reasons, "flag_note": r.flag_note}
+             for r in results.flagged()]
     return HTMLResponse(page.admin(
         accounts=_roster_rows(), grants=[g.value for g in Grant],
         my_id=acc.id, pools=queue_pools(), ranking_count=len(ranking.players),
-        may_set_roles=acc.may("grant_role"), error=error, claims=claims))
+        may_set_roles=acc.may("grant_role"), error=error, claims=claims,
+        flags=flags))
+
+
+@app.post("/admin/relink", response_class=HTMLResponse)
+async def admin_relink(request: Request,
+                       ladder_session: str | None = Cookie(None),
+                       authorization: str | None = Header(None)):
+    """Correct a wrong link, or set a ladder name directly.
+
+    Steam proves a link and the person who made it cannot undo it — right for a
+    claim, wrong for a mistake. Somebody who linked the wrong Steam account
+    otherwise has no way back at all.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    guard(acc.require, "link_other_account")
+    form = await request.form()
+    target = auth.accounts.get(str(form.get("account") or ""))
+    if target is None:
+        raise HTTPException(404, "unknown account")
+
+    what = str(form.get("do") or "")
+    try:
+        if what == "unlink_steam":
+            auth.unlink_steam(acc, target)
+        elif what == "unlink_discord":
+            auth.unlink_discord(acc, target)
+        elif what == "name":
+            name = str(form.get("ufer_name") or "").strip()
+            if not name:
+                return _admin_page(acc, "A ladder name cannot be empty.")
+            auth.set_ladder_name(acc, target, name)
+        else:
+            return _admin_page(acc, "Nothing to do.")
+    except AuthError as e:
+        return _admin_page(acc, str(e))
+    store.save_account(target, granted_by=acc.id)
+    # Out of the queue as well: being paired needs a proven Steam ID, and an
+    # account that is already waiting would otherwise be matched without one.
+    if what == "unlink_steam":
+        queue.leave(target)
+    return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/admin/name", response_class=HTMLResponse)
@@ -1186,6 +1283,122 @@ def tournaments_page(ladder_session: str | None = Cookie(None),
         can_create=acc.may("create_tournament")))
 
 
+def _planner_page(acc, tid: str, error: str = "") -> HTMLResponse:
+    try:
+        t = store.load_tournament(tid)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    return HTMLResponse(page.planner(
+        name=t.name, mode=t.mode.key, best_of=t.series_length(),
+        seeding=t.seeding,
+        entrants=[{"name": p.name, "rating": p.rating} for p in t.participants],
+        modes=_mode_choices(), tid=tid,
+        is_admin=acc.may("link_other_account"),
+        data=viewer_data(t, tid) if len(t.participants) >= 2 else None,
+        error=error))
+
+
+@app.get("/manage/plan/{tid}", response_class=HTMLResponse)
+def plan_page(tid: str, ladder_session: str | None = Cookie(None),
+              authorization: str | None = Header(None)):
+    """A tournament being built.
+
+    Separate from the bracket page on purpose: while planning, everything is
+    editable and nothing can be reported; afterwards it is the other way round.
+    """
+    acc = current(session_token(ladder_session, authorization))
+    if acc is None:
+        return _login_first(f"/manage/plan/{tid}")
+    guard(acc.require, "create_tournament")
+    if not store.is_planning(tid):
+        return RedirectResponse(f"/manage/tournaments/{tid}", status_code=303)
+    return _planner_page(acc, tid)
+
+
+@app.post("/manage/plan/{tid}", response_class=HTMLResponse)
+async def plan_edit(tid: str, request: Request,
+                    ladder_session: str | None = Cookie(None),
+                    authorization: str | None = Header(None)):
+    """One change to a tournament being planned.
+
+    Every action is small and immediately visible in the bracket underneath,
+    which is the difference between planning something and filling in a form.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    guard(acc.require, "create_tournament")
+    if not store.is_planning(tid):
+        raise HTTPException(400, "this tournament has already started")
+
+    form = await request.form()
+    what = str(form.get("do") or "")
+    try:
+        t = store.load_tournament(tid)
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    people = list(t.participants)
+
+    def rating_of(raw: str) -> float:
+        try:
+            return float(raw)
+        except ValueError:
+            return 1000.0
+
+    if what == "add":
+        # A pasted block counts as one per line, because that is how a sign-up
+        # list arrives.
+        for line in str(form.get("name") or "").splitlines():
+            parsed = _parse_entrants(line)
+            for person in parsed:
+                if person.rating == 1000.0 and form.get("rating"):
+                    person.rating = rating_of(str(form.get("rating")))
+                if any(x.name == person.name for x in people):
+                    continue
+                people.append(person)
+    elif what in ("edit", "remove", "up", "down"):
+        try:
+            seat = int(str(form.get("seat")))
+        except ValueError as e:
+            raise HTTPException(400, "seat must be a number") from e
+        if not 0 <= seat < len(people):
+            return _planner_page(acc, tid, "That entrant is no longer there.")
+        if what == "remove":
+            people.pop(seat)
+        elif what == "edit":
+            name = str(form.get("name") or "").strip()
+            if not name:
+                return _planner_page(acc, tid, "An entrant needs a name.")
+            if any(x.name == name for i, x in enumerate(people) if i != seat):
+                return _planner_page(acc, tid, f"{name} is already in it.")
+            people[seat].name = name
+            people[seat].members = [name]
+            people[seat].rating = rating_of(str(form.get("rating") or "1000"))
+        elif what == "up" and seat > 0:
+            people[seat - 1], people[seat] = people[seat], people[seat - 1]
+        elif what == "down" and seat < len(people) - 1:
+            people[seat + 1], people[seat] = people[seat], people[seat + 1]
+    elif what == "format":
+        mode = BY_KEY.get(str(form.get("mode") or "")) or t.mode
+        raw_bo = str(form.get("best_of") or "").strip()
+        best_of = int(raw_bo) if raw_bo.isdigit() and int(raw_bo) in (1, 3, 5, 7) \
+            else None
+        seeding = str(form.get("seeding") or "rating")
+        if seeding not in ("rating", "listed", "random"):
+            seeding = "rating"
+        name = str(form.get("name") or "").strip() or t.name
+        store.set_tournament_format(tid, name, mode.key, seeding, best_of)
+        return RedirectResponse(f"/manage/plan/{tid}", status_code=303)
+    elif what == "start":
+        if len(people) < 2:
+            return _planner_page(acc, tid, "A tournament needs two entrants.")
+        store.set_planning(tid, False)
+        return RedirectResponse(f"/manage/tournaments/{tid}", status_code=303)
+    else:
+        return _planner_page(acc, tid, "Nothing to do.")
+
+    store.replace_participants(tid, people)
+    return RedirectResponse(f"/manage/plan/{tid}", status_code=303)
+
+
 @app.post("/manage/tournaments", response_class=HTMLResponse)
 async def tournaments_page_create(request: Request,
                                   ladder_session: str | None = Cookie(None),
@@ -1212,13 +1425,17 @@ async def tournaments_page_create(request: Request,
     if not name:
         return again("Give the tournament a name.")
     try:
+        # Opened as a plan: the entrant list is filled in from here on, and
+        # the two-entrant minimum applies when it starts.
         t = Tournament(name, _parse_entrants(entrants), mode=mode,
-                       seeding=seeding, best_of=best_of)
+                       seeding=seeding, best_of=best_of, planning=True)
     except ValueError as e:
         return again(str(e))
     tid = secrets.token_hex(6)
-    store.create_tournament(tid, t, created_by=acc.id)
-    return RedirectResponse(f"/manage/tournaments/{tid}", status_code=303)
+    # Created as a plan, not as a finished bracket: a host adds people as they
+    # sign up and looks at what comes out before anything is fixed.
+    store.create_tournament(tid, t, created_by=acc.id, planning=True)
+    return RedirectResponse(f"/manage/plan/{tid}", status_code=303)
 
 
 def _bracket_page(acc, tid: str, error: str = "") -> HTMLResponse:
@@ -1251,6 +1468,10 @@ def bracket_page(tid: str, ladder_session: str | None = Cookie(None),
     acc = current(session_token(ladder_session, authorization))
     if acc is None:
         return _login_first(f"/manage/tournaments/{tid}")
+    # Still being built: the planner is where it belongs, and only somebody who
+    # may create one gets to see it half-finished.
+    if store.is_planning(tid) and acc.may("create_tournament"):
+        return RedirectResponse(f"/manage/plan/{tid}", status_code=303)
     return _bracket_page(acc, tid)
 
 
@@ -1304,6 +1525,8 @@ async def bracket_page_report(tid: str, request: Request,
                               authorization: str | None = Header(None)):
     acc = require(session_token(ladder_session, authorization))
     guard(acc.require, "run_tournament")
+    if store.is_planning(tid):
+        raise HTTPException(400, "this tournament has not started yet")
     form = await request.form()
     match_id = str(form.get("match") or "")
     winner = str(form.get("winner") or "")
@@ -1367,6 +1590,26 @@ def report_result(body: ResultBody2, ladder_session: str | None = Cookie(None),
     return {"id": r.id, "rated": r.rated, "reasons": r.reasons}
 
 
+class FlagBody(BaseModel):
+    note: str = ""
+
+
+@app.post("/results/{result_id}/flag")
+def flag_result(result_id: str, body: FlagBody,
+                ladder_session: str | None = Cookie(None),
+                authorization: str | None = Header(None)):
+    """Ask for a human to look at one of your own series.
+
+    This is why a series that cannot be rated is stored rather than dropped:
+    "it did not count" is sometimes the software being wrong, and the person it
+    happened to is the only one who knows. Without this they would have to find
+    an admin on Discord and describe a match from memory.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    r = guard(results.flag, acc, result_id, body.note)
+    return {"id": r.id, "flagged": r.flagged}
+
+
 @app.get("/results/mine")
 def my_results(ladder_session: str | None = Cookie(None),
                authorization: str | None = Header(None)):
@@ -1379,7 +1622,8 @@ def my_results(ladder_session: str | None = Cookie(None),
     return {"series": [{"id": r.id, "played_at": r.played_at,
                         "games": r.games, "score_low": r.score_low,
                         "your_side": r.sides[acc.steam_id],
-                        "rated": r.rated, "reasons": r.reasons}
+                        "rated": r.rated, "reasons": r.reasons,
+                        "flagged": r.flagged, "flag_note": r.flag_note}
                        for r in mine]}
 
 

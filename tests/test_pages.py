@@ -65,13 +65,26 @@ class World:
         return acc, {"Authorization": f"Bearer {session.token}"}
 
 
-def cup(w: World, headers: dict, entrants: str = ENTRANTS) -> str:
+def cup(w: World, headers: dict, entrants: str = ENTRANTS,
+        start: bool = True) -> str:
+    """Create a tournament and, by default, start it.
+
+    Creating now lands in the planner — a host adds people and looks at the
+    bracket before anything is fixed — so a test that wants a runnable bracket
+    has to say so.
+    """
     r = w.client.post("/manage/tournaments", headers=headers,
                       follow_redirects=False,
                       data={"name": "Summer Cup", "mode": "tournament_1v1",
                             "entrants": entrants})
     assert r.status_code == 303, r.text[:300]
-    return r.headers["location"].rsplit("/", 1)[1]
+    tid = r.headers["location"].rsplit("/", 1)[1]
+    assert "/manage/plan/" in r.headers["location"], r.headers["location"]
+    if start:
+        s = w.client.post(f"/manage/plan/{tid}", headers=headers,
+                          follow_redirects=False, data={"do": "start"})
+        assert s.status_code == 303, s.text[:300]
+    return tid
 
 
 # ------------------------------------------------------------ Who sees what
@@ -396,6 +409,137 @@ def test_renaming_is_refused_once_a_result_is_in():
     assert r.status_code == 200 and "result has been reported" in r.text
     names = [p.name for p in app_mod.store.load_tournament(tid).participants]
     assert "Nope" not in names
+
+
+# ------------------------------------------------------------------- Planner
+# A tournament used to be a form: a name, a mode, and a textarea of entrants,
+# after which nothing could be changed. That is data entry, not planning.
+def plan(w: World, headers: dict, tid: str, **data):
+    r = w.client.post(f"/manage/plan/{tid}", headers=headers,
+                      follow_redirects=False, data=data)
+    assert r.status_code in (200, 303), r.text[:300]
+    return r
+
+
+def entrant_names(w: World, headers: dict, tid: str) -> list[str]:
+    t = app_mod.store.load_tournament(tid)
+    return [x.name for x in t.participants]
+
+
+def test_a_new_tournament_lands_in_the_planner_not_in_a_bracket():
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h, start=False)
+    body = w.client.get(f"/manage/plan/{tid}", headers=h).text
+    assert "Add an entrant" in body
+    assert "Start the tournament" in body
+    # And the bracket page hands a host straight back to it, so there is one
+    # place a half-built tournament lives.
+    r = w.client.get(f"/manage/tournaments/{tid}", headers=h,
+                     follow_redirects=False)
+    assert r.status_code == 303 and f"/manage/plan/{tid}" in r.headers["location"]
+
+
+def test_an_entrant_can_be_added_dropped_and_moved():
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h, entrants="Alice, 1400\nBob, 1200\n", start=False)
+
+    plan(w, h, tid, do="add", name="Carol", rating="1300")
+    assert entrant_names(w, h, tid) == ["Alice", "Bob", "Carol"]
+
+    plan(w, h, tid, do="up", seat="2")
+    assert entrant_names(w, h, tid) == ["Alice", "Carol", "Bob"]
+
+    plan(w, h, tid, do="remove", seat="0")
+    assert entrant_names(w, h, tid) == ["Carol", "Bob"]
+
+    plan(w, h, tid, do="edit", seat="1", name="Bobby", rating="1250")
+    t = app_mod.store.load_tournament(tid)
+    assert [x.name for x in t.participants] == ["Carol", "Bobby"]
+    assert t.participants[1].rating == 1250
+
+
+def test_a_pasted_list_is_added_one_per_line():
+    """A sign-up list arrives as a block, and retyping it is how names get
+    misspelled."""
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h, entrants="Alice, 1400\n", start=False)
+    plan(w, h, tid, do="add", name="Bob, 1200\nCarol\nDave, 1100")
+    assert entrant_names(w, h, tid) == ["Alice", "Bob", "Carol", "Dave"]
+
+
+def test_the_same_person_is_not_added_twice():
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h, entrants="Alice, 1400\n", start=False)
+    plan(w, h, tid, do="add", name="Alice")
+    assert entrant_names(w, h, tid) == ["Alice"]
+
+
+def test_the_format_can_be_changed_while_planning():
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h, start=False)
+    plan(w, h, tid, do="format", name="Winter Cup",
+         mode="tournament_1v1", best_of="5", seeding="listed")
+    t = app_mod.store.load_tournament(tid)
+    assert t.name == "Winter Cup"
+    assert t.series_length() == 5
+    assert t.seeding == "listed"
+
+
+def test_nothing_can_be_reported_before_the_tournament_starts():
+    """A bracket built from entrants that can still change would move a stored
+    result onto a different player."""
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h, start=False)
+    r = w.client.post(f"/manage/tournaments/{tid}/report", headers=h,
+                      follow_redirects=False,
+                      data={"match": "1", "winner": "0", "score": "2:0"})
+    assert r.status_code == 400, r.status_code
+    assert "not started" in r.text
+
+
+def test_a_tournament_cannot_be_started_with_one_entrant():
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h, entrants="Alice, 1400\n", start=False)
+    r = plan(w, h, tid, do="start")
+    assert r.status_code == 200 and "two entrants" in r.text
+    assert app_mod.store.is_planning(tid)
+
+
+def test_starting_closes_the_planner():
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h)                                    # starts it
+    assert not app_mod.store.is_planning(tid)
+    r = w.client.post(f"/manage/plan/{tid}", headers=h, data={"do": "add",
+                                                             "name": "Late"})
+    assert r.status_code == 400, r.status_code
+    assert "already started" in r.text
+
+
+def test_the_listing_says_which_tournaments_are_still_being_planned():
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h, start=False)
+    body = w.client.get("/manage/tournaments", headers=h).text
+    assert "being planned" in body
+    assert f"/manage/plan/{tid}" in body
+
+
+def test_a_player_cannot_plan_a_tournament():
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    _, ph = w.person("Player")
+    tid = cup(w, h, start=False)
+    assert w.client.get(f"/manage/plan/{tid}", headers=ph).status_code == 403
+    assert w.client.post(f"/manage/plan/{tid}", headers=ph,
+                         data={"do": "add", "name": "X"}).status_code == 403
 
 
 def _run_all() -> int:

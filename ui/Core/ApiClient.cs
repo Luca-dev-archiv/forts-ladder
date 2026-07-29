@@ -329,6 +329,20 @@ public sealed class DraftStateDto
     /// <summary>Decided — a Bo3 ends at two, not after three games.</summary>
     public bool Series_Over { get; set; }
 
+    /// <summary>Closed out, so both sides are free to queue again.</summary>
+    public bool Concluded { get; set; }
+
+    /// <summary>Decided but not yet closed out — this client may end it.</summary>
+    public bool Can_Conclude { get; set; }
+
+    /// <summary>Nothing more will happen here: finished, left, aborted or
+    /// voided. Which is also the only question the queue asks.</summary>
+    public bool Settled { get; set; }
+
+    /// <summary>Whether leaving from here costs a cooldown. Asked so the warning
+    /// comes before the click and not after it.</summary>
+    public bool Leaving_Penalised { get; set; }
+
     /// <summary>
     /// The lobby password, for the two players only.
     ///
@@ -456,6 +470,11 @@ public sealed class VoidRequestDto
     public string Reason { get; set; } = "";
 }
 
+public sealed class TermsDto
+{
+    public string Terms { get; set; } = "";
+}
+
 public sealed class PublishedDto
 {
     public string Match_Id { get; set; } = "";
@@ -476,6 +495,10 @@ public sealed class ObserverInboxDto
 
 public sealed class ObserverRequestDto
 {
+    /// <summary>Set once a human has been asked to look at this one.</summary>
+    public bool Flagged { get; set; }
+    public string Flag_Note { get; set; } = "";
+
     public string Id { get; set; } = "";
     public string Match_Id { get; set; } = "";
     /// <summary>"pending", "approved" or "declined".</summary>

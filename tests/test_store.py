@@ -467,6 +467,80 @@ def test_a_stale_draft_is_not_restored():
         store.close()
 
 
+def test_unlinking_survives_the_unique_columns_and_a_reload():
+    """steam_id, ufer_name and discord_id are all UNIQUE in the schema, so an
+    unlink writes NULL into a unique column — and then somebody else has to be
+    able to link that same Steam account afterwards. If either half fails the
+    account is stuck half-detached, which is worse than a wrong link."""
+    auth = AuthService()
+    wrong = auth.login_discord("1", "Wrong")
+    auth.attach_steam(wrong, "76561199000000001")
+    auth.set_tracking_consent(wrong, True)
+    wrong.ufer_name = "Wrong"
+    admin = auth.login_discord("2", "Boss")
+    admin.role = Role.ADMIN
+
+    with tempfile.TemporaryDirectory() as d:
+        store = Store(Path(d) / "u.sqlite")
+        store.save_account(wrong)
+        store.save_account(admin)
+
+        auth.unlink_steam(admin, wrong)
+        store.save_account(wrong)
+
+        back = store.load_accounts()[wrong.id]
+        assert back.steam_id is None
+        assert back.steam_name is None
+        assert back.tracking_consent is False,             "consent needs a proven Steam ID and must go with it"
+        assert back.consent_since is None
+
+        # The freed Steam account can now be linked by its actual owner.
+        right = auth.login_discord("3", "Right")
+        auth.attach_steam(right, "76561199000000001")
+        store.save_account(right)
+        assert store.load_accounts()[right.id].steam_id == "76561199000000001"
+
+        # And two accounts can sit there with no Steam ID at all: SQLite treats
+        # NULLs in a unique index as distinct, but that is worth pinning down.
+        second = auth.login_discord("4", "Also")
+        store.save_account(second)
+        assert store.load_accounts()[second.id].steam_id is None
+        store.close()
+
+
+def test_unlinking_discord_signs_the_account_out():
+    """Removing the login while leaving the sessions alive removes nothing:
+    whoever is signed in stays signed in."""
+    auth = AuthService()
+    person = auth.login_discord("1", "Person")
+    auth.attach_steam(person, "76561199000000001")
+    token = auth.start_session(person).token
+    admin = auth.login_discord("2", "Boss")
+    admin.role = Role.ADMIN
+
+    assert auth.account_for(token) is person
+    auth.unlink_discord(admin, person)
+    assert person.discord_id is None
+    assert auth.account_for(token) is None, "the session outlived the login"
+
+
+def test_a_pairing_code_does_not_outlive_the_link_it_was_issued_for():
+    auth = AuthService()
+    person = auth.login_discord("1", "Person")
+    auth.attach_steam(person, "76561199000000001")
+    code = auth.begin_pairing(person)
+    admin = auth.login_discord("2", "Boss")
+    admin.role = Role.ADMIN
+
+    auth.unlink_steam(admin, person)
+    try:
+        auth.claim_pairing(code)
+    except AuthError:
+        pass
+    else:
+        raise AssertionError("a code issued before the unlink still worked")
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

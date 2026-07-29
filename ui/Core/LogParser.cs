@@ -73,6 +73,38 @@ public sealed class MatchRecord
             WinnerSide = surviving[0];
             return;
         }
+        // Everyone defeated. This is how a real game normally ends, not an
+        // oddity: when the match finishes Forts records a defeat for the
+        // remaining forts too, so a 1v1 ends with both players in the list —
+        // seconds apart. Treating that as "more than one side has survivors"
+        // made every real match unclear, and an unclear match was never
+        // reported, so nothing ever reached the ladder.
+        //
+        // The first fort to fall is the side that lost. The timestamps come from
+        // the simulation, so both clients agree on them.
+        if (sides.Count >= 2 && defeated.Count > 0 && surviving.Count == 0)
+        {
+            var firstFall = new Dictionary<int, int>();
+            foreach (var d in Defeats)
+                foreach (var (side, names) in sides)
+                    if (names.Contains(d.Name))
+                        firstFall[side] = firstFall.TryGetValue(side, out var at)
+                            ? Math.Min(at, d.AtSeconds) : d.AtSeconds;
+
+            if (firstFall.Count == sides.Count)
+            {
+                var order = firstFall.OrderBy(kv => kv.Value).ToList();
+                // A tie decides nothing: simultaneous defeats are a draw or a
+                // disconnect, and guessing would be worse than saying so.
+                if (order.Count >= 2 && order[0].Value < order[1].Value)
+                {
+                    Status = MatchStatus.Decided;
+                    WinnerSide = order[1].Key;
+                    return;
+                }
+            }
+        }
+
         if (sides.Count == 1)
         {
             // Only one side in the roster: the opponent was the built-in AI,
@@ -146,6 +178,20 @@ public sealed class LogParser
 
     /// <summary>Raised as soon as a game is complete.</summary>
     public event Action<MatchRecord>? MatchFinished;
+
+    /// <summary>
+    /// Raised the moment the game says it is over, before the replay line.
+    ///
+    /// The outcome is decided about ten lines earlier than `Replay saved as`:
+    /// the roster and the defeats are all in by then, and that is everything a
+    /// result needs. Waiting for the replay name meant the client still showed a
+    /// game as running long after it had finished — the filename is needed for
+    /// the archive, not for the score.
+    ///
+    /// The record is not finished here and will be raised again through
+    /// <see cref="MatchFinished"/> with the replay name attached.
+    /// </summary>
+    public event Action<MatchRecord>? MatchDecided;
 
     /// <summary>
     /// Raised when the game reports a new Steam lobby.
@@ -321,6 +367,13 @@ public sealed class LogParser
 
         if (line.Contains(MatchEnd))
         {
+            // Announce the result now. Everything a score needs — who was in it
+            // and who lost — is already here.
+            if (_current.IsInteresting)
+            {
+                _current.Resolve();
+                MatchDecided?.Invoke(_current);
+            }
             // NOT the end of parsing. `Replay saved as` follows about ten lines
             // later, and finishing here dropped it every time — which also cost
             // the timestamp, since the replay filename is the only wall clock in

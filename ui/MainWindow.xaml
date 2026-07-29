@@ -642,6 +642,16 @@
                   <TextBlock x:Name="TurnSub" Style="{StaticResource Label}"
                              TextAlignment="Center" TextWrapping="Wrap"
                              HorizontalAlignment="Center" Margin="0,2,0,6"/>
+                  <!-- Ending the series, and abandoning it. Deliberately
+                       adjacent and deliberately different weights: one is what
+                       you press when the match is over, the other costs a
+                       cooldown. -->
+                  <Button x:Name="BtnFinishSeries"
+                          Content="{core:T draft.finish}"
+                          Style="{StaticResource BtnAccent}" Padding="10,4"
+                          FontSize="12" Margin="0,0,0,6"
+                          HorizontalAlignment="Center" Visibility="Collapsed"
+                          Click="BtnFinishSeries_Click"/>
                   <Button x:Name="BtnCancelDraft" Content="{core:T draft.cancel}"
                           Style="{StaticResource Btn}" Padding="10,3"
                           FontSize="11" Margin="0,0,0,6"
@@ -730,7 +740,12 @@
                     Padding="20,14" BorderBrush="{StaticResource Win}"
                     BorderThickness="0,2,0,0">
               <DockPanel>
-                <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right">
+                <!-- MaxWidth, because a WrapPanel docked right is measured with
+                     unlimited width in its stacking direction: it took as much
+                     as it wanted and the text beside it ended up underneath the
+                     buttons, which is why the password could not be read. -->
+                <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right"
+                           MaxWidth="420">
                   <Button x:Name="BtnLaunchForts" Content="{core:T handoff.launch}"
                           Style="{StaticResource Btn}" Padding="14,8"
                           Click="BtnLaunchForts_Click"/>
@@ -754,10 +769,11 @@
                   <!-- What was played differently from what was agreed.
                        Reported, not enforced: the client cannot stop any of it
                        and should not pretend to. -->
-                  <TextBlock x:Name="LobbyPassword" FontSize="14"
+                  <TextBlock x:Name="LobbyPassword" FontSize="16"
                              FontFamily="Consolas" FontWeight="Bold"
                              Foreground="{StaticResource Accent}"
-                             Margin="0,4,0,0" Visibility="Collapsed"/>
+                             TextWrapping="Wrap" Margin="0,6,0,0"
+                             Visibility="Collapsed"/>
                   <TextBlock x:Name="SeriesWarnings" FontSize="12"
                              Foreground="{StaticResource Warn}"
                              TextWrapping="Wrap" Margin="0,6,0,0"
@@ -872,9 +888,13 @@
             <ItemsControl x:Name="PlanList">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                  <Border Background="{StaticResource BgPanel}" CornerRadius="6"
+                  <!-- The game being played is bordered all round in the accent
+                       colour, not just underlined: working out which line is the
+                       current one took longer than reading it. -->
+                  <Border Background="{Binding Fill}" CornerRadius="6"
                           Padding="12,10" Margin="0,0,0,6"
-                          BorderBrush="{Binding Accent}" BorderThickness="0,0,0,2">
+                          BorderBrush="{Binding Accent}"
+                          BorderThickness="{Binding Thickness}">
                     <StackPanel>
                       <DockPanel>
                         <TextBlock DockPanel.Dock="Right" Text="{Binding Tag}"
@@ -1255,6 +1275,11 @@
                   <Button x:Name="BtnCollect" Content="{core:T series.collect}"
                           Style="{StaticResource Btn}" Margin="0,0,8,8"
                           Click="BtnCollect_Click"/>
+                  <!-- Every series is listed, rated or not, so that a wrong one
+                       can be handed to a person instead of being lost. -->
+                  <Button x:Name="BtnFlag" Content="{core:T series.flag}"
+                          Style="{StaticResource Btn}" Margin="0,0,8,8"
+                          Visibility="Collapsed" Click="BtnFlag_Click"/>
                 </WrapPanel>
 
                 <TextBlock x:Name="ReportStatus" Style="{StaticResource Label}"

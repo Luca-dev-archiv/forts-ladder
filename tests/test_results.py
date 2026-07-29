@@ -214,6 +214,55 @@ def test_under_ten_games_a_rating_is_marked_provisional():
     assert row["open_games"] == 3
 
 
+# ---------------------------------------------------- Asking a human to look
+def test_an_unrated_series_is_kept_and_can_be_flagged():
+    """The reason a series that cannot be rated is stored rather than dropped:
+    "it did not count" is sometimes the software being wrong, and the person it
+    happened to is the only one who knows."""
+    w = World()
+    r = w.duel(lobby=999)                 # not sanctioned, so not rated
+    assert r.rated is False
+    assert len(w.store.load_results()) == 1, "an unrated series was dropped"
+
+    flagged = w.results.flag(w.people["Alice"], r.id,
+                             "the host crashed and it never counted")
+    assert flagged.flagged is True
+    assert "crashed" in flagged.flag_note
+    # And it is waiting for somebody.
+    assert [x.id for x in w.results.flagged()] == [r.id]
+
+
+def test_only_a_participant_may_flag_a_series():
+    """A report about your own match, not a way to file complaints about other
+    people."""
+    w = World()
+    w.store.sanction_lobby(111)
+    r = w.duel()
+    try:
+        w.results.flag(w.people["Carol"], r.id, "I do not like this result")
+    except AuthError as e:
+        assert "not in this series" in str(e), str(e)
+    else:
+        raise AssertionError("an outsider flagged somebody else's series")
+
+
+def test_a_flag_survives_a_reload():
+    w = World()
+    r = w.duel(lobby=999)
+    w.results.flag(w.people["Bob"], r.id, "wrong commander loaded")
+    again = [x for x in w.store.load_results() if x.id == r.id][0]
+    assert again.flagged is True
+    assert again.flag_note == "wrong commander loaded"
+
+
+def test_flagging_does_not_make_it_count():
+    """Asking for a look is not a way to get a result rated."""
+    w = World()
+    r = w.duel(lobby=999)
+    w.results.flag(w.people["Alice"], r.id, "please check")
+    assert w.rating("Alice") is None
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

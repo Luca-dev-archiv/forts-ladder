@@ -64,6 +64,9 @@ class LiveMatch:
     password_protected: bool = True
     observers: list[str] = field(default_factory=list)
     accepting_requests: bool = True
+    #: The host can refuse spectators outright, which is a different statement
+    #: from "not right now": a closed match declines even a caster.
+    allow_spectators: bool = True
     started_at: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
     tournament: str | None = None
@@ -84,7 +87,10 @@ class LiveMatch:
             "players": self.players,
             "observers": self.observers,
             "free_slots": self.free_slots,
-            "accepting_requests": self.accepting_requests and self.free_slots > 0,
+            "accepting_requests": (self.accepting_requests
+                                   and self.allow_spectators
+                                   and self.free_slots > 0),
+            "allow_spectators": self.allow_spectators,
             "running_for_s": round(time.time() - self.started_at),
             "tournament": self.tournament,
         }
@@ -149,6 +155,18 @@ class LiveService:
                 sorted(self.matches.values(), key=lambda m: m.started_at)]
 
     # -------------------------------------------------------------- Requests
+    def set_spectators_allowed(self, actor: Account, match_id: str,
+                               value: bool) -> None:
+        """Allow or forbid spectators for this match at all.
+
+        Separate from `set_accepting`, which is "not right now": a match closed
+        here declines everybody, including a caster.
+        """
+        m = self._match(match_id)
+        if m.host_account_id != actor.id:
+            raise AuthError("only the host decides this for their match")
+        m.allow_spectators = value
+
     def set_accepting(self, actor: Account, match_id: str, value: bool) -> None:
         m = self._match(match_id)
         if m.host_account_id != actor.id and not actor.may("override_observer_lock"):
@@ -190,15 +208,39 @@ class LiveService:
         owner = m.host_steam or "0"
         return f"steam://joinlobby/410900/{m.lobby_id}/{owner}"
 
+    #: What a spectator has to accept before they are let in.
+    #:
+    #: Not decoration: a spectator sees both forts, and in a rated series that is
+    #: everything one side is paying to keep hidden. The delay is what makes
+    #: casting possible without turning the stream into a scouting feed.
+    OBSERVER_TERMS = (
+        "Broadcast only on a delay of at least two minutes. "
+        "Do not pass anything you see to a player in this match — not the "
+        "commanders, not the build, not the economy. "
+        "Being admitted is a courtesy from the host and can be withdrawn."
+    )
+
     def request_observer(self, account: Account, match_id: str) -> ObserverRequest:
         account.require("request_observer")
         m = self._match(match_id)
 
+        # Watching is a role. Caster by rank, or the caster or referee grant
+        # without a promotion — see REQUIRED_ROLE for why.
+        if not account.may("observe_match"):
+            r = ObserverRequest(secrets.token_hex(6), match_id, account.id,
+                                account.ufer_name or account.discord_name or "?",
+                                self._now())
+            r.state = RequestState.DECLINED
+            r.reason = ("watching takes the caster or referee role — ask an "
+                        "admin for it")
+            self.requests[r.id] = r
+            return r
+
         # Ranked games are not a spectator sport here. A watcher in a rated
         # series is one more person who knows what is on the board, and the
-        # scene's own habit is to keep those closed. Admins and casters are the
-        # exception because arbitrating needs seeing.
-        if m.mode_key.startswith("ranked")                 and not account.may("override_observer_lock"):
+        # scene's own habit is to keep those closed. Casters and referees are the
+        # exception, because casting and arbitrating both need seeing.
+        if m.mode_key.startswith("ranked") and not account.may("observe_ranked"):
             r = ObserverRequest(secrets.token_hex(6), match_id, account.id,
                                 account.ufer_name or account.discord_name or "?",
                                 self._now())
@@ -223,6 +265,15 @@ class LiveService:
             r.state = RequestState.DECLINED
             r.reason = ("lobby is full — Forts allows nine clients, "
                         "spectators included")
+            return r
+
+        if not m.allow_spectators:
+            r = ObserverRequest(secrets.token_hex(6), match_id, account.id,
+                                account.ufer_name or account.discord_name or "?",
+                                self._now())
+            r.state = RequestState.DECLINED
+            r.reason = "this match is closed to spectators"
+            self.requests[r.id] = r
             return r
 
         if not m.accepting_requests:

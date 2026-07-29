@@ -147,6 +147,64 @@ def test_a_game_with_no_multiplayer_lobby_has_none():
     assert m.lobby_id is None
 
 
+def test_the_winner_is_the_side_whose_fort_fell_second():
+    """The normal end of a real game, not an oddity: when the match finishes
+    Forts records a defeat for the remaining forts too, so a 1v1 ends with both
+    players in the defeat list. Reading that as "more than one side has
+    survivors" made every real match unclear — and an unclear match is never
+    reported, which is why nothing ever reached the ladder.
+
+    The numbers are from a real 1v1: 0:07 and 0:08 apart.
+    """
+    lines = [
+        "  Game mode: Team Death Match",
+        "Loading map maps/Desert Ruins/Desert Ruins.fwe",
+        "  1: loser, Id 1, Team 1, alive, join at 0, (Steam), "
+        "SteamID 76561199000000001, x, Local 0, ping 0.1",
+        "  2: winner, Id 2, Team 2, alive, join at 0, (Steam), "
+        "SteamID 76561199000000002, x, Local 1, ping 0.1",
+        "  0:07 loser has been defeated!",
+        "  0:08 winner has been defeated!",
+        "World::Execute mDone detected",
+        "  Team1 commander: commander-da-builder",
+        "  Team2 commander: commander-ee-fireman",
+        "Replay saved as replays/v1.38.2_Desert Ruins_20260729_183631.fwr",
+    ]
+    (m,) = parse(lines)
+    out = m.to_dict()["outcome"]
+    assert out["status"] == "decided", out
+    assert out["winner_side"] == 2, out
+    assert out["basis"] == "first fort to fall", out
+
+
+def test_simultaneous_defeats_decide_nothing():
+    """A tie is a draw or a disconnect. Guessing would be worse than saying so,
+    and the void feature exists for exactly this."""
+    lines = [
+        "  Game mode: Team Death Match",
+        "Loading map maps/Bowl/Bowl.fwe",
+        "  1: one, Id 1, Team 1, alive, join at 0, (Steam), "
+        "SteamID 76561199000000001, x, Local 0, ping 0.1",
+        "  2: two, Id 2, Team 2, alive, join at 0, (Steam), "
+        "SteamID 76561199000000002, x, Local 1, ping 0.1",
+        "  5:00 one has been defeated!",
+        "  5:00 two has been defeated!",
+        "World::Execute mDone detected",
+        "Replay saved as replays/v1.38.2_Bowl_20260729_190000.fwr",
+    ]
+    (m,) = parse(lines)
+    assert m.to_dict()["outcome"]["status"] == "unclear"
+
+
+def test_one_side_standing_still_wins_the_normal_way():
+    """The clean case has to keep working: only the losing side defeated."""
+    (m,) = parse(GAME)
+    out = m.to_dict()["outcome"]
+    assert out["status"] == "decided"
+    assert out["winner_side"] == 1
+    assert out["basis"] == "defeat-lines", out
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

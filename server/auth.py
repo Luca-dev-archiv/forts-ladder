@@ -106,6 +106,17 @@ REQUIRED_ROLE: dict[str, Role] = {
     "join_queue": Role.PLAYER,
     "request_observer": Role.PLAYER,
     "publish_live_match": Role.PLAYER,
+    # Watching somebody else's match is a role, not something everybody may ask
+    # for. Caster by rank, or the caster or referee grant without a promotion: a
+    # player with no reason to be in that lobby is exactly who should not be
+    # there, and "ask everyone and see who says yes" is how information leaks in
+    # a small scene.
+    "observe_match": Role.CASTER,
+    # A rated series is stricter again: a caster may watch unranked and
+    # tournament games, but somebody has to be answerable for being in a lobby
+    # whose result changes ratings. Admin, or the referee grant — the people who
+    # would have to arbitrate it anyway.
+    "observe_ranked": Role.ADMIN,
     "create_tournament": Role.ADMIN,
     "run_tournament": Role.ADMIN,
     "report_any_match": Role.ADMIN,
@@ -121,8 +132,8 @@ GRANT_UNLOCKS: dict[Grant, set[str]] = {
     # A referee has to correct results and watch any match, or they cannot
     # arbitrate.
     Grant.REFEREE: {"report_any_match", "override_observer_lock",
-                    "run_tournament"},
-    Grant.CASTER: {"override_observer_lock"},
+                    "run_tournament", "observe_match", "observe_ranked"},
+    Grant.CASTER: {"override_observer_lock", "observe_match"},
     Grant.MAP_MAKER: set(),
     Grant.MOD_MAKER: set(),
     Grant.CONTENT_CREATOR: set(),
@@ -338,6 +349,76 @@ class AuthService:
     def reject_ufer_name(self, actor: Account, target: Account) -> None:
         actor.require("link_other_account")
         target.ufer_claim = None
+
+    def unlink_steam(self, actor: Account, target: Account) -> None:
+        """Detach a wrongly linked Steam account.
+
+        Linking is proved by Steam and cannot be undone by the person who did it
+        — which is right for a claim and wrong for a mistake. Somebody who linked
+        the wrong Steam account, or an account they no longer have, otherwise has
+        no way back at all.
+
+        Consent goes with it: being tracked requires a proven Steam ID, so an
+        account without one must not stay in the roster.
+        """
+        actor.require("link_other_account")
+        target.steam_id = None
+        target.steam_name = None
+        target.tracking_consent = False
+        target.consent_since = None
+        # Everything derived from the link goes with it, or the account keeps a
+        # half-detached state: pairing codes were issued against this identity,
+        # and a client still holding one would act as an account that no longer
+        # has a Steam ID.
+        self._forget_pairings(target)
+
+    def unlink_discord(self, actor: Account, target: Account) -> None:
+        """Detach the Discord login.
+
+        The account keeps its ladder name and history; what it loses is the way
+        in. Whoever owns it logs in again and the accounts can be merged by hand
+        — which is a job for a person, not for a form.
+        """
+        actor.require("link_other_account")
+        target.discord_id = None
+        # The sessions have to go too. Removing the login while leaving the
+        # sessions alive removes nothing: whoever is signed in stays signed in,
+        # which is the opposite of the point.
+        self.revoke_sessions(target)
+        self._forget_pairings(target)
+
+    def set_ladder_name(self, actor: Account, target: Account,
+                        name: str) -> None:
+        """Set somebody's ladder name directly.
+
+        The confirmation flow covers a claim the person made. This covers the
+        other half: correcting a name that is simply wrong, without waiting for
+        them to notice and claim again.
+        """
+        actor.require("link_other_account")
+        self.claim_ufer_name(target, name, by_admin=True)
+
+    def revoke_sessions(self, account: Account) -> int:
+        """Sign an account out everywhere. Returns how many were dropped."""
+        gone = [tok for tok, s in self.sessions.items()
+                if s.account_id == account.id]
+        for tok in gone:
+            self.sessions.pop(tok, None)
+        return len(gone)
+
+    def _forget_pairings(self, account: Account) -> None:
+        """Drop outstanding pairing codes and Steam tickets for this account.
+
+        A code was issued against an identity that no longer exists. Left alone,
+        a client could trade one in afterwards and act as an account whose link
+        was just removed.
+        """
+        for code, (owner, _) in list(self._pairings.items()):
+            if owner == account.id:
+                self._pairings.pop(code, None)
+        for ticket, (owner, _) in list(self._steam_tickets.items()):
+            if owner == account.id:
+                self._steam_tickets.pop(ticket, None)
 
     def set_steam_name(self, account: Account, name: str) -> None:
         """Remember the Steam display name this account plays under.

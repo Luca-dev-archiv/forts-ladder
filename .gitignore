@@ -18,6 +18,12 @@ data/consent.json
 # just as revealing and easy to miss.
 data/*.sqlite*
 data/ratings.json
+# What the *client* writes next to itself while running: the server it is
+# pointed at and the bearer token for the logged-in session. The token is a
+# credential — a live login for whoever holds it — and both were committed by
+# accident.
+data/session.txt
+data/server.txt
 data/seed/
 matches/
 

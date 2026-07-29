@@ -23,6 +23,7 @@ public partial class MainWindow
     private void InitQueue()
     {
         _queue.Changed += RefreshQueue;
+        _queue.Changed += RefreshModeCounts;
         // The counting numbers only. Nothing here may touch a button's content:
         // doing that on every tick is how a click on Accept gets lost.
         _queue.Tick += RefreshQueueClock;
@@ -71,6 +72,33 @@ public partial class MainWindow
         ModeNote.Text = blocked ? Loc.T("queue.mode_unavailable") : "";
         ModeNote.Visibility = blocked ? Visibility.Visible : Visibility.Collapsed;
         BtnQueueToggle.IsEnabled = m is null || m.Available || _queue.InQueue;
+    }
+
+    /// <summary>
+    /// Put the live searcher counts on the mode picker.
+    ///
+    /// They arrive with every queue poll, so this is free — and the picker
+    /// previously showed a number fetched once at startup, which meant "0
+    /// waiting" for the rest of the session.
+    /// </summary>
+    private void RefreshModeCounts()
+    {
+        var waiting = _queue.Status?.Waiting;
+        if (waiting is null || _modes.Count == 0) return;
+        var changed = false;
+        foreach (var m in _modes)
+            if (waiting.TryGetValue(m.Key, out var n) && m.Waiting != n)
+            {
+                m.Waiting = n;
+                changed = true;
+            }
+        // Rebuilt only when a number actually moved: reassigning the source
+        // closes the drop-down under the cursor.
+        if (!changed) return;
+        var keep = ModeBox.SelectedItem;
+        ModeBox.ItemsSource = null;
+        ModeBox.ItemsSource = _modes;
+        ModeBox.SelectedItem = keep;
     }
 
     /// <summary>The two numbers that count, and nothing else.</summary>
@@ -199,7 +227,8 @@ public partial class MainWindow
             return;
         }
         _spectatorsWelcome = !_spectatorsWelcome;
-        if (!await _login.SetAcceptingAsync(_publishedMatchId, _spectatorsWelcome))
+        if (!await _login.SetSpectatorsAllowedAsync(_publishedMatchId,
+                                                   _spectatorsWelcome))
             QueueError.Text = _api.LastError ?? "?";
         BtnSpectators.Content = Loc.T(_spectatorsWelcome
             ? "live.spectators_on" : "live.spectators_off");
@@ -242,6 +271,9 @@ public partial class MainWindow
         if (!await EnsureReadyAsync())
         {
             QueueError.Text = DraftError.Text;
+            // Both, or the screen keeps saying "JOINING…" over a dead button.
+            BtnQueueToggle.IsEnabled = true;
+            RefreshQueue();
             return;
         }
 
@@ -251,7 +283,13 @@ public partial class MainWindow
         var rating = _table.Me?.OpenRating ?? _table.Me?.UferRating ?? 1000.0;
         var mode = SelectedMode?.Key ?? "ranked_1v1";
         if (!await _queue.JoinAsync(rating, mode))
+        {
             QueueError.Text = _queue.LastError ?? "?";
+            // A refused join leaves the hand-set label behind, and the reason
+            // for the refusal — an unfinished series, a cooldown — is the thing
+            // the screen should be showing instead.
+            RefreshQueue();
+        }
         await RefreshAccountAsync();
     }
 
@@ -291,6 +329,18 @@ public partial class MainWindow
         }
 
         BtnQueueToggle.Visibility = Visibility.Visible;
+
+        // A series of yours that is not finished. It is the reason the queue
+        // will refuse you, so it is what the screen says — with the way back to
+        // the board rather than a dead "Find match".
+        if (s?.Blocked_By_Series is { Length: > 0 })
+        {
+            QueueBigState.Text = Loc.T("queue.in_series_title");
+            QueueBigState.Foreground = (Brush)FindResource("Win");
+            QueueSubState.Text = Loc.T("queue.in_series_sub");
+            BtnQueueToggle.Visibility = Visibility.Collapsed;
+            return;
+        }
 
         if (s?.Draft_Id is { Length: > 0 })
         {

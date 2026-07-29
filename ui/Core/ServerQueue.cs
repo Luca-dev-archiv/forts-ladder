@@ -41,7 +41,7 @@ public sealed class ServerQueue : IDisposable
         _api = api;
         _timer = new System.Windows.Threading.DispatcherTimer
         {
-            Interval = TimeSpan.FromSeconds(2),
+            Interval = TimeSpan.FromSeconds(1),
         };
         _timer.Tick += async (_, _) => await RefreshAsync();
 
@@ -63,6 +63,12 @@ public sealed class ServerQueue : IDisposable
         if (s is null) { LastError = _api.LastError; Changed?.Invoke(); return false; }
         Apply(s);
         _timer.Start();
+        // Always, even though Apply() may have ticked instead. The screen was
+        // left saying "JOINING…" by the click that got us here, and the poll
+        // that follows compares signatures — which match, because being in the
+        // queue is exactly what was asked for. Without this the label never
+        // changed for the rest of the session.
+        Changed?.Invoke();
         return true;
     }
 
@@ -116,7 +122,9 @@ public sealed class ServerQueue : IDisposable
     /// Used to decide whether a poll is worth a redraw at all.</summary>
     private static string Signature(QueueStatusDto s) => string.Join("|",
         s.In_Queue, s.State, s.Queue_Size, s.Mode, s.Draft_Id,
-        s.Penalised_Until > 0,
+        s.Penalised_Until > 0, s.Blocked_By_Series,
+        string.Join(",", s.Waiting.OrderBy(kv => kv.Key)
+                          .Select(kv => kv.Key + "=" + kv.Value)),
         s.Proposal is null ? "-" : $"{s.Proposal.Accepted_By_You}:{s.Proposal.Accepted_Count}");
 
     private void Apply(QueueStatusDto s)
@@ -130,6 +138,11 @@ public sealed class ServerQueue : IDisposable
         var same = Status is not null && Signature(Status) == Signature(s);
         Status = s;
         LastError = null;
+        // A second between polls while a match can appear, three when idle. The
+        // other side joining is learned on the next poll, so this is the whole
+        // difference between "found" feeling immediate and feeling late.
+        _timer.Interval = TimeSpan.FromSeconds(
+            s.In_Queue || s.Proposal is not null ? 1 : 3);
         // A poll that changed nothing gets a tick, not a redraw.
         if (same) Tick?.Invoke();
         // Announced once, not on every poll: the draft id keeps being returned
@@ -159,6 +172,18 @@ public sealed class QueueStatusDto
     public string? Mode { get; set; }
     public string? Draft_Id { get; set; }
     public int Penalised_Until { get; set; }
+
+    /// <summary>Searchers per mode, from the same poll as everything else.
+    ///
+    /// The picker used to read these from a separate call made once at startup,
+    /// so it reported "0 waiting" for the rest of the session.</summary>
+    public Dictionary<string, int> Waiting { get; set; } = new();
+
+    /// <summary>The series keeping this account out of the queue, if any.
+    ///
+    /// A refusal with no reason reads as the client being broken, and the way
+    /// back to your own board is what somebody in this state wants.</summary>
+    public string? Blocked_By_Series { get; set; }
 
     /// <summary>When this answer arrived, for counting on between polls.</summary>
     public DateTime ReceivedAt { get; set; } = DateTime.UtcNow;

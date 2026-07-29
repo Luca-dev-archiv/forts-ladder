@@ -29,6 +29,9 @@ public sealed class LogWatcher : IDisposable
     private bool _disposed;
 
     public event Action<MatchRecord>? MatchFinished;
+    /// <summary>The result, as soon as the game reports it — about ten log lines
+    /// before the replay name arrives.</summary>
+    public event Action<MatchRecord>? MatchDecided;
     /// <summary>(text, everything running) — the state must not be guessed
     /// from the text, or it becomes language-dependent.</summary>
     public event Action<string, bool>? StatusChanged;
@@ -44,6 +47,7 @@ public sealed class LogWatcher : IDisposable
     public LogWatcher(TimeSpan interval)
     {
         _parser.MatchFinished += m => MatchFinished?.Invoke(m);
+        _parser.MatchDecided += m => MatchDecided?.Invoke(m);
         _parser.LobbySeen += id => LobbySeen?.Invoke(id);
         _timer = new System.Threading.Timer(_ => Poll(), null, TimeSpan.Zero, interval);
     }
@@ -145,6 +149,7 @@ public sealed class LogWatcher : IDisposable
     {
         _parser = new LogParser { FallbackTime = DateTime.Now };
         _parser.MatchFinished += m => MatchFinished?.Invoke(m);
+        _parser.MatchDecided += m => MatchDecided?.Invoke(m);
         _parser.LobbySeen += id => LobbySeen?.Invoke(id);
     }
 

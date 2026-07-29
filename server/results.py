@@ -49,6 +49,14 @@ class Reported:
     rated: bool = True
     reasons: list[str] = field(default_factory=list)
     replays: list[str] = field(default_factory=list)
+    #: A player asked for a human to look at this one.
+    #:
+    #: The reason a series is stored even when it cannot be rated: "it did not
+    #: count" is sometimes the software being wrong, and the person it happened
+    #: to is the only one who knows. Without somewhere to say so they would have
+    #: to find an admin on Discord and describe a match from memory.
+    flagged: bool = False
+    flag_note: str = ""
     created_at: float = field(default_factory=time.time)
 
     def low_side(self) -> int:
@@ -91,6 +99,28 @@ class ResultService:
                      reasons=reasons, replays=list(replays or []))
         self._store.save_result(r)
         return r
+
+    def flag(self, account: Account, result_id: str, note: str) -> "Reported":
+        """Ask for a human to look at a reported series.
+
+        Only somebody who played in it: this is a report about their own match,
+        not a way to file complaints about other people.
+        """
+        rows = {r.id: r for r in self._store.load_results()}
+        r = rows.get(result_id)
+        if r is None:
+            raise AuthError("unknown series")
+        if account.steam_id not in r.sides:
+            raise AuthError("you are not in this series")
+        r.flagged = True
+        r.flag_note = (note or "").strip()[:500]
+        self._store.update_result_flag(r)
+        return r
+
+    def flagged(self) -> list["Reported"]:
+        """Everything waiting for a human, newest first."""
+        return sorted((r for r in self._store.load_results() if r.flagged),
+                      key=lambda r: -r.created_at)
 
     def _why_not(self, lobby_id: int | None, sides: dict[str, int]) -> list[str]:
         """Everything standing between this series and the ladder.

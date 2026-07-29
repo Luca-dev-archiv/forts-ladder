@@ -208,6 +208,24 @@ public sealed class LoginFlow
     public Task<bool> FinishLiveAsync(string matchId) =>
         _api.DeleteAsync($"/live/{matchId}");
 
+    /// <summary>Allow or forbid spectators for this match at all.
+    ///
+    /// Different from "not right now": a match closed here declines everybody,
+    /// a caster included.</summary>
+    public async Task<bool> SetSpectatorsAllowedAsync(string matchId, bool value) =>
+        await _api.PostAsync<object>(
+            $"/live/{matchId}/spectators?value={(value ? "true" : "false")}")
+        is not null;
+
+    /// <summary>What a spectator accepts by being admitted.</summary>
+    public Task<TermsDto?> ObserverTermsAsync() =>
+        _api.GetAsync<TermsDto>("/observe/terms");
+
+    /// <summary>Ask a human to look at one of your own series.</summary>
+    public async Task<bool> FlagResultAsync(string resultId, string note) =>
+        await _api.PostAsync<object>($"/results/{resultId}/flag", new { note })
+        is not null;
+
     /// <summary>Open or close a match to spectator requests.</summary>
     public async Task<bool> SetAcceptingAsync(string matchId, bool value) =>
         await _api.PostAsync<object>(

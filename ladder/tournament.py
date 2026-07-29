@@ -101,12 +101,25 @@ class Tournament:
     #: Overrides the mode's series length. A mode says Bo5 because that is what
     #: it usually is, not because a host may never run a Bo3 cup.
     best_of: int | None = None
+    #: Still being assembled, so an incomplete entrant list is allowed.
+    #:
+    #: An event with one name in it is a normal stage of building an
+    #: eight-person cup, and refusing it forced hosts to have the whole list
+    #: ready before they could open anything. The minimum belongs at the moment
+    #: the tournament *starts* — after that the pairings and every stored result
+    #: rest on those names, which is what the rule is protecting.
+    planning: bool = False
 
     rounds: list[list[Match]] = field(init=False, default_factory=list)
 
     def __post_init__(self) -> None:
         if len(self.participants) < 2:
-            raise ValueError("a tournament needs at least two entrants")
+            if not self.planning:
+                raise ValueError("a tournament needs at least two entrants")
+            # Nothing to draw yet. Two entrants and the bracket appears, still
+            # while planning, which is the point of the preview.
+            self.rounds = []
+            return
         self._build()
 
     # ----------------------------------------------------------- Building

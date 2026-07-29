@@ -49,6 +49,57 @@ class QueueService:
         self.joined: dict[str, str] = {}
         self.map_pool: list[str] = []
         self.commander_pool: list[str] = []
+        #: player id -> when their dodge cooldown runs out. Separate from the
+        #: queue's own penalty, which lives on a queue entry and disappears the
+        #: moment somebody leaves — exactly what a dodger does.
+        self.cooldowns: dict[str, float] = {}
+        #: player id -> how many series they have walked out of, so the second
+        #: time costs more than the first.
+        self.dodges: dict[str, int] = {}
+
+    #: A first dodge, doubling per repeat and capped. Long enough to be worth
+    #: avoiding, short enough that an accident does not end someone's evening —
+    #: and the other player is the one who lost the whole match.
+    DODGE_PENALTY_S = 300
+    DODGE_PENALTY_MAX_S = 3600
+
+    #: How long an unfinished series may keep somebody out of the queue.
+    #:
+    #: There has to be a limit. Nothing calls `DraftService.prune`, a client can
+    #: be closed mid-series, and a process can be redeployed — so without a
+    #: cutoff a draft nobody ever finished would lock a player out permanently,
+    #: which is a far worse bug than the dodging this prevents. Three hours is
+    #: several times the longest Bo5 anybody plays.
+    SERIES_BLOCK_MAX_S = 3 * 3600
+
+    def open_series(self, account: Account):
+        """A series of theirs that is still live, if any.
+
+        The newest one: an older unsettled draft is the residue of a crash or a
+        restart, and it is not what they are sitting in front of.
+        """
+        cutoff = self._now() - self.SERIES_BLOCK_MAX_S
+        mine = [s for s in self.drafts.sessions.values()
+                if account.id in s.seats and not s.settled and s.full()
+                and s.created_at > cutoff]
+        return max(mine, key=lambda s: s.created_at) if mine else None
+
+    def note_dodge(self, account: Account) -> float:
+        """Charge somebody for walking out of a live series.
+
+        Returns when they may queue again. The penalty is deliberately not tied
+        to a queue entry: leaving the queue is the first thing a dodger does.
+        """
+        self.dodges[account.id] = n = self.dodges.get(account.id, 0) + 1
+        seconds = min(self.DODGE_PENALTY_S * 2 ** (n - 1),
+                      self.DODGE_PENALTY_MAX_S)
+        until = self._now() + seconds
+        self.cooldowns[account.id] = max(
+            self.cooldowns.get(account.id, 0.0), until)
+        return self.cooldowns[account.id]
+
+    def cooldown_left(self, account: Account) -> int:
+        return max(0, round(self.cooldowns.get(account.id, 0.0) - self._now()))
 
     #: Offered in the queue. Team modes are listed but refused until pairing
     #: whole sides exists, which is a different problem from pairing two people.
@@ -100,6 +151,18 @@ class QueueService:
                 "this server has no map or commander pool yet, so there is "
                 "nothing to draft. An admin sets it from a client that has "
                 "Forts installed — the server cannot read the game files.")
+        # One match at a time. Somebody drafting against you is waiting for
+        # you specifically, and a second match found while the first is unplayed
+        # produces two people waiting instead of one.
+        if (live := self.open_series(account)) is not None:
+            raise AuthError(
+                "you are still in a series (" + live.id + "). Play it out and "
+                "close it, or agree a void with your opponent, before looking "
+                "for another match.")
+        if (left := self.cooldown_left(account)):
+            raise AuthError(
+                f"you left a series early, so the queue is closed to you for "
+                f"another {left}s.")
         q = self._queue(mode_key)
         # One queue at a time. Standing in two and being offered both at once
         # means one offer lapses and earns a penalty for nothing.
@@ -144,7 +207,11 @@ class QueueService:
 
         mode_key = self.joined.get(account.id)
         q = self.queues.get(mode_key) if mode_key else None
-        draft_id = self.ready.get(account.id)
+        # A live series counts as the current draft even after the client left
+        # the queue — which it does the moment a draft starts. Without this the
+        # way back to your own board disappears on the next poll.
+        live = self.open_series(account)
+        draft_id = self.ready.get(account.id) or (live.id if live else None)
         entry = q.entries.get(account.id) if q else None
         proposal = q._proposal_for(account.id) if q else None
 
@@ -161,8 +228,21 @@ class QueueService:
                     0, round(proposal.created_at + ACCEPT_TIMEOUT_S - now)),
             },
             "draft_id": draft_id,
-            "penalised_until": (round(entry.penalty_until - now)
-                                if entry and entry.penalty_until > now else 0),
+            # Both kinds of block, as one number: the queue's own penalty for
+            # a lapsed accept, and the cooldown for walking out of a series.
+            "penalised_until": max(
+                round(entry.penalty_until - now)
+                if entry and entry.penalty_until > now else 0,
+                self.cooldown_left(account)),
+            # Why the queue is closed, when it is. A cooldown with no reason
+            # reads as the client being broken.
+            "blocked_by_series": live.id if live else None,
+            # How many are searching in each mode, carried on the poll that is
+            # already happening. The client used to read this from /queue/modes
+            # once at startup and never again, so the picker said "0 waiting" all
+            # evening no matter who was in there.
+            "waiting": {key: len(q.searching(now))
+                        for key, q in self.queues.items()},
         }
 
     def _start_draft(self, proposal: Proposal, mode_key: str) -> None:

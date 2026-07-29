@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from server.auth import (  # noqa: E402
-    AuthError, AuthService, OAUTH_STATE_TTL_S, Role,
+    AuthError, AuthService, Grant, OAUTH_STATE_TTL_S, Role,
 )
 from server.live import LiveService, RequestState, STALE_AFTER_S  # noqa: E402
 
@@ -523,7 +523,7 @@ def test_a_requester_can_find_out_what_happened():
     """Before this route existed the only list was the host's inbox, so someone
     pressed "ask to watch" and never learned the answer."""
     auth, acc = service_with(("1", "Host", Role.PLAYER),
-                             ("2", "Caster", Role.PLAYER))
+                             ("2", "Caster", Role.CASTER))
     live = LiveService()
     m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1",
                      ["Host", "Guest"], 2, 9, lobby_id=109775240000000001)
@@ -544,7 +544,7 @@ def test_a_declined_requester_is_told_why():
     """"No room" is arithmetic — nine clients including spectators — and reads
     completely differently from "the host said no"."""
     auth, acc = service_with(("1", "Host", Role.PLAYER),
-                             ("2", "Caster", Role.PLAYER))
+                             ("2", "Caster", Role.CASTER))
     live = LiveService()
     m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1",
                      ["Host", "Guest"], 9, 9, lobby_id=1)
@@ -557,8 +557,8 @@ def test_a_declined_requester_is_told_why():
 
 def test_only_your_own_requests_come_back():
     auth, acc = service_with(("1", "Host", Role.PLAYER),
-                             ("2", "One", Role.PLAYER),
-                             ("3", "Two", Role.PLAYER))
+                             ("2", "One", Role.CASTER),
+                             ("3", "Two", Role.CASTER))
     live = LiveService()
     m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["a", "b"],
                      2, 9, lobby_id=1)
@@ -572,7 +572,7 @@ def test_the_join_url_names_the_lobby_owner():
     """Steam needs the owner's account in the third field; leaving it out and
     letting Steam work it out does not join."""
     auth, acc = service_with(("1", "Host", Role.PLAYER),
-                             ("2", "Caster", Role.PLAYER))
+                             ("2", "Caster", Role.CASTER))
     live = LiveService()
     m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["a", "b"],
                      2, 9, lobby_id=42)
@@ -585,7 +585,7 @@ def test_the_join_url_names_the_lobby_owner():
 def test_a_ranked_match_is_not_open_to_spectators():
     """A watcher in a rated series is one more person who knows the board."""
     auth, acc = service_with(("1", "Host", Role.PLAYER),
-                             ("2", "Caster", Role.PLAYER))
+                             ("2", "Caster", Role.CASTER))
     live = LiveService()
     m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1", ["a", "b"], 2, 9,
                      lobby_id=1)
@@ -596,7 +596,7 @@ def test_a_ranked_match_is_not_open_to_spectators():
 
 def test_an_unranked_match_is():
     auth, acc = service_with(("1", "Host", Role.PLAYER),
-                             ("2", "Caster", Role.PLAYER))
+                             ("2", "Caster", Role.CASTER))
     live = LiveService()
     m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["a", "b"],
                      2, 9, lobby_id=1)
@@ -621,6 +621,80 @@ def test_an_admin_is_not_blocked_from_a_ranked_match():
     live.set_accepting(acc["Host"], m.id, False)
     r2 = live.request_observer(acc2["Ref2"], m.id)
     assert r2.state is RequestState.APPROVED
+
+
+def test_a_plain_player_may_not_ask_to_watch_at_all():
+    """Watching is a role. A player with no reason to be in somebody else's
+    lobby is exactly who should not be there, and "ask everyone and see who says
+    yes" is how information leaks in a small scene."""
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Nosy", Role.PLAYER))
+    live = LiveService()
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["a", "b"],
+                     2, 9, lobby_id=1)
+    r = live.request_observer(acc["Nosy"], m.id)
+    assert r.state is RequestState.DECLINED
+    assert "caster or referee" in r.reason, r.reason
+
+
+def test_the_caster_grant_is_enough_without_a_promotion():
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Cam", Role.PLAYER))
+    acc["Cam"].grants.add(Grant.CASTER)
+    live = LiveService()
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["a", "b"],
+                     2, 9, lobby_id=1)
+    assert live.request_observer(acc["Cam"], m.id).state is RequestState.PENDING
+
+
+def test_a_caster_may_not_watch_a_rated_series_but_a_referee_may():
+    """Somebody has to be answerable for being in a lobby whose result changes
+    ratings."""
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Cam", Role.CASTER),
+                             ("3", "Ref", Role.PLAYER))
+    acc["Ref"].grants.add(Grant.REFEREE)
+    live = LiveService()
+    m = live.publish(acc["Host"], "ranked_1v1", "Ranked 1v1", ["a", "b"], 2, 9,
+                     lobby_id=1)
+    assert live.request_observer(acc["Cam"], m.id).state is RequestState.DECLINED
+    assert live.request_observer(acc["Ref"], m.id).state is RequestState.PENDING
+
+
+def test_a_host_can_close_a_match_to_spectators_entirely():
+    """Different from "not right now": a closed match declines a caster too."""
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Cam", Role.CASTER))
+    live = LiveService()
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["a", "b"],
+                     2, 9, lobby_id=1)
+    live.set_spectators_allowed(acc["Host"], m.id, False)
+    r = live.request_observer(acc["Cam"], m.id)
+    assert r.state is RequestState.DECLINED
+    assert "closed to spectators" in r.reason, r.reason
+    assert live.listing()[0]["allow_spectators"] is False
+
+
+def test_only_the_host_closes_their_own_match():
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Cam", Role.CASTER))
+    live = LiveService()
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["a", "b"],
+                     2, 9, lobby_id=1)
+    try:
+        live.set_spectators_allowed(acc["Cam"], m.id, False)
+    except AuthError:
+        pass
+    else:
+        raise AssertionError("somebody else closed the host's match")
+
+
+def test_the_terms_say_what_a_spectator_is_agreeing_to():
+    """A spectator sees both forts. In a rated series that is everything one side
+    is paying to keep hidden, so the delay is the condition."""
+    terms = LiveService.OBSERVER_TERMS.lower()
+    assert "delay" in terms
+    assert "do not pass" in terms
 
 
 def _run_all() -> int:

@@ -248,7 +248,8 @@ def _input(name: str, placeholder: str = "", value: str = "",
 
 def admin(*, accounts: list[dict], grants: list[str], my_id: str,
           pools: dict, ranking_count: int, may_set_roles: bool = True,
-          error: str = "", claims: list[dict] | None = None) -> str:
+          error: str = "", claims: list[dict] | None = None,
+          flags: list[dict] | None = None) -> str:
     """Accounts, roles and grants.
 
     A list, because the whole job is "who may do what". Each row submits on its
@@ -269,13 +270,28 @@ def admin(*, accounts: list[dict], grants: list[str], my_id: str,
         # Your own row carries no controls: demoting yourself is the one mistake
         # here that cannot be undone from this page. And only an owner sees the
         # role picker at all, rather than one that refuses on every submit.
+        # Correcting a wrong link, and setting a name without waiting for a
+        # claim. Linking is proved by Steam and cannot be undone by the person
+        # who did it, which is right for a claim and wrong for a mistake.
+        fixes = (
+            "<form method=post action='/admin/relink' style='margin-top:10px'>"
+            f"<input type=hidden name=account value='{html.escape(a['id'])}'>"
+            "<p>" + _input("ufer_name", "ladder name",
+                           a["ufer_name"] or "", width="200px")
+            + " <button class='btn sec' name=do value=name>Set name</button></p>"
+            "<p><button class='btn sec' name=do value=unlink_steam>"
+            "Unlink Steam</button> "
+            "<button class='btn sec' name=do value=unlink_discord>"
+            "Unlink Discord</button></p>"
+            "</form>")
+
         controls = ("<span class=muted>this is you</span>" if a["id"] == my_id else
                     "<form method=post action='/admin/save'>"
                     f"<input type=hidden name=account value='{html.escape(a['id'])}'>"
                     + (f"<p><select name=role>{options}</select></p>"
                        if may_set_roles else "")
                     + f"<p>{checks}</p>"
-                    "<button class='btn sec'>Save</button></form>")
+                    "<button class='btn sec'>Save</button></form>" + fixes)
         rows.append(
             "<div class=card>"
             f"<div class=row><span class=val>{html.escape(a['discord'] or '?')}</span>"
@@ -329,14 +345,38 @@ def admin(*, accounts: list[dict], grants: list[str], my_id: str,
             "<button name=decision value=confirm>Confirm</button> "
             "<button class='btn sec' name=decision value=reject>Reject</button>"
             "</form></div>")
-    if pending:
-        pending = ("<p class=label>Ladder names waiting for confirmation</p>"
-                   + pending)
+    # The section is always here, even empty. Hiding it when nothing is waiting
+    # made it look as though the feature did not exist — which is exactly how it
+    # was reported.
+    pending = ("<p class=label>Ladder names</p>" + (pending or
+               "<div class=card><p class=sub style='margin:0'>Nothing waiting. "
+               "A name that matches somebody's Discord login applies by itself; "
+               "anything else appears here. You can also set one directly on a "
+               "row below.</p></div>"))
+
+    # Series a player asked a human to look at. First, because somebody is
+    # waiting on each one.
+    reported = ""
+    for f in (flags or []):
+        reported += (
+            "<div class=card>"
+            f"<div class=row><span class=val>{html.escape(f['played_at'])}</span>"
+            + ("<span class=ok>rated</span>" if f["rated"]
+               else "<span class=warn>not rated</span>")
+            + "</div>"
+            f"<div class=row><span class=muted>score</span>"
+            f"<span>{f['score_low']} of {f['games']}</span></div>"
+            + ("".join(f"<div class=row><span class=muted>why not</span>"
+                       f"<span>{html.escape(x)}</span></div>"
+                       for x in f["reasons"]))
+            + f"<p class=sub>{html.escape(f['flag_note'] or '—')}</p></div>")
+    if reported:
+        reported = ("<p class=label>Series reported for review</p>" + reported)
 
     return _shell(
         "<h1>Admin</h1>"
         "<p class=sub>Who may do what, and whether this server is set up.</p>"
-        + _nav(True, True) + _error(error) + pending + setup
+        + _nav(True, True) + _error(error) + reported + pending + setup
         + f"<p class=label>{len(accounts)} account(s)</p>"
         + ("".join(rows) or
            "<div class=card><p>Nobody has signed in yet.</p></div>"))
@@ -355,16 +395,21 @@ def tournaments(*, listing: list[dict], is_admin: bool,
     """
     options = "".join(f"<option value='{html.escape(k)}'>{html.escape(v)}</option>"
                       for k, v in modes)
-    rows = "".join(
-        "<div class=card>"
-        f"<div class=row><a class=val href='/manage/tournaments/{html.escape(t['id'])}'>"
-        f"{html.escape(t['name'])}</a>"
-        f"<span class=muted>{t['participants']} entrants</span></div>"
-        f"<div class=row><span class=muted>{html.escape(t['mode_key'])}</span>"
-        + ("<span class=ok>finished</span>" if t["finished"]
-           else "<span class=warn>running</span>")
-        + "</div></div>"
-        for t in listing)
+    def row(t: dict) -> str:
+        planning = bool(t.get("planning"))
+        where = ("/manage/plan/" if planning else "/manage/tournaments/") + \
+            html.escape(t["id"])
+        state = ("<span class=muted>being planned</span>" if planning
+                 else "<span class=ok>finished</span>" if t["finished"]
+                 else "<span class=warn>running</span>")
+        return ("<div class=card>"
+                f"<div class=row><a class=val href='{where}'>"
+                f"{html.escape(t['name'] or 'Unnamed')}</a>"
+                f"<span class=muted>{t['participants']} entrants</span></div>"
+                f"<div class=row><span class=muted>{html.escape(t['mode_key'])}"
+                f"</span>{state}</div></div>")
+
+    rows = "".join(row(t) for t in listing)
 
     return _shell(
         "<h1>Tournaments</h1>"
@@ -402,6 +447,108 @@ def tournaments(*, listing: list[dict], is_admin: bool,
           "<button>Create</button></form></div>" if can_create else "")
         + (f"<p class=label>{len(listing)} tournament(s)</p>" + rows if listing
            else "<div class=card><p>None yet.</p></div>"))
+
+
+def planner(*, name: str, mode: str, best_of: int, seeding: str,
+            entrants: list[dict], modes: list[tuple[str, str]],
+            tid: str, is_admin: bool, data: dict | None = None,
+            error: str = "") -> str:
+    """A tournament being built, with the bracket it would produce.
+
+    Everything is one click: add a person, drop a person, move a seed, change the
+    format. The bracket underneath redraws from the current list, so the host can
+    see what they are making instead of imagining it from a textarea.
+
+    It is deliberately not final. `Start the tournament` is a separate act, after
+    which the entrants are fixed and results can be reported — because from then
+    on the pairings and every stored result rest on those names.
+    """
+    rows = ""
+    for i, e in enumerate(entrants):
+        rows += (
+            "<div class=row>"
+            f"<span class=muted>#{i + 1}</span>"
+            "<span>"
+            "<form method=post action='/manage/plan/" + html.escape(tid) + "'"
+            " style='display:inline'>"
+            f"<input type=hidden name=seat value='{i}'>"
+            + _input("name", "", e["name"], width="180px")
+            + " " + _input("rating", "rating", str(int(e["rating"])), width="80px")
+            + " <button class='btn sec' name=do value=edit>Save</button>"
+            " <button class='btn sec' name=do value=up>&#8593;</button>"
+            " <button class='btn sec' name=do value=down>&#8595;</button>"
+            " <button class='btn sec' name=do value=remove>Remove</button>"
+            "</form></span></div>")
+
+    options = "".join(
+        f"<option value='{html.escape(k)}'"
+        + (" selected" if k == mode else "") + f">{html.escape(v)}</option>"
+        for k, v in modes)
+    bo_options = "".join(
+        f"<option value='{n}'" + (" selected" if n == best_of else "")
+        + f">Bo{n}</option>" for n in (1, 3, 5, 7))
+    seed_options = "".join(
+        f"<option value='{k}'" + (" selected" if k == seeding else "")
+        + f">{v}</option>" for k, v in (
+            ("rating", "seed by rating"),
+            ("listed", "seed in this order"),
+            ("random", "seed at random")))
+
+    add = (
+        "<div class=card><p class=label>Add an entrant</p>"
+        f"<form method=post action='/manage/plan/{html.escape(tid)}'>"
+        "<p>" + _input("name", "Name", "", width="220px")
+        + " " + _input("rating", "rating", "", width="90px")
+        + " <button name=do value=add>Add</button></p>"
+        "<p class=sub style='margin:0'>A missing rating counts as 1000. Paste "
+        "several at once by putting one per line in the name field.</p>"
+        "</form></div>")
+
+    setup = (
+        "<div class=card><p class=label>Format</p>"
+        f"<form method=post action='/manage/plan/{html.escape(tid)}'>"
+        "<p>" + _input("name", "Tournament name", name, width="240px") + "</p>"
+        f"<p><select name=mode>{options}</select> "
+        f"<select name=best_of>{bo_options}</select> "
+        f"<select name=seeding>{seed_options}</select></p>"
+        "<button class='btn sec' name=do value=format>Apply</button>"
+        "</form></div>")
+
+    start = (
+        "<div class=card><p class=label>When you are ready</p>"
+        "<p class=sub>Starting fixes the entrants and opens the result forms. "
+        "Until then nothing here is final and nobody can report anything.</p>"
+        f"<form method=post action='/manage/plan/{html.escape(tid)}'>"
+        "<button name=do value=start>Start the tournament</button></form>"
+        "</div>")
+
+    preview = ""
+    if len(entrants) >= 2:
+        preview = (
+            "<p class=label>How it would look</p>"
+            "<div class=card style='padding:10px'>"
+            "<div class='brackets-viewer'></div></div>"
+            "<script src='/static/brackets-viewer.min.js'></script>"
+            "<script>\n"
+            f"const data = {_for_script(data or {})};\n"
+            "window.bracketsViewer.render(data, { clear: true })\n"
+            "  .catch(e => { document.querySelector('.brackets-viewer')"
+            ".textContent = 'The bracket could not be drawn: ' + e.message; });\n"
+            "</script>")
+    else:
+        preview = ("<div class=card><p class=sub style='margin:0'>Add at least "
+                   "two entrants and the bracket appears here.</p></div>")
+
+    return _shell(
+        f"<h1>{html.escape(name or 'New tournament')}</h1>"
+        "<p class=sub>Being planned — nothing is final yet.</p>"
+        + _nav(is_admin, True) + _error(error)
+        + "<p><a class='btn sec' href='/manage/tournaments'>All tournaments</a></p>"
+        + preview
+        + f"<p class=label>{len(entrants)} entrant(s)</p>"
+        + (f"<div class=card>{rows}</div>" if rows else "")
+        + add + setup + start,
+        head=_VIEWER_HEAD)
 
 
 def bracket(*, name: str, mode: str, rounds: list[dict], champion: str | None,

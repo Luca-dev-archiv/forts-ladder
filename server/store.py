@@ -381,6 +381,29 @@ class Store:
         return [r["lobby_id"] for r in self.db.execute(
             "SELECT lobby_id FROM sanctioned_lobbies ORDER BY created_at DESC")]
 
+    def sanctioned_for(self, steam_id: str, account_id: str) -> list[int]:
+        """The sanctioned lobbies *this* account has anything to do with.
+
+        Not the whole list. Handing every client every lobby the ladder ever set
+        up would turn this into a directory of who played where, which is nobody
+        else's business — and the client only needs to know about its own games.
+
+        Two routes in: a lobby they hosted, and a lobby that appears in a series
+        they were reported in.
+        """
+        out = {r["lobby_id"] for r in self.db.execute(
+            "SELECT lobby_id FROM sanctioned_lobbies WHERE created_by = ?",
+            (account_id,))}
+        for r in self.db.execute(
+                "SELECT lobby_id, sides FROM results WHERE lobby_id IS NOT NULL"):
+            try:
+                sides = json.loads(r["sides"])
+            except ValueError:
+                continue
+            if steam_id in sides and self.is_sanctioned(r["lobby_id"]):
+                out.add(r["lobby_id"])
+        return sorted(out)
+
     def is_sanctioned(self, lobby_id: int) -> bool:
         return self.db.execute(
             "SELECT 1 FROM sanctioned_lobbies WHERE lobby_id = ?",

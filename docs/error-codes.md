@@ -49,6 +49,7 @@ it.
 | `FL-212` | The lobby settings differ from what the ladder set. | The host can put them back. The deviation is recorded either way. |
 | `FL-213` | Somebody in the lobby is not one of the two who drafted. | A spectator is fine. A *player* who did not draft is not, and the series is aborted rather than rated. |
 | `FL-230` | A finished game could not be matched to any series. | It stays in **Replays** unrated so you can point a referee at it. Usually means the lobby was opened outside the ladder. |
+| `FL-232` | This series was not arranged by the ladder. | Nothing is wrong: it is a game you played outside the queue, recorded here for you. A referee has nothing to look at for it, which is why **ask a referee to check this** is greyed out. Rows say `LADDER` when the ladder set the lobby up. |
 | `FL-231` | A game or series was matched but not counted. | The reason is on the row: usually the map or a commander was not the drafted one, in which case that game comes back for a replay. If you disagree, **ask a referee to check this** in Replays — the series is stored either way, which is why an unrated one is still shown. |
 
 ## 3xx — the game and its files
@@ -64,13 +65,32 @@ it.
 
 | Code | What happened | What to do |
 |---|---|---|
-| `FL-400` | The client is already running. | Use the window that is open. Two clients read the same log and would report the same game twice. |
+| `FL-400` | The client is already running. | Use the window that is open — check the tray. Two clients read the same log and would report the same game twice as the same player. |
+| `FL-401` | Windows would not accept the startup entry. | The box in **Settings → In the background** goes back to showing what is actually set. Anti-virus or a managed machine can block the per-user Run key; adding a shortcut to the Startup folder by hand does the same job. |
 
 When you ask a referee to check a series, they get a page with everything the
 server holds about it: who played, the lobby, why it was not rated, what deviated
 from the draft, and the replays your clients uploaded. They can take the rating
 back, with a reason that stays on the record. Replays are deleted after seven
 days, so ask while it still matters.
+
+## Running in the background
+
+Forts clears its log when the game starts, so a match nobody was watching cannot
+be recovered afterwards — which makes "I forgot to open the client" an evening's
+results lost. Three separate switches in **Settings → In the background**, all off
+until you turn them on:
+
+- **Closing the window keeps it in the tray** — the window closes, the program
+  does not.
+- **Keep recording matches while the window is closed** — the log watcher carries
+  on. The tray icon is filled while it is watching and hollow while it is not, so
+  the answer is one glance.
+- **Start with Windows** — a per-user startup entry that launches it hidden in the
+  tray. Removable from Task Manager's Startup tab like anything else.
+
+Without the second one, closing the window stops the watching, and the tray
+balloon says so the first time.
 
 ## 5xx — a tournament rule said no
 

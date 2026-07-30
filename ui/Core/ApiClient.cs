@@ -687,6 +687,12 @@ public sealed class MyResultDto
     public string? Lobby_Id { get; set; }
 }
 
+/// <summary>Lobby ids as strings: 64 bits do not survive a JSON number.</summary>
+public sealed class LobbyListDto
+{
+    public List<string> Lobbies { get; set; } = new();
+}
+
 public sealed class MyResultsDto
 {
     public List<MyResultDto> Series { get; set; } = new();

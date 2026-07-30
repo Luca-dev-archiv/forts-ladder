@@ -34,8 +34,18 @@ public partial class App : Application
             Shutdown(1);
             return;
         }
+        // Hiding the last window must not end the process, or closing to the
+        // tray would be an elaborate way of quitting.
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        //     FortsLadder.exe --tray
+        // Started by the autostart entry: no window, just the tray icon and the
+        // log watcher. Nobody asked for a window at login.
+        StartHidden = e.Args.Contains("--tray");
         base.OnStartup(e);
     }
+
+    /// <summary>Started from the autostart entry, so open no window.</summary>
+    public static bool StartHidden { get; private set; }
 
     /// <summary>Held for the life of the process; released when it dies, however
     /// it dies — which a lock file on disk would not manage.</summary>

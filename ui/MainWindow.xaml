@@ -551,6 +551,23 @@
                        Style="{StaticResource Label}" TextWrapping="Wrap"
                        Margin="0,0,0,20"/>
 
+            <!-- Three separate choices on purpose: they are three different
+                 amounts of trust, and the third one is the only one that
+                 touches the machine outside this program. -->
+            <TextBlock Text="{core:T settings.background}" Style="{StaticResource Label}"/>
+            <TextBlock Text="{core:T settings.background_why}"
+                       Style="{StaticResource Label}" TextWrapping="Wrap"
+                       Margin="0,4,0,6"/>
+            <CheckBox x:Name="ChkCloseToTray" Margin="0,0,0,4"
+                      Content="{core:T settings.close_to_tray}"
+                      Click="ChkBackground_Click"/>
+            <CheckBox x:Name="ChkTrackBg" Margin="0,0,0,4"
+                      Content="{core:T settings.track_bg}"
+                      Click="ChkBackground_Click"/>
+            <CheckBox x:Name="ChkStartWindows" Margin="0,0,0,20"
+                      Content="{core:T settings.start_windows}"
+                      Click="ChkBackground_Click"/>
+
             <TextBlock Text="{core:T settings.game}" Style="{StaticResource Label}"/>
             <TextBlock x:Name="SettingsFortsPath" Margin="0,4,0,8" FontSize="12"
                        Foreground="{StaticResource TextMid}" TextWrapping="Wrap"/>
@@ -1236,8 +1253,19 @@
                       <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
                                  FontSize="13" TextTrimming="CharacterEllipsis"/>
                     </DockPanel>
-                    <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Label}"
-                               Margin="0,3,0,0"/>
+                    <DockPanel Margin="0,3,0,0">
+                      <!-- Where the series came from. It decides what can be
+                           done with it: only one the ladder arranged can be sent
+                           to a referee, because only then is there anything on
+                           the server to look at. -->
+                      <TextBlock DockPanel.Dock="Right" Text="{Binding OriginLabel}"
+                                 FontSize="10" FontWeight="Bold"
+                                 Margin="8,0,0,0"
+                                 Foreground="{Binding OriginBrush}"/>
+                      <TextBlock Text="{Binding Subtitle}"
+                                 Style="{StaticResource Label}"
+                                 TextTrimming="CharacterEllipsis"/>
+                    </DockPanel>
                   </StackPanel>
                 </DataTemplate>
               </ListBox.ItemTemplate>

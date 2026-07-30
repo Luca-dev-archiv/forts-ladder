@@ -40,9 +40,30 @@ public partial class MainWindow
         if (!_api.Configured || !_api.LoggedIn) { ShowOnline(null); return; }
         var p = await _login.PingAsync();
         ShowOnline(p?.Online);
+        await SyncLadderLobbiesAsync();
         // Keeps the mode picker honest while nobody is queueing, which is when
         // the old count used to freeze.
         _queue.MergeWaiting(p?.Waiting);
+    }
+
+    /// <summary>
+    /// Take the server's word for which lobbies were the ladder's.
+    ///
+    /// Merged into the local list rather than replacing it: the local one is
+    /// written the moment a draft hands off a lobby, which is *before* any result
+    /// exists, so it is ahead of the server for the series being played right
+    /// now. Together they cover both gaps.
+    /// </summary>
+    private async Task SyncLadderLobbiesAsync()
+    {
+        if (!_api.LoggedIn) return;
+        var res = await _login.MyLobbiesAsync();
+        if (res is null) return;
+        var added = false;
+        foreach (var raw in res.Lobbies)
+            if (ulong.TryParse(raw, out var id) && _ladderLobbies.Add(id))
+                added = true;
+        if (added) RebuildSeries();
     }
 
     /// <summary>

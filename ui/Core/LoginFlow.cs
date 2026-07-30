@@ -272,6 +272,17 @@ public sealed class LoginFlow
     public Task<bool> UploadReplayAsync(string resultId, int game, string path)
         => _api.UploadAsync($"/results/{resultId}/replay?index={game}", path);
 
+    /// <summary>
+    /// Which of your lobbies the ladder set up.
+    ///
+    /// The client keeps its own list as each draft hands off a lobby, but that
+    /// list is per machine: a reinstall or a second computer loses it, and then a
+    /// real ladder series looks like a casual game. This is the same fact from
+    /// the side that cannot be lost.
+    /// </summary>
+    public Task<LobbyListDto?> MyLobbiesAsync() =>
+        _api.GetAsync<LobbyListDto>("/lobbies/mine");
+
     /// <summary>Your own reported series, so a case can be opened against one
     /// long after this client reported it.</summary>
     public Task<MyResultsDto?> MyResultsAsync() =>

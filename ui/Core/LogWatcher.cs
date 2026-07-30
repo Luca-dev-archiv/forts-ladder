@@ -52,9 +52,21 @@ public sealed class LogWatcher : IDisposable
         _timer = new System.Threading.Timer(_ => Poll(), null, TimeSpan.Zero, interval);
     }
 
+    /// <summary>
+    /// Stop reading without shutting down.
+    ///
+    /// Set while the window is hidden and background tracking is off. Disposing
+    /// instead would be wrong: the timer would have to be rebuilt to come back,
+    /// and the parser's state — which match is in progress — would be lost with
+    /// it. Standing down keeps the position in the file so resuming picks up
+    /// where it left off rather than re-reading a match that was already
+    /// reported.
+    /// </summary>
+    public bool Paused { get; set; }
+
     private void Poll()
     {
-        if (_disposed) return;
+        if (_disposed || Paused) return;
         lock (_lock)
         {
             try { PollCore(); }

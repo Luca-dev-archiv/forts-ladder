@@ -2089,6 +2089,31 @@ def flag_result(result_id: str, body: FlagBody,
     return {"id": r.id, "flagged": r.flagged}
 
 
+@app.get("/lobbies/mine")
+def my_sanctioned_lobbies(ladder_session: str | None = Cookie(None),
+                          authorization: str | None = Header(None)):
+    """Which of *your* lobbies the ladder set up.
+
+    The client keeps its own list, written as each draft hands off a lobby — but
+    that list is per machine, so a reinstall or a second computer loses it, and
+    then a real ladder series looks like a casual game. This is the same fact
+    from the side that cannot be lost.
+
+    Only this account's own. The whole list would be a directory of who played
+    where, and no client needs that to label its own history.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    if acc.steam_id is None:
+        return {"lobbies": []}
+    ids = store.sanctioned_for(acc.steam_id, acc.id)
+    # A draft in flight has a lobby that is sanctioned but not yet in a result.
+    for s in drafts.sessions.values():
+        if acc.id in s.seats and s.lobby_id:
+            ids.append(int(s.lobby_id))
+    # Strings: a Steam lobby id needs 64 bits and JSON numbers are doubles.
+    return {"lobbies": sorted({str(x) for x in ids})}
+
+
 @app.get("/results/mine")
 def my_results(ladder_session: str | None = Cookie(None),
                authorization: str | None = Header(None)):

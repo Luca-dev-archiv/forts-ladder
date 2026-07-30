@@ -938,6 +938,60 @@ def test_annulling_from_the_page_takes_the_rating_back():
     assert r.status_code == 403, r.status_code
 
 
+# ------------------------------------------- Which lobbies were the ladder's
+# The client keeps its own list as each draft hands off a lobby, but that list is
+# per machine: a reinstall or a second computer loses it, and then a real ladder
+# series looks like a casual game and cannot be sent to a referee.
+def test_your_own_sanctioned_lobbies_come_back():
+    w = World()
+    player, ph = w.person("Player")
+    app_mod.store.sanction_lobby(7777, "series-1", created_by=player.id)
+
+    got = w.client.get("/lobbies/mine", headers=ph).json()["lobbies"]
+    assert "7777" in got, got
+    # Strings, because a Steam lobby id needs 64 bits and a JSON number is a
+    # double — a rounded id matches no game.
+    assert all(isinstance(x, str) for x in got)
+
+
+def test_a_lobby_you_played_in_counts_even_if_you_did_not_host():
+    """Only the host's client registers the lobby, so a guest would otherwise
+    never learn that their own series was a ladder one."""
+    w = World()
+    host, hh = w.person("Host")
+    guest, gh = w.person("Guest")
+    app_mod.store.sanction_lobby(8888, "series-2", created_by=host.id)
+    w.client.post("/results", headers=hh, json={
+        "sides": {host.steam_id: 1, guest.steam_id: 2},
+        "games": 2, "score_low": 2, "played_at": "2026-07-30T22:00:00",
+        "lobby_id": "8888", "draft_id": f"lobbytest-{next(_ids)}"})
+
+    assert "8888" in w.client.get("/lobbies/mine", headers=gh).json()["lobbies"]
+
+
+def test_nobody_gets_a_directory_of_everybody_elses_lobbies():
+    """The whole list would say who played where, which is not what a client
+    needs to label its own history."""
+    w = World()
+    _, mine = w.person("Mine")
+    other, _ = w.person("Other")
+    app_mod.store.sanction_lobby(9999, "series-3", created_by=other.id)
+
+    got = w.client.get("/lobbies/mine", headers=mine).json()["lobbies"]
+    assert "9999" not in got, got
+
+
+def test_an_unsanctioned_lobby_is_never_claimed_as_the_ladders():
+    w = World()
+    player, ph = w.person("Player")
+    w.client.post("/results", headers=ph, json={
+        "sides": {player.steam_id: 1, "76561199000000888": 2},
+        "games": 2, "score_low": 2, "played_at": "2026-07-30T23:00:00",
+        "lobby_id": "1234", "draft_id": f"lobbytest-{next(_ids)}"})
+    got = w.client.get("/lobbies/mine", headers=ph).json()["lobbies"]
+    assert "1234" not in got, got
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

@@ -50,6 +50,7 @@ public partial class MainWindow : Window
         InitQueue();
         InitObservers();
         InitPresence();
+        InitTray();
 
         _watcher = new LogWatcher(TimeSpan.FromSeconds(1));
         _watcher.StatusChanged += (s, ok) => Dispatcher.Invoke(() => SetStatus(s, ok));
@@ -75,13 +76,36 @@ public partial class MainWindow : Window
         _lobbyFile.Tick += (_, _) => PollLobbyFile();
         _lobbyFile.Start();
 
+        Loaded += (_, _) => SyncSettingsToggles();
+        // Launched at login by the autostart entry: the tray icon and the log
+        // watcher, and no window nobody asked for.
+        Loaded += (_, _) => { if (App.StartHidden) HideToTray(); };
         Loaded += (_, _) => LoadHistory();
         Loaded += (_, _) => _ = CheckForUpdateAsync();
+        // Closing the window is not necessarily closing the program. The
+        // reason is a playtest: somebody forgets to start this before playing,
+        // and Forts clears its log at startup — so a match nobody watched while
+        // it happened cannot be recovered afterwards.
+        Closing += (_, e) =>
+        {
+            if (_reallyClosing || !_prefs.Get(Prefs.CloseToTray)) return;
+            e.Cancel = true;
+            HideToTray();
+        };
+        StateChanged += (_, _) =>
+        {
+            // Minimising counts as hiding when it was asked for, so the taskbar
+            // does not keep an entry for a window nobody wants there.
+            if (WindowState == WindowState.Minimized
+                && _prefs.Get(Prefs.CloseToTray))
+                HideToTray();
+        };
         Closed += (_, _) =>
         {
             _observerPoll?.Stop();
             _lobbyFile?.Stop();
             _watcher.Dispose(); _draft.Dispose(); _queue.Dispose();
+            _tray?.Dispose();
         };
     }
 
@@ -339,7 +363,9 @@ public partial class MainWindow : Window
         var grouped = Series.Group(_matches, null, _watcher.CurrentAccount,
                                    _ladderLobbies.All, _draftedGames.All);
         _series.Clear();
-        foreach (var s in grouped) _series.Add(new SeriesVm(s, _identity));
+        foreach (var s in grouped)
+            _series.Add(new SeriesVm(s, _identity, _ladderLobbies.All,
+                                     _draftedGames));
 
         StatSeries.Text = grouped.Count.ToString();
         StatMatches.Text = grouped.Sum(s => s.Matches.Count).ToString();
@@ -384,6 +410,12 @@ public partial class MainWindow : Window
         _selected = vm.Model;
         DetailPlaceholder.Visibility = Visibility.Collapsed;
         DetailContent.Visibility = Visibility.Visible;
+        // Refused before it is pressed rather than after: a series the ladder did
+        // not arrange has nothing on the server for a referee to look at, and a
+        // live button that always says no is worse than no button.
+        BtnFlag.IsEnabled = vm.FromLadder;
+        BtnFlag.ToolTip = vm.FromLadder ? null
+            : ErrorCodes.Text(ErrorCodes.NotLadderMatch);
 
         var sides = vm.Model.Sides();
         var (wins, _) = vm.Model.Score();
@@ -455,6 +487,14 @@ public partial class MainWindow : Window
     private async void BtnFlag_Click(object sender, RoutedEventArgs e)
     {
         if (_selected is null) return;
+        // Only a series the ladder arranged. There is nothing on the server to
+        // look at otherwise, and "ask a referee about a game you played with a
+        // friend on Tuesday" is a request nobody can answer.
+        if (SeriesList.SelectedItem is SeriesVm vm && !vm.FromLadder)
+        {
+            ReportStatus.Text = ErrorCodes.Text(ErrorCodes.NotLadderMatch);
+            return;
+        }
         if (!await EnsureReadyAsync()) { ReportStatus.Text = DraftError.Text; return; }
 
         var id = await FindResultIdAsync(_selected);
@@ -1576,9 +1616,34 @@ public sealed class SeriesVm
     public string ScoreText { get; }
     public Brush ScoreBrush { get; }
 
-    public SeriesVm(Series s, IdentityStore ids)
+    /// <summary>
+    /// This series was played in a lobby the ladder set up.
+    ///
+    /// The difference that matters for what can be done with it: only a series
+    /// the ladder itself arranged can be sent to a referee, because only then is
+    /// there anything on the server to look at. A duel two friends played on a
+    /// Tuesday is recorded here for them and is nobody else's business.
+    /// </summary>
+    public bool FromLadder { get; }
+    public string OriginLabel { get; }
+    public Brush OriginBrush { get; }
+
+    public SeriesVm(Series s, IdentityStore ids,
+                    IReadOnlySet<ulong>? ladderLobbies = null,
+                    DraftedGames? drafted = null)
     {
         Model = s;
+        // Two independent ways of knowing, because either can be missing. The
+        // lobby id is absent from a guest's log entirely; the drafted-game record
+        // is per machine and does not survive a reinstall.
+        FromLadder =
+            s.Matches.Any(m => m.LobbyId is not null
+                               && ladderLobbies?.Contains(m.LobbyId.Value) == true)
+            || s.Matches.Any(m => drafted?.SeriesOf(m.ReportKey) is not null);
+        OriginLabel = Loc.T(FromLadder ? "series.from_ladder" : "series.casual");
+        OriginBrush = FromLadder
+            ? (Brush)System.Windows.Application.Current.Resources["Accent"]
+            : (Brush)System.Windows.Application.Current.Resources["TextMid"];
         var sides = s.Sides();
         var (wins, _) = s.Score();
         var own = s.LocalSide() ?? (sides.Count > 0 ? sides.Keys.Min() : 0);

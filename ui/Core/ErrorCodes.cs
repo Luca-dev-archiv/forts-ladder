@@ -39,6 +39,7 @@ public static class ErrorCodes
     public const string LobbySettingsChanged = "FL-212";
     public const string StrangerInLobby = "FL-213";
     public const string UnmatchedGame = "FL-230";
+    public const string NotLadderMatch = "FL-232";
     public const string GameNotCounted = "FL-231";
 
     // --- 3xx: the game and its files
@@ -49,6 +50,7 @@ public static class ErrorCodes
 
     // --- 4xx: this program
     public const string AlreadyRunning = "FL-400";
+    public const string StartupRefused = "FL-401";
 
     /// <summary>
     /// One line: the code, what to do, and the server's own words if it sent

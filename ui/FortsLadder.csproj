@@ -4,6 +4,10 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- For the tray icon. WPF has no NotifyIcon of its own, and the WinForms
+         one is the same component Explorer uses — a hand-rolled window pretending
+         to be a tray icon is worse in every way that matters. -->
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>FortsLadder</AssemblyName>
@@ -39,6 +43,17 @@
          copy. That keeps "add a language by dropping in a file" true. -->
     <None Include="Locales\*.json" CopyToOutputDirectory="PreserveNewest"
           Link="Locales\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+
+  <!-- UseWindowsForms adds System.Windows.Forms and System.Drawing to the
+       implicit global usings, where `Application`, `Brush`, `Color` and
+       `Point` all collide with the WPF types of the same name. The tray file
+       asks for those namespaces under an alias instead, so exactly one file
+       knows WinForms exists. -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
   </ItemGroup>
 
 </Project>

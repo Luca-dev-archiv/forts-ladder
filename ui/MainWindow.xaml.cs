@@ -98,14 +98,10 @@ public partial class MainWindow : Window
         var rel = await Updater.CheckAsync();
         if (rel is null) return;
 
-        var answer = MessageBox.Show(
-            this,
-            Loc.T("update.available", rel.Version.ToString(),
+        var answer = AppDialog.Confirm(this, Loc.T("update.available", rel.Version.ToString(),
                   Updater.CurrentVersion().ToString(),
-                  Math.Round(rel.SizeBytes / 1e6, 1)),
-            Loc.T("update.title"), MessageBoxButton.YesNo,
-            MessageBoxImage.Information);
-        if (answer != MessageBoxResult.Yes) return;
+                  Math.Round(rel.SizeBytes / 1e6, 1)), Loc.T("update.title"), AppDialog.Kind.Info);
+        if (!answer) return;
 
         try
         {
@@ -120,8 +116,7 @@ public partial class MainWindow : Window
             // Includes a checksum mismatch, which is the case that matters:
             // say so plainly instead of retrying quietly.
             SetStatus(Loc.T("update.failed"));
-            MessageBox.Show(this, ex.Message, Loc.T("update.failed"),
-                            MessageBoxButton.OK, MessageBoxImage.Warning);
+            AppDialog.Info(this, ex.Message, Loc.T("update.failed"), AppDialog.Kind.Warning);
         }
     }
 
@@ -205,6 +200,39 @@ public partial class MainWindow : Window
             AskWhoAmI(steamId, persona);
     }
 
+    /// <summary>
+    /// Send a name claimed in the first-run dialog to the server.
+    ///
+    /// Quietly: the dialog may well run before anyone has signed in, and
+    /// nagging about a login nobody asked for would be worse than picking it up
+    /// later from Settings. It applies by itself when it matches the Discord
+    /// login, and waits for an admin otherwise.
+    /// </summary>
+    private async Task ClaimNameOnServerAsync(string name)
+    {
+        if (!_api.LoggedIn) return;
+        await _login.ClaimUferNameAsync(name);
+        await RefreshSettingsAsync();
+    }
+
+    /// <summary>
+    /// Take the ladder name the server holds and use it locally.
+    ///
+    /// The server is the source of truth. Without this the sidebar and Settings
+    /// could disagree about the same person, which is exactly what a second
+    /// store of one fact produces.
+    /// </summary>
+    private void AdoptServerName(string? serverName)
+    {
+        if (string.IsNullOrWhiteSpace(serverName)) return;
+        var steamId = _watcher.CurrentAccount;
+        if (steamId is null) return;
+        if (_identity.UferNameFor(steamId) == serverName) return;
+        try { _identity.SelfDeclare(steamId, serverName!); }
+        catch (InvalidOperationException) { /* somebody else holds it locally */ }
+        RefreshUferName(steamId);
+    }
+
     private void RefreshUferName(string steamId)
     {
         var name = _identity.UferNameFor(steamId);
@@ -223,11 +251,15 @@ public partial class MainWindow : Window
         if (dlg.Skipped) { _identity.SkipDeclaration(steamId); }
         else if (!string.IsNullOrWhiteSpace(dlg.ChosenName))
         {
+            // Claimed on the server as well, not only in the local file. Two
+            // places holding the same name means one of them is wrong, and the
+            // server's is the one that decides whether a result counts — so it
+            // is the one that has to hear about it.
+            _ = ClaimNameOnServerAsync(dlg.ChosenName!);
             try { _identity.SelfDeclare(steamId, dlg.ChosenName!); }
             catch (InvalidOperationException ex)
             {
-                MessageBox.Show(this, ex.Message, Loc.T("identity.taken_title"),
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                AppDialog.Info(this, ex.Message, Loc.T("identity.taken_title"), AppDialog.Kind.Warning);
             }
         }
         RefreshUferName(steamId);
@@ -238,9 +270,7 @@ public partial class MainWindow : Window
         var id = _watcher.CurrentAccount;
         if (id is null)
         {
-            MessageBox.Show(this, Loc.T("identity.no_account"),
-                Loc.T("identity.no_account_title"),
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            AppDialog.Info(this, Loc.T("identity.no_account"), Loc.T("identity.no_account_title"), AppDialog.Kind.Info);
             return;
         }
         AskWhoAmI(id, _watcher.CurrentPersona ?? "");
@@ -399,9 +429,7 @@ public partial class MainWindow : Window
         catch (System.Runtime.InteropServices.ExternalException)
         {
             // Another program can be holding the clipboard.
-            MessageBox.Show(this, Loc.T("series.clipboard_busy"),
-                Loc.T("series.clipboard_title"), MessageBoxButton.OK,
-                MessageBoxImage.Information);
+            AppDialog.Info(this, Loc.T("series.clipboard_busy"), Loc.T("series.clipboard_title"), AppDialog.Kind.Info);
         }
     }
 
@@ -413,75 +441,70 @@ public partial class MainWindow : Window
     /// for each is completely different. So the answer is shown verbatim
     /// instead of being flattened into "failed".
     /// </summary>
-    private async void BtnReport_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Ask a referee to look at this series.
+    ///
+    /// The one thing about a result a player does decide. Not whether it counts
+    /// — they were both there and the log says who won — but whether something
+    /// was wrong enough that a person should watch the replay.
+    ///
+    /// The id comes from the server rather than from whatever this client
+    /// happened to report a minute ago: reporting is automatic now, so "report
+    /// it first" was an answer to a question nobody asked.
+    /// </summary>
+    private async void BtnFlag_Click(object sender, RoutedEventArgs e)
     {
         if (_selected is null) return;
         if (!await EnsureReadyAsync()) { ReportStatus.Text = DraftError.Text; return; }
 
-        var sides = new Dictionary<string, int>();
-        foreach (var p in _selected.Matches.SelectMany(m => m.Players.Values))
-            if (!string.IsNullOrEmpty(p.SteamId) && p.Side > 0)
-                sides[p.SteamId] = p.Side;
-        if (sides.Values.Distinct().Count() != 2)
+        var id = await FindResultIdAsync(_selected);
+        if (id is null)
         {
-            ReportStatus.Text = Loc.T("series.report_not_two_sides");
+            // Named plainly: an unreported series is usually one played outside
+            // a ladder lobby, which is also why it could never be rated.
+            ReportStatus.Text = ErrorCodes.Text(ErrorCodes.UnmatchedGame);
             return;
         }
 
-        var (wins, _) = _selected.Score();
-        var low = sides.Values.Min();
-        var lobby = _selected.Matches.Select(m => m.LobbyId)
-                                     .LastOrDefault(x => x is not null);
-        var (found, _) = _selected.ReplayFiles();
+        var note = AppDialog.Ask(this, Loc.T("report.case_prompt"),
+                                 Loc.T("report.case_title"));
+        if (note is null) return;
 
-        BtnReport.IsEnabled = false;
-        ReportStatus.Text = Loc.T("series.reporting");
-        var res = await _login.ReportSeriesAsync(
-            sides, _selected.Matches.Count, wins.GetValueOrDefault(low),
-            _selected.PlayedAt, lobby, found.Select(f => f.Name));
-        BtnReport.IsEnabled = true;
-
-        ReportStatus.Text = res is null
-            ? Loc.T("series.report_failed", _api.LastError ?? "?")
-            : res.Rated
-                ? Loc.T("series.report_rated")
-                : Loc.T("series.report_unrated", string.Join(" · ", res.Reasons));
-        // Offered whatever the answer was: a series that counted can be wrong
-        // too, and one that did not is exactly what somebody should look at.
-        _lastReportedId = res?.Id;
-        BtnFlag.Visibility = res is null
-            ? Visibility.Collapsed : Visibility.Visible;
-    }
-
-    /// <summary>The id of the last series this client reported, so it can be
-    /// handed to a human if the answer was wrong.</summary>
-    private string? _lastReportedId;
-
-    /// <summary>
-    /// Ask a person to look at this series.
-    ///
-    /// The reason an unrated series is kept rather than dropped: "it did not
-    /// count" is sometimes the software being wrong, and the player it happened
-    /// to is the only one who knows. Without this they would have to find an
-    /// admin on Discord and describe a match from memory.
-    /// </summary>
-    private async void BtnFlag_Click(object sender, RoutedEventArgs e)
-    {
-        if (_lastReportedId is not { Length: > 0 } id)
-        {
-            ReportStatus.Text = Loc.T("series.flag_needs_report");
-            return;
-        }
         BtnFlag.IsEnabled = false;
-        var note = _selected is null ? "" : Loc.T("series.flag_note",
-            string.Join(" vs ", _selected.Sides().Keys
-                .Select(k => string.Join(", ", _selected.Names(_identity, k)))),
-            _selected.Matches.Count);
         ReportStatus.Text = await _login.FlagResultAsync(id, note)
-            ? Loc.T("series.flagged") : Loc.T("series.flag_failed",
-                                              _api.LastError ?? "?");
+            ? Loc.T("series.flagged")
+            : Loc.T("series.flag_failed", _api.LastError ?? "?");
         BtnFlag.IsEnabled = true;
     }
+
+    /// <summary>
+    /// The ladder's id for a series in the list, if it has one.
+    ///
+    /// Matched on the lobby and the kickoff time, which is how the server
+    /// identifies a series too — two Bo3s in one lobby on one evening are two
+    /// series, so the date alone would not do.
+    /// </summary>
+    private async Task<string?> FindResultIdAsync(Series s)
+    {
+        var mine = await _login.MyResultsAsync();
+        if (mine is null) return null;
+        var lobby = s.Matches.Select(m => m.LobbyId)
+                             .FirstOrDefault(x => x is not null)?.ToString();
+        var when = s.Matches[0].PlayedAt;
+        return mine.Series
+            .Where(r => lobby is null || r.Lobby_Id is null || r.Lobby_Id == lobby)
+            .Select(r => new { r, gap = Math.Abs((ParseWhen(r.Played_At) - when)
+                                                 .TotalMinutes) })
+            .Where(x => x.gap < 90)
+            .OrderBy(x => x.gap)
+            .Select(x => x.r.Id)
+            .FirstOrDefault();
+    }
+
+    private static DateTime ParseWhen(string s)
+        => DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
+                             System.Globalization.DateTimeStyles.None, out var d)
+            ? d : DateTime.MinValue;
 
     private void BtnCollect_Click(object sender, RoutedEventArgs e)
     {
@@ -781,6 +804,9 @@ public partial class MainWindow : Window
         RenderPlan(s!);
         RenderHandoff(s!);
         RenderVoid(s!);
+        // Not a button anywhere: a decided series sends itself. Leaving it to a
+        // click means the loser has a reason not to click.
+        MaybeReportSeries(s!);
     }
 
     // ----------------------------------------------------------- The handoff
@@ -1008,10 +1034,9 @@ public partial class MainWindow : Window
     /// </summary>
     private void BtnCloseForts_Click(object sender, RoutedEventArgs e)
     {
-        if (MessageBox.Show(this, Loc.T("handoff.close_forts_ask"),
-                            Loc.T("handoff.close_forts"),
-                            MessageBoxButton.OKCancel,
-                            MessageBoxImage.Warning) != MessageBoxResult.OK)
+        if (!AppDialog.Confirm(this, Loc.T("handoff.close_forts_ask"),
+                               Loc.T("handoff.close_forts"),
+                               AppDialog.Kind.Warning))
             return;
         var closed = 0;
         foreach (var p in System.Diagnostics.Process.GetProcessesByName("Forts"))
@@ -1276,11 +1301,10 @@ public partial class MainWindow : Window
         // arranged a game between themselves may also call it off.
         if (_draft.State?.Leaving_Penalised == true)
         {
-            var answer = MessageBox.Show(
-                this, Loc.T("draft.leave_penalty_ask"),
-                Loc.T("draft.leave_penalty_title"),
-                MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-            if (answer != MessageBoxResult.OK) return;
+            if (!AppDialog.Confirm(this, Loc.T("draft.leave_penalty_ask"),
+                                   Loc.T("draft.leave_penalty_title"),
+                                   AppDialog.Kind.Warning))
+                return;
         }
         if (!await _draft.CancelAsync()) ShowDraftError(_draft.LastError ?? "?");
         RefreshDraft();

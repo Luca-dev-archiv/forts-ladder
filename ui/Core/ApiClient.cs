@@ -228,6 +228,13 @@ public sealed class ApiClient
         }
     }
 
+    /// <summary>DELETE, keeping the answer.
+    ///
+    /// Leaving the queue returns the new status, and throwing it away is what
+    /// left a stale searcher count on the mode picker.</summary>
+    public Task<T?> DeleteAsync<T>(string path) =>
+        SendAsync<T>(HttpMethod.Delete, path, null);
+
     public async Task<bool> DeleteAsync(string path)
     {
         LastError = null;
@@ -616,6 +623,24 @@ public sealed class ReportResultDto
     public List<string> Reasons { get; set; } = new();
 }
 
+/// <summary>One of your own reported series, as the ladder holds it.</summary>
+public sealed class MyResultDto
+{
+    public string Id { get; set; } = "";
+    public string Played_At { get; set; } = "";
+    public int Games { get; set; }
+    public int Score_Low { get; set; }
+    public int Your_Side { get; set; }
+    public bool Rated { get; set; }
+    public List<string> Reasons { get; set; } = new();
+    public string? Lobby_Id { get; set; }
+}
+
+public sealed class MyResultsDto
+{
+    public List<MyResultDto> Series { get; set; } = new();
+}
+
 public sealed class PoolStatusDto
 {
     public bool Configured { get; set; }
@@ -686,6 +711,10 @@ public sealed class HandoffDto
 public sealed class PresenceDto
 {
     public int Online { get; set; }
+
+    /// <summary>Searchers per mode, carried on the heartbeat because it is the
+    /// only call an idle client makes.</summary>
+    public Dictionary<string, int> Waiting { get; set; } = new();
 }
 
 public sealed class LiveMatchDto

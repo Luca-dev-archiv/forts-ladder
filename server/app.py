@@ -1074,7 +1074,10 @@ def presence_ping(ladder_session: str | None = Cookie(None),
     """
     acc = require(session_token(ladder_session, authorization))
     presence.seen(acc.id)
-    return {"online": presence.online()}
+    # The searcher counts ride along. This is the only call an idle client makes,
+    # so without them the mode picker keeps whatever number it last saw — which
+    # is how "1 waiting" survived the queue being empty.
+    return {"online": presence.online(), "waiting": queue.waiting()}
 
 
 @app.post("/queue/accept")

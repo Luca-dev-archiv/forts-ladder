@@ -87,11 +87,16 @@ public partial class MainWindow
         if (waiting is null || _modes.Count == 0) return;
         var changed = false;
         foreach (var m in _modes)
-            if (waiting.TryGetValue(m.Key, out var n) && m.Waiting != n)
-            {
-                m.Waiting = n;
-                changed = true;
-            }
+        {
+            // A mode the server did not mention has nobody in it. Treating a
+            // missing key as "no news" is what kept "1 waiting" on screen after
+            // the last searcher left, because an empty queue is dropped from
+            // the dictionary entirely.
+            var n = waiting.TryGetValue(m.Key, out var v) ? v : 0;
+            if (m.Waiting == n) continue;
+            m.Waiting = n;
+            changed = true;
+        }
         // Rebuilt only when a number actually moved: reassigning the source
         // closes the drop-down under the cursor.
         if (!changed) return;

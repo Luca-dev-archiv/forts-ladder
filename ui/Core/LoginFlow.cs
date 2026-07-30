@@ -256,6 +256,11 @@ public sealed class LoginFlow
     /// </summary>
     public Task<PresenceDto?> PingAsync() => _api.PostAsync<PresenceDto>("/presence");
 
+    /// <summary>Your own reported series, so a case can be opened against one
+    /// long after this client reported it.</summary>
+    public Task<MyResultsDto?> MyResultsAsync() =>
+        _api.GetAsync<MyResultsDto>("/results/mine");
+
     public Task<PoolStatusDto?> PoolsAsync() => _api.GetAsync<PoolStatusDto>("/queue/pools");
 
     /// <summary>

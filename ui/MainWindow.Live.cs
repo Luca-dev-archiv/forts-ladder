@@ -89,9 +89,7 @@ public partial class MainWindow
         // program being broken rather than as something to fix in ten seconds.
         if (!await EnsureReadyAsync())
         {
-            MessageBox.Show(this, ErrorCodes.Text(ErrorCodes.SessionExpired),
-                            Loc.T("live.headline"), MessageBoxButton.OK,
-                            MessageBoxImage.Information);
+            AppDialog.Info(this, ErrorCodes.Text(ErrorCodes.SessionExpired), Loc.T("live.headline"), AppDialog.Kind.Info);
             return;
         }
 
@@ -102,9 +100,7 @@ public partial class MainWindow
         if ((LiveList.ItemsSource as IEnumerable<LiveVm>)?
                 .FirstOrDefault(v => v.Id == id)?.Yours == true)
         {
-            MessageBox.Show(this, ErrorCodes.Text(ErrorCodes.NotYourMatch),
-                            Loc.T("live.headline"), MessageBoxButton.OK,
-                            MessageBoxImage.Information);
+            AppDialog.Info(this, ErrorCodes.Text(ErrorCodes.NotYourMatch), Loc.T("live.headline"), AppDialog.Kind.Info);
             return;
         }
 
@@ -113,19 +109,15 @@ public partial class MainWindow
         // hidden, so agreeing to a delay is the condition of being let in — not
         // a line of small print after the fact.
         var terms = await _login.ObserverTermsAsync();
-        var answer = MessageBox.Show(
-            this, (terms?.Terms ?? "") + Environment.NewLine + Environment.NewLine
-                  + Loc.T("live.terms_ask"),
-            Loc.T("live.terms_title"), MessageBoxButton.OKCancel,
-            MessageBoxImage.Information);
-        if (answer != MessageBoxResult.OK) return;
+        var answer = AppDialog.Confirm(this, (terms?.Terms ?? "") + Environment.NewLine + Environment.NewLine
+                  + Loc.T("live.terms_ask"), Loc.T("live.terms_title"), AppDialog.Kind.Info);
+        if (!answer) return;
 
         b.IsEnabled = false;
         var ok = await _api.PostAsync($"/live/{id}/observe");
         b.Content = ok ? Loc.T("live.requested") : Loc.T("live.request");
         if (!ok && _api.LastError is not null)
-            MessageBox.Show(this, _api.LastError, Loc.T("live.headline"),
-                            MessageBoxButton.OK, MessageBoxImage.Information);
+            AppDialog.Info(this, _api.LastError, Loc.T("live.headline"), AppDialog.Kind.Info);
     }
 
     // ----------------------------------------------------------- Tournaments

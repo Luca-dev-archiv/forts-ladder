@@ -239,6 +239,16 @@ class QueueService:
         key = self.joined.get(account.id)
         return self.queues.get(key) if key else None
 
+    def waiting(self) -> dict[str, int]:
+        """Searchers per mode, for callers that do not want a whole status.
+
+        Swept first: an idle client asking for the counts is exactly the moment a
+        client that has closed should stop being counted.
+        """
+        now = self._now()
+        self._sweep(now)
+        return {key: len(q.searching(now)) for key, q in self.queues.items()}
+
     def status(self, account: Account) -> dict:
         now = self._now()
         # Asking is the heartbeat. Stamped before the sweep, or a client would

@@ -1175,6 +1175,29 @@ def test_a_running_clock_still_costs_the_leaver():
     assert s.is_dodge(a) and s.is_dodge(b)
 
 
+def test_leaving_the_queue_answers_with_the_new_count():
+    """The client draws the mode picker from this answer. Throwing it away is
+    what left "1 waiting" on screen after the last searcher left."""
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500, "ranked_1v1")
+    assert q.status(a)["waiting"]["ranked_1v1"] == 1
+    left = q.leave(a)
+    assert left["waiting"].get("ranked_1v1", 0) == 0, left["waiting"]
+    assert left["in_queue"] is False
+
+
+def test_the_counts_are_available_without_a_whole_status():
+    """An idle client asks for nothing else, so this is what keeps the picker
+    honest while nobody is queueing."""
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500, "ranked_1v1")
+    assert q.waiting()["ranked_1v1"] == 1
+    # And it sweeps: asking is exactly the moment a closed client should stop
+    # being counted.
+    clock[0] += q.STALE_AFTER_S + 1
+    assert q.waiting()["ranked_1v1"] == 0
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

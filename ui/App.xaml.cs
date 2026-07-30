@@ -30,9 +30,7 @@ public partial class App : Application
         // it is a second voice claiming to be the same player.
         if (!ClaimSingleInstance())
         {
-            MessageBox.Show(ErrorCodes.Text(ErrorCodes.AlreadyRunning),
-                            Loc.T("app.title"), MessageBoxButton.OK,
-                            MessageBoxImage.Information);
+            AppDialog.Info(null, ErrorCodes.Text(ErrorCodes.AlreadyRunning), Loc.T("app.title"), AppDialog.Kind.Info);
             Shutdown(1);
             return;
         }

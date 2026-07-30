@@ -1313,9 +1313,9 @@
                 <!-- WrapPanel: three buttons with German labels are wider
                      than this column. -->
                 <WrapPanel Margin="0,16,0,0">
-                  <Button x:Name="BtnReport" Content="{core:T series.report}"
-                          Style="{StaticResource BtnAccent}"
-                          Margin="0,0,8,8" Click="BtnReport_Click"/>
+                  <!-- No "report" button. A decided series sends itself: as a
+                       button it is a decision, and the loser has a reason not
+                       to press it. What is left is asking a person to look. -->
                   <Button x:Name="BtnCopy" Content="{core:T series.copy}"
                           Style="{StaticResource Btn}" Margin="0,0,8,8"
                           Click="BtnCopy_Click"/>
@@ -1324,9 +1324,9 @@
                           Click="BtnCollect_Click"/>
                   <!-- Every series is listed, rated or not, so that a wrong one
                        can be handed to a person instead of being lost. -->
-                  <Button x:Name="BtnFlag" Content="{core:T series.flag}"
-                          Style="{StaticResource Btn}" Margin="0,0,8,8"
-                          Visibility="Collapsed" Click="BtnFlag_Click"/>
+                  <Button x:Name="BtnFlag" Content="{core:T report.open_case}"
+                          Style="{StaticResource BtnAccent}" Margin="0,0,8,8"
+                          Click="BtnFlag_Click"/>
                 </WrapPanel>
 
                 <TextBlock x:Name="ReportStatus" Style="{StaticResource Label}"

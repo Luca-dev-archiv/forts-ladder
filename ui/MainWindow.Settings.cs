@@ -76,6 +76,9 @@ public partial class MainWindow
             ? Loc.T("settings.consent_off") : Loc.T("settings.consent");
 
         LadderNameBox.Text = me.Ufer_Name ?? me.Ufer_Claim ?? "";
+        // One name, not two. The sidebar and the series list read the local
+        // store, so it follows the server rather than drifting from it.
+        AdoptServerName(me.Ufer_Name);
         NameStatus.Text = me.Ufer_Name is { Length: > 0 }
             ? Loc.T("settings.name_set", me.Ufer_Name)
             : me.Ufer_Claim is { Length: > 0 }

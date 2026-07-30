@@ -125,8 +125,7 @@ public partial class MainWindow
         if (sender is not Button b || b.Tag is not string id) return;
         b.IsEnabled = false;
         if (!await _login.AnswerObserverAsync(id, approve))
-            MessageBox.Show(this, _api.LastError ?? "?", Loc.T("live.headline"),
-                            MessageBoxButton.OK, MessageBoxImage.Information);
+            AppDialog.Info(this, _api.LastError ?? "?", Loc.T("live.headline"), AppDialog.Kind.Info);
         await PollObserverInboxAsync();
     }
 
@@ -171,8 +170,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, Loc.T("live.headline"),
-                            MessageBoxButton.OK, MessageBoxImage.Information);
+            AppDialog.Info(this, ex.Message, Loc.T("live.headline"), AppDialog.Kind.Info);
         }
     }
 }

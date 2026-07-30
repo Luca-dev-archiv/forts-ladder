@@ -40,6 +40,9 @@ public partial class MainWindow
         if (!_api.Configured || !_api.LoggedIn) { ShowOnline(null); return; }
         var p = await _login.PingAsync();
         ShowOnline(p?.Online);
+        // Keeps the mode picker honest while nobody is queueing, which is when
+        // the old count used to freeze.
+        _queue.MergeWaiting(p?.Waiting);
     }
 
     /// <summary>

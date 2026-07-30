@@ -74,10 +74,31 @@ public sealed class ServerQueue : IDisposable
 
     public async Task LeaveAsync()
     {
-        await _api.DeleteAsync("/queue");
+        // The answer is the new status, with the counts as they are *after*
+        // leaving. Discarding it left the picker showing the searcher this
+        // client had just stopped being.
+        var s = await _api.DeleteAsync<QueueStatusDto>("/queue");
         _timer.Stop();
-        Status = null;
         _announced = null;
+        if (s is not null)
+        {
+            s.ReceivedAt = DateTime.UtcNow;
+            Status = s;
+        }
+        else Status = null;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Fold counts from somewhere else into the status.
+    ///
+    /// The presence ping carries them, and it is the only call an idle client
+    /// makes — so this is what keeps the picker honest while nobody is queueing.
+    /// </summary>
+    public void MergeWaiting(Dictionary<string, int>? waiting)
+    {
+        if (waiting is null || waiting.Count == 0) return;
+        Status ??= new QueueStatusDto();
+        Status.Waiting = waiting;
         Changed?.Invoke();
     }
 

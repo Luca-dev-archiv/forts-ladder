@@ -325,10 +325,15 @@ def steam_start(return_to: str = "/", json: int = 0, ticket: str | None = None):
     no browser has, so it asks for a single-use ticket and passes it here. The
     ticket rides inside `openid.return_to`, which Steam signs.
     """
-    guard(auth.begin_login, "steam", safe_return_to(return_to))
-    callback = f"{BASE_URL}/auth/steam/callback"
+    pending = guard(auth.begin_login, "steam", safe_return_to(return_to))
+    # The state travels inside `openid.return_to`, which Steam signs — the same
+    # ride the ticket already takes. Drawing one and throwing it away, which is
+    # what happened here, left the callback as a state-changing GET with nothing
+    # tying it to the login this browser started.
+    callback = (f"{BASE_URL}/auth/steam/callback"
+                f"?state={quote(pending.state, safe='')}")
     if ticket:
-        callback += f"?ticket={ticket}"
+        callback += f"&ticket={quote(ticket, safe='')}"
     url = steam_openid_url(callback, BASE_URL)
     if json:
         return {"url": url}
@@ -357,6 +362,13 @@ def steam_callback(request: Request, ladder_session: str | None = Cookie(None),
     # Verify first, always. Whether the account comes from a cookie or a ticket
     # is irrelevant if Steam did not actually sign this response.
     steam_id = guard(verify_steam_openid, params)
+    # Then spend the state. It is what makes this callback part of a login *this*
+    # browser started: without it a prepared link could attach the sender's Steam
+    # account to whoever clicked it, because a GET carries the session cookie and
+    # `attach_steam` overwrites an existing link without asking.
+    #
+    # Consumed once and only once, so a replayed link dies here.
+    guard(auth.consume_state, params.get("state") or "")
     ticket = params.get("ticket")
     acc = (guard(auth.claim_steam_ticket, ticket) if ticket
            else require(session_token(ladder_session, authorization)))
@@ -640,13 +652,33 @@ def live_list(ladder_session: str | None = Cookie(None),
 def live_publish(body: PublishBody, ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):
     acc = require(session_token(ladder_session, authorization))
+    # Names, not claims. The host consents for themselves — which is what the
+    # check below covers — and these are display text for a listing, so they are
+    # bounded rather than trusted: an unbounded list of arbitrary names is a way
+    # to put anybody's name on a match they never played.
+    body.players = [str(x)[:40] for x in body.players[:8]]
     m = guard(live.publish, acc, body.mode_key, body.mode_label, body.players,
               body.slots_used, body.slots_total, body.lobby_id, body.tournament)
     return {"match_id": m.id}
 
 
 @app.post("/live/{match_id}/heartbeat")
-def live_heartbeat(match_id: str, slots_used: int | None = None):
+def live_heartbeat(match_id: str, slots_used: int | None = None,
+                   ladder_session: str | None = Cookie(None),
+                   authorization: str | None = Header(None)):
+    """The host says the match is still going, and how full it is.
+
+    Only the host. This took no credentials at all — the one state-changing route
+    here that asked for nothing — and match ids are listed anonymously, so a
+    passer-by could set a match to nine of nine slots and shut every spectator
+    request out of it, or keep a finished match on the list all evening.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    m = live.matches.get(match_id)
+    if m is None:
+        raise HTTPException(404, "no such match")
+    if m.host_account_id != acc.id:
+        raise HTTPException(403, "only the host keeps a match alive")
     live.heartbeat(match_id, slots_used)
     return {"ok": True}
 
@@ -654,7 +686,15 @@ def live_heartbeat(match_id: str, slots_used: int | None = None):
 @app.delete("/live/{match_id}")
 def live_finish(match_id: str, ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):
-    require(session_token(ladder_session, authorization))
+    acc = require(session_token(ladder_session, authorization))
+    m = live.matches.get(match_id)
+    if m is None:
+        return {"ok": True}                     # already gone; nothing to do
+    # Whose match it is. `require` only established that somebody is logged in,
+    # so any player could end anybody's — while `set_accepting` and
+    # `set_spectators_allowed` two routes down both check this properly.
+    if m.host_account_id != acc.id and not acc.may("override_observer_lock"):
+        raise HTTPException(403, "only the host ends their own match")
     live.finish(match_id)
     return {"ok": True}
 
@@ -1180,7 +1220,8 @@ def draft_lobby(draft_id: str, body: LobbyBody,
     store.save_draft(s)
     # Sanctioned here rather than by the client: the server knows this lobby
     # came out of a draft it ran, which is exactly what sanctioning means.
-    store.sanction_lobby(lobby, s.series_id or s.id, created_by=acc.id)
+    store.sanction_lobby(lobby, s.series_id or s.id, created_by=acc.id,
+                         roster=[x for x in s._steam_ids.values() if x])
     return state
 
 
@@ -1235,6 +1276,11 @@ def queue_status(ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):
     acc = require(session_token(ladder_session, authorization))
     presence.seen(acc.id)
+    # Swept by the traffic rather than by a timer that can be dead without
+    # anybody noticing — the same arrangement the queue's own tick uses. Both are
+    # cheap: a dictionary scan over a handful of entries.
+    auth.prune_pending()
+    drafts.prune()
     state = guard(queue.status, acc)
     # Carried on the poll that is already happening, so the client never has to
     # ask twice for two numbers.

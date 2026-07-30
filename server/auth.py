@@ -277,6 +277,35 @@ class AuthService:
         self.pending[p.state] = p
         return p
 
+    #: How long a login attempt, a pairing code and a Steam ticket stay usable.
+    #:
+    #: They are all created by endpoints that need no account — that is the point
+    #: of them — so without an expiry each one is a way for anybody to add an
+    #: entry to a dictionary that is never emptied. Ten minutes is far longer than
+    #: any of these flows takes.
+    PENDING_TTL_S = 600
+
+    def prune_pending(self) -> int:
+        """Drop login attempts, pairing codes and tickets nobody came back for.
+
+        Called from the routes that run constantly, so the clearing out is done by
+        the traffic rather than by a timer that can be dead without anybody
+        noticing — the same arrangement the queue's tick already uses.
+        """
+        now = self._now()
+        gone = 0
+        for store in (self.pending, getattr(self, "_pairings", {}),
+                      getattr(self, "_steam_tickets", {})):
+            for key, value in list(store.items()):
+                created = getattr(value, "created_at", None)
+                if created is None and isinstance(value, tuple):
+                    created = next((x for x in value
+                                    if isinstance(x, (int, float))), None)
+                if created is not None and now - created > self.PENDING_TTL_S:
+                    store.pop(key, None)
+                    gone += 1
+        return gone
+
     def consume_state(self, state: str) -> PendingLogin:
         p = self.pending.pop(state, None)
         if p is None:

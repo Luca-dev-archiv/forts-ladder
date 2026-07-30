@@ -127,8 +127,22 @@ public sealed class ApiClient
         catch (IOException) { return null; }
     }
 
-    public void SetBaseUrl(string? url)
+    /// <summary>
+    /// Point this client at a server.
+    ///
+    /// A plain-http address is refused unless it is a loopback one. The field is
+    /// editable in the Live view and the client sends a bearer token on every
+    /// call, so one paste of an `http://` URL would put a live session on the
+    /// wire in clear — and somebody testing their own server on localhost is the
+    /// only case where that is nobody else's business.
+    /// </summary>
+    public bool SetBaseUrl(string? url)
     {
+        if (!string.IsNullOrWhiteSpace(url) && !IsSafeBase(url.Trim()))
+        {
+            LastError = ErrorCodes.Text(ErrorCodes.InsecureServer);
+            return false;
+        }
         BaseUrl = string.IsNullOrWhiteSpace(url) ? null : url.Trim().TrimEnd('/');
         try
         {
@@ -136,6 +150,22 @@ public sealed class ApiClient
             File.WriteAllText(SettingsPath, BaseUrl ?? "");
         }
         catch (IOException) { /* not being able to remember it is not fatal */ }
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a token may be sent to this address.
+    ///
+    /// https anywhere, http only to this machine. Loopback is allowed because
+    /// running your own server for a test is a normal thing to do and the
+    /// traffic never leaves the machine.
+    /// </summary>
+    private static bool IsSafeBase(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var u)) return false;
+        if (u.Scheme == Uri.UriSchemeHttps) return true;
+        if (u.Scheme != Uri.UriSchemeHttp) return false;
+        return u.IsLoopback;
     }
 
     private HttpRequestMessage Request(HttpMethod method, string path,

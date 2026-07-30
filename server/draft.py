@@ -725,7 +725,9 @@ class DraftSession:
             raise AuthError(f"side {self.cancelled_by} left this series")
 
         # Who actually played. Checked before the result is counted, because a
-        # game played by the wrong people must not become a rating change.
+        # game played by the wrong people must not become a rating change. An
+        # empty roster is a report with nothing to check, which is refused below
+        # rather than waved through.
         if steam_ids:
             missing = self.check_roster(steam_ids)
             if missing:
@@ -746,6 +748,19 @@ class DraftSession:
         # The result is deliberately *not* recorded first and undone after. A
         # wrong-commander game that briefly counts is a wrong-commander game
         # that the other client may report on top of.
+        # No evidence is not the same as evidence of nothing wrong.
+        #
+        # These fields were optional, and the checks were written as "if we were
+        # sent something, compare it". So the way past both the roster check and
+        # the plan check was to leave them out — and since the first report of a
+        # game wins, the losing client could simply report first, with nothing
+        # attached, and be recorded as the winner. Now a report with nothing to
+        # check is refused like any other mismatch, and says so.
+        if not commanders or not map_played:
+            self.deviations[game] = ["no evidence sent with the result — "
+                                     "update the client"]
+            self.voided_games.add(game)
+            return self.public_state(account)
         if (off := self.check_against_plan(game, map_played, commanders)):
             self.deviations[game] = off
             self.voided_games.add(game)
@@ -963,6 +978,13 @@ class DraftService:
             for seat in row["seats"]:
                 s.seats[seat["account_id"]] = Seat(
                     Side(seat["side"]), seat["account_id"], seat["display"])
+                # Restored with the seat. Without it every check that rests on a
+                # drafted Steam ID answered "nothing wrong" to anything after a
+                # redeploy — the roster check, the wrong-commander verdict and
+                # the guest's join link, all three at once and all three
+                # silently.
+                if seat.get("steam_id"):
+                    s._steam_ids[seat["account_id"]] = seat["steam_id"]
             for c in row["choices"]:
                 try:
                     draft.apply(c["value"], Side(c["side"]) if c["side"] else None)

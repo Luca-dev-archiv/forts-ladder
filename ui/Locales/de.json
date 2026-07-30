@@ -72,6 +72,7 @@
   "err.FL-104": "Das gibt es nicht mehr.",
   "err.FL-105": "Der Server hat das abgelehnt.",
   "err.FL-106": "Etwas hat sich gleichzeitig geändert — schau auf den aktuellen Stand.",
+  "err.FL-107": "Diese Server-Adresse würde deinen Login unverschlüsselt senden.",
   "err.FL-109": "Unerwartete Antwort vom Server.",
   "err.FL-110": "Noch kein Steam-Konto verknüpft.",
   "err.FL-111": "Du hast dem Tracking noch nicht zugestimmt.",

@@ -115,7 +115,21 @@ class ResultService:
             # report a result between two other people.
             raise AuthError("you are not in this series")
 
+        # The one check that was missing, and the one that matters most: the
+        # people reported have to be the people who drafted. Everything else here
+        # can be got wrong by accident; naming somebody who was not in the lobby
+        # cannot.
+        drafted = (self._store.lobby_roster(int(lobby_id))
+                   if lobby_id is not None else None)
+        if drafted is not None and account.steam_id not in drafted:
+            raise AuthError("you did not draft this series")
+
         reasons = self._why_not(lobby_id, sides)
+        if drafted is None:
+            reasons.append("no drafted roster on record for this lobby")
+        elif set(sides) != drafted:
+            reasons.append("the players reported are not the players who "
+                           "drafted this lobby")
         # Derived, not drawn: same series, same row.
         #
         # The draft id when there is one — the server handed it to both clients,

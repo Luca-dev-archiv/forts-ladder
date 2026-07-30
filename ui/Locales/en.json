@@ -72,6 +72,7 @@
   "err.FL-104": "That is not there any more.",
   "err.FL-105": "The server refused this.",
   "err.FL-106": "Something changed at the same time — check the current state.",
+  "err.FL-107": "That server address would send your login in clear.",
   "err.FL-109": "Unexpected answer from the server.",
   "err.FL-110": "No Steam account linked yet.",
   "err.FL-111": "You have not agreed to be tracked yet.",

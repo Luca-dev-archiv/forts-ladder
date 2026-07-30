@@ -31,6 +31,7 @@ it.
 | `FL-104` | Whatever you asked about is not there — usually a match or a draft that has ended. | Refresh the view. |
 | `FL-105` | The server rejected the request as impossible. | The message says why. This is the normal answer to a rule, not a bug. |
 | `FL-106` | Two things happened at once and the server kept the first. | Look at the current state before trying again; your change may already be in. |
+| `FL-107` | That server address would send your login in clear. | The client sends a session token on every call, so a plain `http://` address is refused — except to this machine, where the traffic never leaves it. Use `https://`. |
 | `FL-109` | Something the client has no specific code for. | Report it with the code and the message. |
 | `FL-110` | No Steam account is linked. | **Queue → Link Steam.** Results cannot be recorded without it: a match has to be provably yours. |
 | `FL-111` | You have not agreed to be tracked. | **Queue → Agree.** Nothing is recorded about you until you do, which is the point. |

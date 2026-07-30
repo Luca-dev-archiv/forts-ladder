@@ -128,7 +128,16 @@ public sealed class Updater
 
         var dir = Path.Combine(Path.GetTempPath(), "FortsLadderUpdate");
         Directory.CreateDirectory(dir);
-        var staged = Path.Combine(dir, rel.AssetName);
+        // The name comes from the GitHub API, so it is remote input — and this
+        // is the one place in the client where it would reach both a path and a
+        // generated .cmd. Taken down to a bare filename first.
+        var safeName = Path.GetFileName(rel.AssetName);
+        if (string.IsNullOrWhiteSpace(safeName)
+            || !safeName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                ErrorCodes.Text(ErrorCodes.Unexpected,
+                                "the release asset has an unusable name"));
+        var staged = Path.Combine(dir, safeName);
 
         using (var resp = await Http.GetAsync(
                    rel.AssetUrl, HttpCompletionOption.ResponseHeadersRead, ct))

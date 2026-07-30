@@ -19,6 +19,7 @@ import hashlib
 import json
 import secrets
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -193,15 +194,46 @@ def _stored_json(raw, fallback):
 
 
 class Store:
+    """SQLite, with one connection per thread.
+
+    Almost every route in `app.py` is a plain `def`, which Starlette runs in a
+    threadpool — so two requests genuinely overlap. Sharing one connection between
+    them shares one implicit transaction as well, and then a `commit()` in either
+    writes whatever the other had half-finished. Nothing has gone wrong yet
+    because the traffic is a handful of clients, which is not a reason.
+    """
+
     def __init__(self, path: str | Path = "data/ladder.sqlite") -> None:
         self.path = Path(path)
         if self.path.parent != Path(""):
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path, check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
-        self.db.executescript(SCHEMA)
-        self._migrate()
-        self.db.commit()
+        self._local = threading.local()
+        # Opened once here so a broken path fails at startup rather than inside
+        # the first request that happens to touch the database.
+        self.db.execute("SELECT 1")
+
+    @property
+    def db(self) -> sqlite3.Connection:
+        """This thread's connection, opened on first use.
+
+        A property rather than a rewrite of every call site: `self.db.execute(...)`
+        reads the same and now means "the connection belonging to whoever is
+        asking". The schema is idempotent — `CREATE TABLE IF NOT EXISTS` and an
+        `ALTER` guarded by `PRAGMA table_info` — so running it per connection is
+        cheap and safe.
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.path)
+            conn.row_factory = sqlite3.Row
+            # WAL is set in the schema; this is what turns the writer collisions
+            # WAL still allows into a short wait instead of "database is locked".
+            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.executescript(SCHEMA)
+            self._local.conn = conn
+            self._migrate()
+            conn.commit()
+        return conn
 
     #: Columns added after the first release. `CREATE TABLE IF NOT EXISTS`
     #: does nothing to a table that already exists, so a database from before
@@ -213,6 +245,11 @@ class Store:
             ("consent_since", "TEXT"),
             ("steam_name", "TEXT"),
             ("ufer_claim", "TEXT"),
+        ],
+        "sanctioned_lobbies": [
+            # The SteamID64s that drafted this lobby. A sanctioned lobby without
+            # it is a token for inventing results against anybody.
+            ("roster", "TEXT"),
         ],
         "results": [
             ("flagged", "INTEGER NOT NULL DEFAULT 0"),
@@ -239,6 +276,13 @@ class Store:
             # mode's series length, quietly changing the event.
             ("seeding", "TEXT NOT NULL DEFAULT 'rating'"),
             ("best_of", "INTEGER"),
+        ],
+        "draft_seats": [
+            # The Steam ID that took this seat. It lived only in memory, so every
+            # redeploy switched off the roster check, the wrong-commander check
+            # and the guest's join link at once — while all three went on
+            # answering "nothing wrong".
+            ("steam_id", "TEXT"),
         ],
         "drafts": [
             # The handoff and the walk-away. Both have to survive a restart:
@@ -298,7 +342,16 @@ class Store:
                         f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
     def close(self) -> None:
-        self.db.close()
+        """Close this thread's connection.
+
+        Only this thread's: the others belong to threads that are still running,
+        and closing a connection out from under one of them is worse than leaving
+        it to be collected when the thread ends.
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._local.conn = None
 
     # ----------------------------------------------------------- Accounts
     def save_account(self, a: Account, granted_by: str | None = None) -> None:
@@ -379,11 +432,40 @@ class Store:
 
     # --------------------------------------------------- Sanctioned lobbies
     def sanction_lobby(self, lobby_id: int, series_id: str | None = None,
-                       created_by: str | None = None) -> None:
+                       created_by: str | None = None,
+                       roster: "list[str] | None" = None) -> None:
+        """Record that this lobby came out of a draft this server ran.
+
+        `roster` is the SteamID64s that drafted it. Without it a sanctioned lobby
+        was a bearer token for inventing results: the reporter's own id had to
+        appear in what they sent, and nothing tied the lobby to the *opponent*, so
+        a real lobby of one's own could be spent on fabricated wins against
+        anybody with tracking on.
+        """
         self.db.execute(
-            "INSERT OR IGNORE INTO sanctioned_lobbies VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO sanctioned_lobbies "
+            "(lobby_id, series_id, created_by, created_at) VALUES (?, ?, ?, ?)",
             (int(lobby_id), series_id, created_by, time.time()))
+        if roster:
+            self.db.execute(
+                "UPDATE sanctioned_lobbies SET roster = ? WHERE lobby_id = ?",
+                (json.dumps(sorted(roster)), int(lobby_id)))
         self.db.commit()
+
+    def lobby_roster(self, lobby_id: int) -> "set[str] | None":
+        """Who drafted this lobby, or None if nothing was recorded.
+
+        None and empty are different answers: nothing recorded means this lobby
+        predates the roster being kept, which is a reason not to rate a series
+        rather than a reason to refuse the report.
+        """
+        row = self.db.execute(
+            "SELECT roster FROM sanctioned_lobbies WHERE lobby_id = ?",
+            (int(lobby_id),)).fetchone()
+        if row is None or not row["roster"]:
+            return None
+        got = _stored_json(row["roster"], None)
+        return set(got) if isinstance(got, list) and got else None
 
     def sanctioned_lobbies(self) -> list[int]:
         return [r["lobby_id"] for r in self.db.execute(
@@ -639,9 +721,14 @@ class Store:
              session.team_size))
 
         self.db.execute("DELETE FROM draft_seats WHERE draft_id = ?", (session.id,))
+        # Named columns, not positional: a migration adds `steam_id` at the end
+        # for an existing database and creates it in order for a new one, so
+        # VALUES (?, ?, ?, ?) would bind the wrong things depending on which.
         self.db.executemany(
-            "INSERT INTO draft_seats VALUES (?, ?, ?, ?)",
-            [(session.id, s.side.value, s.account_id, s.display)
+            "INSERT INTO draft_seats (draft_id, side, account_id, display, "
+            "steam_id) VALUES (?, ?, ?, ?, ?)",
+            [(session.id, s.side.value, s.account_id, s.display,
+              session._steam_ids.get(s.account_id))
              for s in session.seats.values()])
 
         # Rewritten wholesale: the move list only grows, and comparing is more
@@ -691,7 +778,8 @@ class Store:
                 "results": _stored_json(r["results"], {}),
                 "cancelled_by": r["cancelled_by"],
                 "seats": [dict(s) for s in self.db.execute(
-                    "SELECT side, account_id, display FROM draft_seats "
+                    "SELECT side, account_id, display, steam_id "
+                    "FROM draft_seats "
                     "WHERE draft_id = ?", (r["id"],))],
                 "choices": [dict(c) for c in self.db.execute(
                     "SELECT side, action, value, game FROM draft_choices "

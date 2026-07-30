@@ -48,6 +48,15 @@ class World:
         self.ranking = Ranking(path=self.dir / "no-seed.json")
         self.results = ResultService(self.auth, self.store, self.ranking)
 
+    def sanction(self, lobby=111, a="Alice", b="Bob"):
+        """Sanction a lobby the way the server does: with the drafted roster.
+
+        A lobby without one is not rateable any more, and rightly so — that was
+        the hole. The fixture has to do what `POST /drafts/{id}/lobby` does.
+        """
+        self.store.sanction_lobby(lobby, f"series-{lobby}",
+                                  roster=[STEAM[a], STEAM[b]])
+
     def duel(self, a="Alice", b="Bob", *, games=3, score_low=2,
              lobby=111, by=None, played_at="2026-07-28T20:15:00",
              draft_id=None):
@@ -67,7 +76,7 @@ class World:
 # ----------------------------------------------------------------- Accepting
 def test_a_sanctioned_series_between_consenting_players_is_rated():
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     r = w.duel()
     assert r.rated, r.reasons
     assert w.rating("Alice") > 1000 > w.rating("Bob")
@@ -86,7 +95,7 @@ def test_a_player_who_never_opted_in_stops_the_whole_series():
     """Not partially rated: a series with someone who did not agree counts for
     nobody, including the player who did agree."""
     w = World(consent=("Alice",))
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     r = w.duel()
     assert not r.rated
     assert any("agreed to be tracked" in x for x in r.reasons), r.reasons
@@ -97,7 +106,7 @@ def test_the_refusal_never_names_the_other_accounts():
     """Saying *which* Steam IDs the server holds would make this a lookup
     service for who is registered."""
     w = World(consent=("Alice",))
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     r = w.duel()
     joined = " ".join(r.reasons)
     for sid in STEAM.values():
@@ -106,7 +115,7 @@ def test_the_refusal_never_names_the_other_accounts():
 
 def test_only_someone_in_the_series_may_report_it():
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     try:
         w.duel(by="Carol")
     except AuthError as e:
@@ -117,7 +126,7 @@ def test_only_someone_in_the_series_may_report_it():
 
 def test_an_impossible_score_is_refused():
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     for games, score in ((3, 4), (0, 0), (3, -1)):
         try:
             w.duel(games=games, score_low=score)
@@ -131,7 +140,7 @@ def test_reporting_the_same_series_twice_changes_nothing():
     """Both clients report — whichever is running gets it through — so the
     second arrival has to be a no-op rather than a second rating change."""
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     w.duel()
     after_one = w.rating("Alice")
     w.duel(by="Bob")
@@ -143,7 +152,7 @@ def test_two_series_in_one_lobby_on_one_evening_stay_two():
     """A Bo3 and then another Bo3 without leaving the lobby. Keyed by day alone
     the second would have been swallowed as a duplicate of the first."""
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     w.duel(played_at="2026-07-28T20:15:00", score_low=2)
     w.duel(played_at="2026-07-28T21:40:00", score_low=0)
     assert len(w.store.load_results()) == 2,         [r.played_at for r in w.store.load_results()]
@@ -156,7 +165,7 @@ def test_withdrawing_consent_removes_the_past_too():
     """The rating is recomputed from the events every time, which is what makes
     the promise "you can withdraw" true rather than a policy."""
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     w.duel()
     assert w.rating("Alice") is not None
 
@@ -167,8 +176,8 @@ def test_withdrawing_consent_removes_the_past_too():
 
 def test_a_win_and_a_loss_move_in_opposite_directions():
     w = World()
-    w.store.sanction_lobby(111)
-    w.store.sanction_lobby(222)
+    w.sanction(111)
+    w.sanction(222)
     w.duel(lobby=111, score_low=3, games=3, played_at="2026-07-20T19:00:00")
     high, low = w.rating("Alice"), w.rating("Bob")
     assert high > 1000 > low, (high, low)
@@ -193,14 +202,14 @@ def test_the_seed_is_where_a_player_starts():
         {"name": "Alice", "rating": 1800}]}), encoding="utf-8")
     w.ranking = Ranking(path=seed)
     w.results = ResultService(w.auth, w.store, w.ranking)
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     w.duel()
     assert w.rating("Alice") > 1500, "the seed was ignored and Alice began at 1000"
 
 
 def test_a_player_only_known_from_reports_still_appears():
     w = World(consent=("Carol", "Dave"))
-    w.store.sanction_lobby(111)
+    w.sanction(111, "Carol", "Dave")
     w.duel("Carol", "Dave")
     w.results.refresh_ranking()
     names = {p["name"] for p in w.ranking.players}
@@ -209,7 +218,7 @@ def test_a_player_only_known_from_reports_still_appears():
 
 def test_under_ten_games_a_rating_is_marked_provisional():
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     w.duel()
     w.results.refresh_ranking()
     row = next(p for p in w.ranking.players if p["name"] == "Alice")
@@ -239,7 +248,7 @@ def test_only_a_participant_may_flag_a_series():
     """A report about your own match, not a way to file complaints about other
     people."""
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     r = w.duel()
     try:
         w.results.flag(w.people["Carol"], r.id, "I do not like this result")
@@ -275,7 +284,7 @@ def test_an_unrated_report_does_not_lock_out_a_rateable_one():
     real series came back FL-231 unrated with both players watching.
     """
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
 
     first = w.duel(lobby=None, by="Bob", draft_id="abc123")
     assert not first.rated and first.reasons, first.reasons
@@ -292,7 +301,7 @@ def test_a_rated_report_is_not_replaced_by_a_second_one():
     """The original rule still holds where it was ever a rule: two rated reports
     of one series should agree, and the first is the one that counted."""
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     first = w.duel(lobby=111, by="Alice", score_low=2, draft_id="abc123")
     second = w.duel(lobby=111, by="Bob", score_low=1, draft_id="abc123")
     assert first.id == second.id
@@ -314,7 +323,7 @@ def reviewer(w, name="Alice"):
 
 def test_annulling_takes_the_rating_back_and_says_who_and_why():
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     r = w.duel(draft_id="abc")
     assert r.rated and w.rating("Alice") > 1000
 
@@ -333,7 +342,7 @@ def test_an_annulment_needs_a_reason():
     """A rating that vanished for no recorded reason cannot be told apart from a
     bug, and the two players will ask."""
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     r = w.duel(draft_id="abc")
     ref = reviewer(w)
     try:
@@ -346,7 +355,7 @@ def test_an_annulment_needs_a_reason():
 
 def test_a_player_cannot_annul_their_own_loss():
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     r = w.duel(draft_id="abc")
     loser = w.people["Bob"]
     loser.role = Role.PLAYER
@@ -360,7 +369,7 @@ def test_a_player_cannot_annul_their_own_loss():
 
 def test_an_annulment_survives_a_reload_and_can_be_undone():
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     r = w.duel(draft_id="abc")
     ref = reviewer(w)
     w.results.annul(ref, r.id, "wrong commander")
@@ -444,7 +453,7 @@ def test_two_ids_that_differ_only_in_punctuation_do_not_share_a_directory():
 
 def test_the_directory_is_named_by_the_server_not_by_the_series():
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     r = w.duel(draft_id="abc")
     w.store.save_replay(r.id, 1, b"bytes")
 
@@ -459,7 +468,7 @@ def test_the_directory_is_named_by_the_server_not_by_the_series():
 
 def test_a_name_that_is_not_there_cannot_become_a_path():
     w = World()
-    w.store.sanction_lobby(111)
+    w.sanction(111)
     r = w.duel(draft_id="abc")
     w.store.save_replay(r.id, 1, b"bytes")
 

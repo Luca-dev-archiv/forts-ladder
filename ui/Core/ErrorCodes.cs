@@ -19,6 +19,7 @@ public static class ErrorCodes
     // --- 1xx: the connection and the account
     public const string SessionExpired = "FL-100";
     public const string NoServer = "FL-101";
+    public const string InsecureServer = "FL-107";
     public const string NotAllowed = "FL-102";
     public const string ServerBroke = "FL-103";
     public const string NotThere = "FL-104";

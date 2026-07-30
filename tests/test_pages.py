@@ -992,6 +992,120 @@ def test_an_unsanctioned_lobby_is_never_claimed_as_the_ladders():
     assert "1234" not in got, got
 
 
+# ----------------------------------------------------- Audit regressions
+# Every one of these was verified against the live code before it was fixed.
+def test_a_sanctioned_lobby_is_not_a_licence_to_invent_results():
+    """The worst of them: `report` checked that the reporter's own Steam ID was
+    in what they sent and that the lobby was sanctioned by *somebody*. Nothing
+    tied the lobby to the opponent, so the normal way of getting a lobby
+    sanctioned — host a real draft — handed out a token for inventing 3:0 wins
+    against anybody with tracking on."""
+    w = World()
+    attacker, ah = w.person("Attacker")
+    victim, _ = w.person("Victim")
+    app_mod.store.sanction_lobby(51515, "mine", created_by=attacker.id,
+                                 roster=[attacker.steam_id, "76561199000007777"])
+
+    r = w.client.post("/results", headers=ah, json={
+        "sides": {attacker.steam_id: 1, victim.steam_id: 2},
+        "games": 3, "score_low": 3, "played_at": "2026-07-31T10:00:00",
+        "lobby_id": "51515", "draft_id": f"forge-{next(_ids)}"})
+    assert r.status_code == 200, r.text[:200]
+    body = r.json()
+    assert body["rated"] is False, body
+    assert any("not the players who drafted" in x for x in body["reasons"]), body
+
+
+def test_a_lobby_with_no_recorded_roster_is_not_rated():
+    """Belt and braces for lobbies sanctioned before the roster was kept."""
+    w = World()
+    player, ph = w.person("Player")
+    app_mod.store.sanction_lobby(52525, "old", created_by=player.id)
+    r = w.client.post("/results", headers=ph, json={
+        "sides": {player.steam_id: 1, "76561199000006666": 2},
+        "games": 2, "score_low": 2, "played_at": "2026-07-31T11:00:00",
+        "lobby_id": "52525", "draft_id": f"forge-{next(_ids)}"})
+    assert r.json()["rated"] is False
+    assert any("no drafted roster" in x for x in r.json()["reasons"])
+
+
+def test_somebody_who_did_not_draft_cannot_report_the_series_at_all():
+    w = World()
+    a, _ = w.person("Drafter")
+    b, bh = w.person("Stranger")
+    app_mod.store.sanction_lobby(53535, "theirs", created_by=a.id,
+                                 roster=[a.steam_id, "76561199000005555"])
+    r = w.client.post("/results", headers=bh, json={
+        "sides": {b.steam_id: 1, a.steam_id: 2},
+        "games": 2, "score_low": 2, "played_at": "2026-07-31T12:00:00",
+        "lobby_id": "53535", "draft_id": f"forge-{next(_ids)}"})
+    assert r.status_code == 403, r.text[:200]
+
+
+def test_the_heartbeat_needs_the_host():
+    """It took no credentials at all — the one state-changing route here that
+    asked for nothing — and match ids are listed anonymously, so a passer-by
+    could set a match to full and shut every spectator request out of it."""
+    w = World()
+    host, hh = w.person("Host")
+    _, other = w.person("Passer-by")
+    mid = published(w, hh, lobby=61616)
+
+    assert w.client.post(f"/live/{mid}/heartbeat?slots_used=9").status_code == 401
+    assert w.client.post(f"/live/{mid}/heartbeat?slots_used=9",
+                         headers=other).status_code == 403
+    row = next(x for x in w.client.get("/live").json()["matches"]
+               if x["id"] == mid)
+    assert row["free_slots"] > 0, "an outsider filled the match up"
+    assert w.client.post(f"/live/{mid}/heartbeat?slots_used=3",
+                         headers=hh).status_code == 200
+
+
+def test_only_the_host_ends_their_own_live_match():
+    """`require` established that somebody was logged in, not that it was
+    theirs — while the two routes beside it check `host_account_id` properly."""
+    w = World()
+    host, hh = w.person("Host")
+    _, other = w.person("Outsider")
+    mid = published(w, hh, lobby=62626)
+
+    assert w.client.delete(f"/live/{mid}", headers=other).status_code == 403
+    assert any(x["id"] == mid for x in w.client.get("/live").json()["matches"])
+    assert w.client.delete(f"/live/{mid}", headers=hh).status_code == 200
+
+
+def test_the_steam_callback_is_bound_to_the_login_that_started_it():
+    """The state was drawn and thrown away, and the callback never consumed one.
+    A state-changing GET with no session binding, and `attach_steam` overwrites
+    an existing link without asking."""
+    w = World()
+    r = w.client.get("/auth/steam/start", params={"json": 1})
+    assert r.status_code == 200, r.text[:200]
+    url = r.json()["url"]
+    assert "state%3D" in url or "state=" in url, url
+
+    # A callback with no state, or one nobody issued, is refused before anything
+    # is attached.
+    _, ph = w.person("Victim")
+    for params in ({}, {"state": "not-a-state-anybody-issued"}):
+        bad = w.client.get("/auth/steam/callback", params=params, headers=ph)
+        assert bad.status_code in (400, 403), (params, bad.status_code)
+
+
+def test_login_attempts_do_not_pile_up_for_ever():
+    """`auth.pending` grew through an endpoint that needs no account and was
+    never emptied."""
+    w = World()
+    _, ph = w.person("Player")
+    for _ in range(25):
+        w.client.get("/auth/steam/start", params={"json": 1})
+    assert len(app_mod.auth.pending) >= 25
+    for entry in app_mod.auth.pending.values():
+        entry.created_at -= app_mod.auth.PENDING_TTL_S + 60
+    w.client.get("/queue", headers=ph)      # the traffic does the sweeping
+    assert app_mod.auth.pending == {}, app_mod.auth.pending
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

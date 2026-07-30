@@ -130,7 +130,11 @@ public partial class MainWindow
 
     private void BtnSettingsConnect_Click(object sender, RoutedEventArgs e)
     {
-        _api.SetBaseUrl(SettingsServerBox.Text);
+        if (!_api.SetBaseUrl(SettingsServerBox.Text))
+        {
+            ServerStatus.Text = _api.LastError ?? "?";
+            return;
+        }
         ServerStatus.Text = Loc.T("settings.server_set", _api.BaseUrl ?? "—");
         _ = RefreshSettingsAsync();
     }

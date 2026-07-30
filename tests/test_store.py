@@ -431,8 +431,19 @@ def test_a_void_and_the_played_games_survive_a_restart():
                 actor = a if step.side is Side.A else b
                 s.apply(actor, s.draft.legal_options(step.side)[0])
 
-        s.note_game(a, 1, "A")
-        s.note_game(a, 2, "B")
+        # With what was played. The map and the commanders stopped being
+        # optional: leaving them out skipped the roster and plan checks together,
+        # and the first report of a game wins.
+        def report(game, winner):
+            want = s.draft.plan()[game - 1]
+            ids = {seat.side.value: s._steam_ids.get(seat.account_id)
+                   for seat in s.seats.values()}
+            s.note_game(a, game, winner, map_played=want["map"],
+                        commanders={ids["A"]: want["commander_a"],
+                                    ids["B"]: want["commander_b"]})
+
+        report(1, "A")
+        report(2, "B")
         s.request_void(a, "game:2", "crash")
         s.request_void(b, "game:2")
         before = (s.wins(), sorted(s.voided_games), s.draft.revealed_through())

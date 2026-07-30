@@ -38,7 +38,12 @@ public partial class MainWindow
 
     private void BtnConnect_Click(object sender, RoutedEventArgs e)
     {
-        _api.SetBaseUrl(ServerBox.Text);
+        if (!_api.SetBaseUrl(ServerBox.Text))
+        {
+            LiveEmpty.Text = _api.LastError ?? "?";
+            LiveEmpty.Visibility = Visibility.Visible;
+            return;
+        }
         _ = RefreshLiveAsync();
     }
 

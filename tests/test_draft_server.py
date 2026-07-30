@@ -127,7 +127,7 @@ def test_your_own_pick_comes_back_but_never_theirs_before_the_game():
 
     # Once the game has been played there is nothing left to protect.
     play_all(s, a, b)
-    s.note_game(a, 1, "A")
+    played(s, a, 1, "A")
     plan = s.public_state(b)["plan"]
     assert plan[0]["commander_a"] == pick_a
     assert plan[0]["commander_b"] == pick_b
@@ -417,6 +417,25 @@ def test_the_draft_uses_the_modes_best_of():
 
 
 # ------------------------------------------------------- Cancelling and lobby
+def played(s, actor, game, winner="A"):
+    """Report a game the way a current client does: with what was played.
+
+    The map and the commanders are no longer optional. They used to be, and the
+    checks read "if we were sent something, compare it" — so leaving them out
+    skipped both the roster check and the plan check, and since the first report
+    of a game wins, the losing client could report first with nothing attached.
+    """
+    want = s.draft.plan()[game - 1]
+    ids = {seat.side.value: s._steam_ids.get(seat.account_id)
+           for seat in s.seats.values()}
+    commanders = {}
+    for side in ("A", "B"):
+        if ids.get(side) and want.get(f"commander_{side.lower()}"):
+            commanders[ids[side]] = want[f"commander_{side.lower()}"]
+    return s.note_game(actor, game, winner, map_played=want["map"],
+                       commanders=commanders)
+
+
 def play_all(s, a, b):
     """Run the draft to the end, whoever is on turn."""
     while s.draft.current is not None:
@@ -571,7 +590,7 @@ def test_the_opponents_later_commanders_stay_hidden():
 def test_reporting_a_game_opens_that_game_and_no_further():
     svc, s, a, b = started()
     play_all(s, a, b)
-    s.note_game(a, 1, "A")
+    played(s, a, 1, "A")
     view = s.public_state(b)
     assert view["revealed_through"] == 2
     assert view["plan"][0]["commander_a"] is not None, "the played game stayed hidden"
@@ -583,8 +602,8 @@ def test_reporting_a_game_opens_that_game_and_no_further():
 def test_a_series_ends_at_two_wins_not_after_three_games():
     svc, s, a, b = started()
     play_all(s, a, b)
-    s.note_game(a, 1, "A")
-    s.note_game(b, 2, "A")
+    played(s, a, 1, "A")
+    played(s, b, 2, "A")
     st = s.public_state(a)
     assert st["wins"] == {"A": 2, "B": 0}
     assert st["series_over"] is True
@@ -596,7 +615,7 @@ def test_games_cannot_be_reported_out_of_order():
     svc, s, a, b = started()
     play_all(s, a, b)
     try:
-        s.note_game(a, 3, "A")
+        played(s, a, 3, "A")
     except AuthError as e:
         assert "game 1 is the one being played" in str(e), str(e)
     else:
@@ -608,8 +627,8 @@ def test_the_same_game_reported_twice_counts_once():
     expected."""
     svc, s, a, b = started()
     play_all(s, a, b)
-    s.note_game(a, 1, "A")
-    s.note_game(b, 1, "A")
+    played(s, a, 1, "A")
+    played(s, b, 1, "A")
     assert s.public_state(a)["wins"] == {"A": 1, "B": 0}
 
 
@@ -619,7 +638,7 @@ def test_a_spectator_sees_only_what_has_been_played():
     outsider = None
     plan = s.public_state(outsider)["plan"]
     assert plan[0]["commander_a"] is None, "an outsider saw game 1 before it ran"
-    s.note_game(a, 1, "A")
+    played(s, a, 1, "A")
     plan = s.public_state(outsider)["plan"]
     assert plan[0]["commander_a"] is not None, "a played game stayed hidden"
     assert plan[1]["commander_a"] is None
@@ -641,7 +660,7 @@ def test_voiding_a_game_needs_both_sides():
     alone, so one vote changes nothing."""
     svc, s, a, b = started()
     play_all(s, a, b)
-    s.note_game(a, 1, "A")
+    played(s, a, 1, "A")
     assert s.public_state(a)["wins"] == {"A": 1, "B": 0}
 
     st = s.request_void(a, "game:1", "crashed")
@@ -658,10 +677,10 @@ def test_voiding_a_game_needs_both_sides():
 def test_a_voided_game_is_played_again_under_the_same_number():
     svc, s, a, b = started()
     play_all(s, a, b)
-    s.note_game(a, 1, "A")
+    played(s, a, 1, "A")
     s.request_void(a, "game:1"); s.request_void(b, "game:1")
     # Game 1 is the one being played again, not game 2.
-    st = s.note_game(b, 1, "B")
+    st = played(s, b, 1, "B")
     assert st["wins"] == {"A": 0, "B": 1}
 
 
@@ -673,7 +692,7 @@ def test_voiding_a_game_gives_the_commander_back():
     won_with = next(c.value for c in s.draft.choices
                     if c.action is Action.PICK_COMMANDER and c.side is Side.A
                     and c.game == 1)
-    s.note_game(a, 1, "A")
+    played(s, a, 1, "A")
     assert won_with in s.draft.burned(Side.A)
     s.request_void(a, "game:1"); s.request_void(b, "game:1")
     assert won_with not in s.draft.burned(Side.A)
@@ -682,13 +701,13 @@ def test_voiding_a_game_gives_the_commander_back():
 def test_voiding_the_series_stops_it_being_reported_at_all():
     svc, s, a, b = started()
     play_all(s, a, b)
-    s.note_game(a, 1, "A")
+    played(s, a, 1, "A")
     s.request_void(a, "series", "wrong commander loaded")
     assert s.public_state(b)["voided"] is False
     s.request_void(b, "series")
     assert s.public_state(b)["voided"] is True
     try:
-        s.note_game(a, 2, "A")
+        played(s, a, 2, "A")
     except AuthError as e:
         assert "voided" in str(e), str(e)
     else:
@@ -790,8 +809,12 @@ def test_an_extra_player_in_the_roster_is_not_fraud():
     other."""
     svc, s, a, b = started()
     play_all(s, a, b)
-    st = s.note_game(a, 1, "A",
-                     steam_ids=[a.steam_id, b.steam_id, "76561199000009999"])
+    want = s.draft.plan()[0]
+    st = s.note_game(
+        a, 1, "A", steam_ids=[a.steam_id, b.steam_id, "76561199000009999"],
+        map_played=want["map"],
+        commanders={a.steam_id: want["commander_a"],
+                    b.steam_id: want["commander_b"]})
     assert st["aborted"] is False, st["aborted_reason"]
     assert st["wins"] == {"A": 1, "B": 0}
 
@@ -807,7 +830,11 @@ def test_the_side_that_reported_it_is_not_the_side_blamed():
 def test_the_expected_roster_is_accepted():
     svc, s, a, b = started()
     play_all(s, a, b)
-    st = s.note_game(a, 1, "A", steam_ids=[a.steam_id, b.steam_id])
+    want = s.draft.plan()[0]
+    st = s.note_game(a, 1, "A", steam_ids=[a.steam_id, b.steam_id],
+                     map_played=want["map"],
+                     commanders={a.steam_id: want["commander_a"],
+                                 b.steam_id: want["commander_b"]})
     assert st["aborted"] is False
     assert st["wins"] == {"A": 1, "B": 0}
 
@@ -839,7 +866,7 @@ def test_no_roster_no_abort():
     an older version would abort every series it reported."""
     svc, s, a, b = started()
     play_all(s, a, b)
-    st = s.note_game(a, 1, "A")
+    st = played(s, a, 1, "A")
     assert st["aborted"] is False
     assert st["wins"] == {"A": 1, "B": 0}
 
@@ -899,9 +926,9 @@ def queue_match():
 
 def test_a_decided_series_can_be_closed_out():
     q, clock, s, a, b = queue_match()
-    s.note_game(a, 1, "A")
+    played(s, a, 1, "A")
     assert not s.can_conclude(), "closed out a series after one game of three"
-    s.note_game(a, 2, "A")
+    played(s, a, 2, "A")
     assert s.can_conclude(), "a 2:0 Bo3 is not offering to be closed"
     st = s.conclude(b)                        # either side may
     assert st["concluded"] and st["settled"]
@@ -910,7 +937,7 @@ def test_a_decided_series_can_be_closed_out():
 def test_an_undecided_series_cannot_be_closed_out():
     """Otherwise the way out of a match you are losing is to declare it over."""
     q, clock, s, a, b = queue_match()
-    s.note_game(a, 1, "A")
+    played(s, a, 1, "A")
     try:
         s.conclude(a)
     except AuthError as e:
@@ -932,8 +959,8 @@ def test_a_live_series_keeps_both_players_out_of_the_queue():
 
 def test_closing_the_series_frees_both_to_queue_again():
     q, clock, s, a, b = queue_match()
-    s.note_game(a, 1, "A")
-    s.note_game(a, 2, "A")
+    played(s, a, 1, "A")
+    played(s, a, 2, "A")
     s.conclude(a)
     q.join(a, 1500)
     q.join(b, 1500)               # refuses by raising, so reaching here is the
@@ -1291,13 +1318,19 @@ def test_a_stranger_in_the_commander_list_is_not_this_check_s_business():
     assert st["games_played"] == [1], st["deviations"]
 
 
-def test_reporting_without_evidence_still_works():
-    """An older client sends no map and no commanders. It must not be treated as
-    a mismatch — absence of evidence is not evidence of a wrong commander."""
+def test_reporting_without_evidence_is_not_counted():
+    """The reverse of what this used to assert, and the reason it changed.
+
+    The map and the commanders were optional, and the checks read "if we were
+    sent something, compare it" — so leaving them out skipped the roster check
+    and the plan check together. Since the first report of a game wins, the
+    losing client could report first with nothing attached and be recorded as the
+    winner. Absence of evidence is not evidence of a fair game.
+    """
     s, a, b, plan, ids = played_series()
     st = s.note_game(a, 1, "A")
-    assert st["games_played"] == [1]
-    assert st["deviations"] == {}
+    assert st["games_played"] == [], "an unverified report was counted"
+    assert "no evidence" in " ".join(st["deviations"]["1"])
 
 
 # ------------------------------------------------------- Two players a side
@@ -1425,7 +1458,7 @@ def test_a_bo9_works_with_an_odd_pool_of_nine():
     # A Bo9 is decided at five.
     assert s.series_over() is False
     for g in range(1, 6):
-        s.note_game(a, g, "A")
+        played(s, a, g, "A")
     assert s.series_over()
 
 

@@ -37,6 +37,16 @@ class Participant:
     def __post_init__(self) -> None:
         if not self.members:
             self.members = [self.name]
+        # A rating has to be a real number.
+        #
+        # `float("nan")` and `float("1e999")` both parse happily, and a host
+        # typing either into the entrant list used to reach the database — where
+        # SQLite has no NaN, stores it as NULL, and the NOT NULL constraint turns
+        # a typo into a crashed request. Seeding is no better off: sorting by
+        # -NaN puts the bracket in whatever order the comparisons happened to
+        # fall in.
+        if not math.isfinite(self.rating):
+            raise ValueError(f"{self.name}: a rating has to be a number")
 
 
 @dataclass

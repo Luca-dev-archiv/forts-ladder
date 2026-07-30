@@ -25,6 +25,7 @@ within seconds.
 
 from __future__ import annotations
 
+import math
 import os
 import secrets
 from urllib.parse import quote
@@ -748,13 +749,14 @@ def tournament_report(tid: str, match_id: str, body: ResultBody,
     guard(acc.require, "run_tournament")
     try:
         t = store.load_tournament(tid)
+    except KeyError as e:
+        raise HTTPException(404, "no such tournament") from e
+    try:
         t.report(match_id, body.winner, body.score, body.match_keys)
     except KeyError as e:
-        # A fixed sentence rather than the exception's text: the message names
-        # the id that was asked for, which is input coming straight back out.
-        # It is escaped everywhere it is rendered, and it still tells the caller
-        # nothing they did not already type.
-        raise HTTPException(404, "no such tournament") from e
+        # A missing *match*, which is a different mistake from a missing
+        # tournament and used to be reported as one.
+        raise HTTPException(404, "no such match in this tournament") from e
     except ValueError as e:
         # Domain refusal: impossible score, or a winner who is not playing.
         raise HTTPException(400, reason(e)) from e
@@ -1541,10 +1543,13 @@ async def plan_edit(tid: str, request: Request,
     people = list(t.participants)
 
     def rating_of(raw: str) -> float:
+        """A number, or the default. Never NaN or infinity: both parse and
+        neither can be stored or sorted."""
         try:
-            return float(raw)
+            value = float(raw)
         except ValueError:
             return 1000.0
+        return value if math.isfinite(value) else 1000.0
 
     if what == "add":
         # A pasted block counts as one per line, because that is how a sign-up
@@ -1720,15 +1725,18 @@ async def bracket_page_rename(tid: str, request: Request,
     except ValueError as e:
         raise HTTPException(400, "seat must be a number") from e
     name = str(form.get("name") or "")
+    # The two lookups are kept apart. Under one handler they shared a message,
+    # and after that message became a fixed sentence a bad *seat* started
+    # reporting a missing *tournament* — an answer that sends somebody looking
+    # in the wrong place entirely.
     try:
         t = store.load_tournament(tid)
-        t.rename(seat, name)
     except KeyError as e:
-        # A fixed sentence rather than the exception's text: the message names
-        # the id that was asked for, which is input coming straight back out.
-        # It is escaped everywhere it is rendered, and it still tells the caller
-        # nothing they did not already type.
         raise HTTPException(404, "no such tournament") from e
+    try:
+        t.rename(seat, name)
+    except KeyError:
+        return _bracket_page(acc, tid, f"There is no entrant {seat} here.")
     except ValueError as e:
         return _bracket_page(acc, tid, reason(e))
     store.rename_participant(tid, seat, name.strip())
@@ -1759,13 +1767,12 @@ async def bracket_page_report(tid: str, request: Request,
                                  f"{raw!r} is not a score — write it as 3:1.")
     try:
         t = store.load_tournament(tid)
-        t.report(match_id, winner, score)
     except KeyError as e:
-        # A fixed sentence rather than the exception's text: the message names
-        # the id that was asked for, which is input coming straight back out.
-        # It is escaped everywhere it is rendered, and it still tells the caller
-        # nothing they did not already type.
         raise HTTPException(404, "no such tournament") from e
+    try:
+        t.report(match_id, winner, score)
+    except KeyError:
+        return _bracket_page(acc, tid, "There is no such match in this bracket.")
     except ValueError as e:
         return _bracket_page(acc, tid, reason(e))
     store.record_result(tid, match_id, winner, score)

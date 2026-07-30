@@ -639,6 +639,90 @@ def test_an_unknown_tournament_does_not_echo_the_id_back():
     assert "nope-does-not-exist" not in r.text
 
 
+# ------------------------------------------------- What a refusal may say
+# CodeQL flagged the pages that show an exception's text. The `except` clauses
+# were narrow enough, but an *unhandled* path sat right next to them: a rating
+# of "nan" parses, cannot be stored, and turned a typo into a crashed request.
+#: Anything here is a sentence Python wrote about the inside of the program,
+#: rather than one written for the person reading it.
+PYTHON_TALK = ("could not convert", "invalid literal", "math domain",
+               "unsupported operand", "Traceback", "sqlite3", "NOT NULL",
+               "object has no attribute", "not subscriptable",
+               "IntegrityError", "constraint failed")
+
+
+def test_an_impossible_rating_does_not_crash_the_route():
+    """`float("nan")` and `float("1e999")` both parse. SQLite has no NaN, stores
+    it as NULL, and the NOT NULL constraint turned a typo into a 500."""
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    for entrants in ("Alice, nan\nBob, 1200\n",
+                     "Alice, 1e999\nBob, 1200\n",
+                     "Alice, -nan\nBob, inf\n"):
+        r = w.client.post("/manage/tournaments", headers=h,
+                          follow_redirects=False,
+                          data={"name": "Cup", "mode": "tournament_1v1",
+                                "entrants": entrants})
+        assert r.status_code in (200, 303), f"{entrants!r} -> {r.status_code}"
+
+
+def test_a_nonsense_rating_in_the_planner_does_not_crash_either():
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h, start=False)
+    for rating in ("nan", "1e999", "-inf", "abc", ""):
+        r = w.client.post(f"/manage/plan/{tid}", headers=h,
+                          follow_redirects=False,
+                          data={"do": "add", "name": f"P{rating or 'x'}",
+                                "rating": rating})
+        assert r.status_code in (200, 303), f"{rating!r} -> {r.status_code}"
+
+
+def test_no_refusal_repeats_what_python_said():
+    """Every message on these pages is one we wrote. A builtin's text names
+    types and values from inside the program, which the reader can do nothing
+    with."""
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h, entrants="Alice, 1400\nBob, 1200\nCarol\nDave, 1\n")
+
+    bodies = []
+    for data in ({"match": "R1M1", "winner": "0", "score": "abc"},
+                 {"match": "R1M1", "winner": "99", "score": "2:0"},
+                 {"match": "nope", "winner": "0", "score": "2:0"},
+                 {"match": "R1M1", "winner": "0", "score": "1:2:3"}):
+        bodies.append(w.client.post(f"/manage/tournaments/{tid}/report",
+                                    headers=h, follow_redirects=False,
+                                    data=data).text)
+    for data in ({"seat": "-1", "name": "X"}, {"seat": "99", "name": "X"},
+                 {"seat": "0", "name": ""}):
+        bodies.append(w.client.post(f"/manage/tournaments/{tid}/rename",
+                                    headers=h, follow_redirects=False,
+                                    data=data).text)
+    for body in bodies:
+        for phrase in PYTHON_TALK:
+            assert phrase not in body, f"{phrase!r} reached a page"
+
+
+def test_a_missing_seat_is_not_reported_as_a_missing_tournament():
+    """Both lookups used to share one handler, so after the message became a
+    fixed sentence a bad seat sent people looking for the wrong thing."""
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h)
+    r = w.client.post(f"/manage/tournaments/{tid}/rename", headers=h,
+                      follow_redirects=False, data={"seat": "99", "name": "X"})
+    assert r.status_code == 200, r.status_code
+    assert "no entrant 99" in r.text
+    assert "no such tournament" not in r.text
+
+    r = w.client.post(f"/manage/tournaments/{tid}/report", headers=h,
+                      follow_redirects=False,
+                      data={"match": "R9M9", "winner": "0", "score": "2:0"})
+    assert "no such match" in r.text
+    assert "no such tournament" not in r.text
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

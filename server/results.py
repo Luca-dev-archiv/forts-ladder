@@ -50,6 +50,9 @@ class Reported:
     rated: bool = True
     reasons: list[str] = field(default_factory=list)
     replays: list[str] = field(default_factory=list)
+    #: Directory the uploaded replays live in, drawn by the server. Never the
+    #: series id: nothing a caller sends should be part of a path.
+    replay_key: str | None = None
     #: Taken back by a reviewer: who, when and why.
     #:
     #: Not a deletion. The row stays and stays visible, because "this did not

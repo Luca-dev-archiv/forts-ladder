@@ -416,6 +416,59 @@ def test_replays_inside_the_window_are_kept():
     assert w.store.replays_for("d-abc") == ["game01.fwr"]
 
 
+def test_no_character_from_a_request_reaches_a_path():
+    """Stronger than "it cannot escape".
+
+    Filtering the id down to safe characters did stop traversal — there is no way
+    to spell `..` out of letters, digits, hyphen and underscore. What it did not
+    stop was two ids differing only in punctuation sharing a directory, and the
+    argument that real ids never differ that way is reasoning from the shape ids
+    happen to have today.
+    """
+    w = World()
+    hostile = "../../etc/passwd"
+    component = w.store.replay_dir(hostile).name
+
+    # Nothing recognisable from the input, not merely nothing dangerous.
+    assert ".." not in component and "/" not in component
+    assert "etc" not in component and "passwd" not in component
+    assert component.startswith("x")
+    assert all(c in "0123456789abcdefx" for c in component), component
+
+
+def test_two_ids_that_differ_only_in_punctuation_do_not_share_a_directory():
+    """What the old filter allowed: `d-ab` and `d.ab` both became `dab`."""
+    w = World()
+    assert w.store.replay_dir("d-ab").name != w.store.replay_dir("d.ab").name
+
+
+def test_the_directory_is_named_by_the_server_not_by_the_series():
+    w = World()
+    w.store.sanction_lobby(111)
+    r = w.duel(draft_id="abc")
+    w.store.save_replay(r.id, 1, b"bytes")
+
+    component = w.store.replay_dir(r.id).name
+    assert r.id not in component, component
+    assert len(component) == 16 and all(c in "0123456789abcdef" for c in component)
+    # And it is stable: a second upload goes to the same place.
+    w.store.save_replay(r.id, 2, b"more")
+    assert w.store.replays_for(r.id) == ["game01.fwr", "game02.fwr"]
+    assert w.store.replay_dir(r.id).name == component
+
+
+def test_a_name_that_is_not_there_cannot_become_a_path():
+    w = World()
+    w.store.sanction_lobby(111)
+    r = w.duel(draft_id="abc")
+    w.store.save_replay(r.id, 1, b"bytes")
+
+    assert w.store.replay_path(r.id, "game01.fwr") is not None
+    for bogus in ("game02.fwr", "../../ladder.sqlite", "..", "",
+                  "game01.fwr ", "GAME01.FWR"):
+        assert w.store.replay_path(r.id, bogus) is None, bogus
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

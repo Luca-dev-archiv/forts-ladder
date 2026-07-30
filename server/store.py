@@ -15,6 +15,7 @@ checks.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 import sqlite3
@@ -222,6 +223,10 @@ class Store:
             ("annulled_by", "TEXT"),
             ("annulled_at", "REAL"),
             ("annul_note", "TEXT NOT NULL DEFAULT ''"),
+            # The directory this series' replays live in, drawn by the server on
+            # first upload. Stored rather than derived so that nothing a caller
+            # sends is ever part of a filesystem path.
+            ("replay_key", "TEXT"),
         ],
         "tournaments": [
             # A tournament that is still being built. Entrants can be added,
@@ -473,20 +478,57 @@ class Store:
     REPLAY_MAX_BYTES = 4 * 1024 * 1024
     REPLAY_MAX_PER_SERIES = 8
 
-    def replay_dir(self, result_id: str) -> "Path":
-        """Where a series' replays live.
+    def replay_key(self, result_id: str, create: bool = False) -> str:
+        """The name of the directory this series' replays live in.
 
-        The id is used as a single path component and nothing else is taken from
-        the caller — the uploaded filename never reaches the filesystem, because
-        a name is the shortest route out of a directory there is.
+        Never the series id. A stored token drawn by the server on first upload,
+        or a hex digest of the id for a read of something that was never
+        uploaded — so the path component is always something this process
+        generated, and nothing a caller typed can appear in it. Filtering the id
+        down to safe characters also stopped traversal, but it left two ids that
+        differed only in punctuation sharing one directory.
         """
+        row = self.db.execute(
+            "SELECT replay_key FROM results WHERE id = ?",
+            (result_id,)).fetchone()
+        if row is not None and row["replay_key"]:
+            return row["replay_key"]
+        if row is not None and create:
+            key = secrets.token_hex(8)
+            self.db.execute("UPDATE results SET replay_key = ? WHERE id = ?",
+                            (key, result_id))
+            self.db.commit()
+            return key
+        # Nothing stored: a stable bucket that still cannot escape, since a
+        # sha256 digest is hexadecimal and nothing else.
+        return "x" + hashlib.sha256(result_id.encode()).hexdigest()[:16]
+
+    def replay_dir(self, result_id: str, create: bool = False) -> "Path":
+        """Where a series' replays live."""
         from pathlib import Path as _P
-        safe = "".join(c for c in result_id if c.isalnum() or c in "-_")[:64]
-        return _P(self.path).parent / "replays" / (safe or "unknown")
+        return _P(self.path).parent / "replays" / self.replay_key(
+            result_id, create)
+
+    def replay_path(self, result_id: str, name: str) -> "Path | None":
+        """One stored replay, or nothing.
+
+        The path comes out of `iterdir()` rather than being built by joining the
+        requested name onto a directory. Checking a name against a listing and
+        then concatenating it anyway is the same answer reached by a route
+        nothing can verify; this way a name that is not a file in there cannot
+        become a path at all.
+        """
+        try:
+            for p in self.replay_dir(result_id).iterdir():
+                if p.is_file() and p.name == name:
+                    return p
+        except OSError:
+            return None
+        return None
 
     def save_replay(self, result_id: str, index: int, data: bytes) -> str:
         """Store one replay under a name this server chose."""
-        d = self.replay_dir(result_id)
+        d = self.replay_dir(result_id, create=True)
         d.mkdir(parents=True, exist_ok=True)
         name = f"game{int(index):02d}.fwr"
         (d / name).write_bytes(data)
@@ -535,6 +577,7 @@ class Store:
             rated=bool(r["rated"]), reasons=_stored_json(r["reasons"], []),
             replays=_stored_json(r["replays"], []), created_at=r["created_at"],
             flagged=bool(r["flagged"]), flag_note=r["flag_note"] or "",
+            replay_key=r["replay_key"],
             annulled_by=r["annulled_by"], annulled_at=r["annulled_at"],
             annul_note=r["annul_note"] or "")
             for r in self.db.execute(

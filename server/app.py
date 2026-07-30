@@ -1489,7 +1489,11 @@ async def review_act(result_id: str, request: Request,
         else:
             return _review_page(acc, result_id, by_code("FL-602"))
     except AuthError as e:
-        return _review_page(acc, result_id, detail(e))
+        # The page channel, not the client one. That distinction is the whole
+        # point of having two: detail() carries the exception's own words, which
+        # is right for the desktop client and wrong on a web page — and this
+        # route was written with the wrong one.
+        return _review_page(acc, result_id, refusal(e))
     return RedirectResponse(path_for("manage", "review", result_id),
                             status_code=303)
 
@@ -1507,11 +1511,13 @@ def review_replay(result_id: str, name: str,
     acc = require(session_token(ladder_session, authorization))
     guard(acc.require, "review_results")
     store.prune_replays()
-    if name not in store.replays_for(result_id):
+    found = store.replay_path(result_id, name)
+    if found is None:
         raise HTTPException(404, "no such replay")
-    return FileResponse(store.replay_dir(result_id) / name,
-                        media_type="application/octet-stream",
-                        filename=name)
+    # `found` came out of a directory listing, so it is a file that is actually
+    # there — not a name from the URL joined onto a directory and hoped about.
+    return FileResponse(found, media_type="application/octet-stream",
+                        filename=found.name)
 
 
 @app.post("/results/{result_id}/replay")

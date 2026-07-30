@@ -175,6 +175,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS results_once
 """
 
 
+def _stored_json(raw, fallback):
+    """Read a JSON column without letting a damaged one take the page down.
+
+    Every one of these was written by this program, so a value that will not
+    parse means the row is damaged — a half-finished write, a bad migration,
+    somebody editing the database by hand. Crashing is the wrong answer twice
+    over: the whole tournament becomes unreachable because one row is wrong, and
+    `json.JSONDecodeError` is a `ValueError`, so the parser's own text lands
+    wherever a rule refusal would have been shown.
+    """
+    if raw is None:
+        return fallback
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return fallback
+
+
 class Store:
     def __init__(self, path: str | Path = "data/ladder.sqlite") -> None:
         self.path = Path(path)
@@ -381,11 +399,11 @@ class Store:
         from .results import Reported
         return [Reported(
             id=r["id"], lobby_id=r["lobby_id"],
-            sides={k: int(v) for k, v in json.loads(r["sides"]).items()},
+            sides={k: int(v) for k, v in _stored_json(r["sides"], {}).items()},
             games=r["games"], score_low=r["score_low"],
             played_at=r["played_at"], reported_by=r["reported_by"],
-            rated=bool(r["rated"]), reasons=json.loads(r["reasons"]),
-            replays=json.loads(r["replays"]), created_at=r["created_at"],
+            rated=bool(r["rated"]), reasons=_stored_json(r["reasons"], []),
+            replays=_stored_json(r["replays"], []), created_at=r["created_at"],
             flagged=bool(r["flagged"]), flag_note=r["flag_note"] or "")
             for r in self.db.execute(
                 "SELECT * FROM results ORDER BY played_at, created_at")]
@@ -469,8 +487,8 @@ class Store:
                 (cutoff,)):
             out.append({
                 "id": r["id"], "join_code": r["join_code"],
-                "map_pool": json.loads(r["map_pool"]),
-                "commander_pool": json.loads(r["commander_pool"]),
+                "map_pool": _stored_json(r["map_pool"], []),
+                "commander_pool": _stored_json(r["commander_pool"], []),
                 "best_of": r["best_of"], "bans_per_side": r["bans_per_side"],
                 "step_seconds": r["step_seconds"],
                 "strike_seed": r["strike_seed"],
@@ -486,8 +504,8 @@ class Store:
                 "lobby_at": r["lobby_at"],
                 "guest_ready_at": r["guest_ready_at"],
                 "extra_seconds": r["extra_seconds"] or 0.0,
-                "voided_games": json.loads(r["voided_games"]),
-                "results": json.loads(r["results"]),
+                "voided_games": _stored_json(r["voided_games"], []),
+                "results": _stored_json(r["results"], {}),
                 "cancelled_by": r["cancelled_by"],
                 "seats": [dict(s) for s in self.db.execute(
                     "SELECT side, account_id, display FROM draft_seats "
@@ -548,7 +566,8 @@ class Store:
         mode: Mode = BY_KEY.get(row["mode_key"]) or BY_KEY["tournament_1v1"]
 
         participants = [
-            Participant(r["name"], r["rating"], json.loads(r["members"]))
+            Participant(r["name"], r["rating"],
+                        _stored_json(r["members"], [r["name"]]))
             for r in self.db.execute(
                 "SELECT * FROM tournament_participants WHERE tournament_id = ? "
                 "ORDER BY seat", (tid,))]
@@ -567,7 +586,7 @@ class Store:
             score = ((r["score_a"], r["score_b"])
                      if r["score_a"] is not None else None)
             t.report(r["match_id"], r["winner"], score,
-                     json.loads(r["match_keys"]))
+                     _stored_json(r["match_keys"], []))
         return t
 
     def is_planning(self, tid: str) -> bool:

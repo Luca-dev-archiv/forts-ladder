@@ -35,6 +35,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from ladder.errors import RuleError
 from ladder.modes import BY_KEY
 from ladder.tournament import Participant, Tournament
 
@@ -170,8 +171,12 @@ def reason(e: BaseException) -> str:
     what reaches a page, so widening an `except` somewhere does not quietly
     start showing the inside of the program to whoever tripped over it.
     """
-    if isinstance(e, (AuthError, ValueError, KeyError)):
+    if isinstance(e, (AuthError, RuleError)):
         return str(e).strip()[:300]
+    # Anything else describes the inside of the program. `ValueError` is not
+    # good enough to test for: `json.JSONDecodeError` is one, and a column that
+    # is no longer valid JSON would otherwise put "Expecting value: line 1
+    # column 1" in front of a tournament host.
     return "That did not work. Try again, or ask an admin to look."
 
 

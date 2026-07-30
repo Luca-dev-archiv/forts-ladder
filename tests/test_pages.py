@@ -723,6 +723,63 @@ def test_a_missing_seat_is_not_reported_as_a_missing_tournament():
     assert "no such tournament" not in r.text
 
 
+# ------------------------------------- Only authored text may reach a page
+def test_only_a_rule_refusal_keeps_its_words():
+    """`except ValueError` cannot tell the two apart, because both *are*
+    ValueErrors. `json.JSONDecodeError` is one, and so is math domain error."""
+    import json as _json
+
+    from ladder.errors import RuleError
+    from server.auth import AuthError
+
+    keep = [RuleError("a tournament needs at least two entrants"),
+            AuthError("you do not have that permission")]
+    for e in keep:
+        assert app_mod.reason(e) == str(e), e
+
+    # Everything a library raises, including the ValueError subclasses.
+    try:
+        _json.loads("not json")
+    except ValueError as e:
+        leaked = app_mod.reason(e)
+    assert "Expecting value" not in leaked, leaked
+    assert "line 1" not in leaked, leaked
+
+    import math
+    try:
+        math.log2(0)
+    except ValueError as e:
+        assert "math domain" not in app_mod.reason(e)
+
+    for e in (ValueError("could not convert string to float: 'x'"),
+              KeyError("some internal key"),
+              RuntimeError("dict changed size during iteration")):
+        out = app_mod.reason(e)
+        assert "convert" not in out and "internal" not in out and "dict" not in out
+
+
+def test_a_damaged_row_does_not_take_the_page_down():
+    """Every one of those columns was written by this program, so a value that
+    will not parse means the row is damaged. One bad row must not make a whole
+    tournament unreachable, and the parser's text must not land where a refusal
+    would have been shown."""
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    tid = cup(w, h, entrants="Alice, 1400\nBob, 1200\n")
+
+    app_mod.store.db.execute(
+        "UPDATE tournament_participants SET members = ? WHERE tournament_id = ?",
+        ("not json at all", tid))
+    app_mod.store.db.commit()
+
+    r = w.client.get(f"/manage/tournaments/{tid}", headers=h)
+    assert r.status_code == 200, r.status_code
+    for phrase in ("Expecting value", "line 1 column", "JSONDecode"):
+        assert phrase not in r.text, phrase
+    # And the entrant is still named, from the column that is intact.
+    assert "Alice" in r.text
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

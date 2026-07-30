@@ -419,11 +419,24 @@
         <!-- Format only. Hosting and joining live in the setup strip on the
              board, where the code that has to be shared is also shown. -->
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-          <ComboBox x:Name="DraftFormat" Width="90"
+          <ComboBox x:Name="DraftFormat" Width="80"
                     SelectedIndex="1" VerticalContentAlignment="Center">
             <ComboBoxItem Content="Bo1"/>
             <ComboBoxItem Content="Bo3"/>
             <ComboBoxItem Content="Bo5"/>
+            <ComboBoxItem Content="Bo7"/>
+            <!-- A Bo9 needs an odd map pool of at least nine, which not every
+                 installation has. Offered anyway, and refused with the number
+                 that is actually there. -->
+            <ComboBoxItem Content="Bo9"/>
+          </ComboBox>
+          <!-- A team draft is hosted with a join code rather than queued:
+               pairing four people as two sides is a different problem from
+               pairing two individuals, and captains organise these anyway. -->
+          <ComboBox x:Name="DraftTeams" Width="80" Margin="8,0,0,0"
+                    SelectedIndex="0" VerticalContentAlignment="Center">
+            <ComboBoxItem Content="1v1"/>
+            <ComboBoxItem Content="2v2"/>
           </ComboBox>
         </StackPanel>
         <StackPanel>

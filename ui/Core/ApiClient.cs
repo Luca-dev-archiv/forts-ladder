@@ -428,6 +428,26 @@ public sealed class DraftStateDto
     /// account; a zero there makes it guess, and it guessed wrong.</summary>
     public string? Lobby_Host_Steam { get; set; }
 
+    /// <summary>People per side: 1 for a duel, 2 for a 2v2.</summary>
+    public int Team_Size { get; set; } = 1;
+    /// <summary>Seats still open, so the setup strip can say how many.</summary>
+    public int Seats_Open { get; set; }
+
+    /// <summary>
+    /// When the lobby was opened, as a unix time, or null before it was.
+    ///
+    /// The floor under "is this game part of this series?". A client that is not
+    /// hosting has no lobby id in its log and has to fall back on the roster,
+    /// which matches every game those two ever played together — including the
+    /// ones from a session that ended an hour ago.
+    /// </summary>
+    public double? Lobby_At { get; set; }
+
+    /// <summary>The lobby's opening time as a local timestamp, or null.</summary>
+    public DateTime? LobbyOpenedAt => Lobby_At is null ? null
+        : DateTimeOffset.FromUnixTimeMilliseconds(
+            (long)(Lobby_At.Value * 1000)).ToLocalTime().DateTime;
+
     /// <summary>Is this client the side that hosts the lobby?</summary>
     public bool YouHostLobby => Lobby_Host is not null && Lobby_Host == Your_Side;
 

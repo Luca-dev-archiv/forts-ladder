@@ -70,7 +70,7 @@ public sealed class ServerDraft : IDisposable
 
     public async Task<bool> CreateAsync(IEnumerable<string> maps,
                                         IEnumerable<string> commanders,
-                                        int bestOf)
+                                        int bestOf, int teamSize = 1)
     {
         var created = await _api.PostAsync<DraftCreatedDto>("/drafts", new
         {
@@ -78,6 +78,7 @@ public sealed class ServerDraft : IDisposable
             commander_pool = commanders.ToList(),
             best_of = bestOf,
             commander_bans_per_side = 1,
+            team_size = teamSize,
             step_seconds = 30.0,
         });
         if (created is null)
@@ -85,6 +86,7 @@ public sealed class ServerDraft : IDisposable
             LastError = _api.LastError;
             return false;
         }
+        SwitchedDraft?.Invoke();
         DraftId = created.Id;
         JoinCode = created.Join_Code;
         State = created.State;
@@ -102,6 +104,7 @@ public sealed class ServerDraft : IDisposable
             LastError = _api.LastError;
             return false;
         }
+        SwitchedDraft?.Invoke();
         DraftId = joined.Id;
         JoinCode = code.Trim().ToUpperInvariant();
         State = joined.State;
@@ -135,8 +138,15 @@ public sealed class ServerDraft : IDisposable
     /// Take over a draft the queue created. There is no join code involved —
     /// both seats were filled server-side when the proposal completed.
     /// </summary>
+    /// <summary>Raised when this object starts following a different draft, so
+    /// whatever the window accumulated about the last one can be dropped.
+    /// Without it, an evening's deviation warnings stayed on screen across every
+    /// draft that followed.</summary>
+    public event Action? SwitchedDraft;
+
     public async Task AdoptAsync(string draftId)
     {
+        if (DraftId != draftId) SwitchedDraft?.Invoke();
         DraftId = draftId;
         JoinCode = null;
         _timer.Start();

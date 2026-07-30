@@ -922,6 +922,10 @@ class DraftCreate(BaseModel):
     commander_pool: list[str]
     best_of: int = 3
     commander_bans_per_side: int = 1
+    #: People per side: 1 for a duel, 2 for a 2v2. The queue still refuses team
+    #: modes — pairing four people as two sides is a different problem — but a
+    #: captain with a join code can host one, which is how these are organised.
+    team_size: int = 1
     step_seconds: float | None = 30.0
 
 
@@ -930,7 +934,8 @@ def draft_create(body: DraftCreate, ladder_session: str | None = Cookie(None),
         authorization: str | None = Header(None)):
     acc = require(session_token(ladder_session, authorization))
     s = guard(drafts.create, acc, body.map_pool, body.commander_pool,
-              body.best_of, body.commander_bans_per_side, body.step_seconds)
+              body.best_of, body.commander_bans_per_side, body.step_seconds,
+              None, body.team_size)
     store.save_draft(s)
     return {"id": s.id, "join_code": s.join_code,
             "state": s.public_state(acc)}

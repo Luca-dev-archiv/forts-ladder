@@ -264,6 +264,9 @@ class Store:
             # Why a game was thrown out. A redeploy mid-series would otherwise
             # lose the reason and quietly let the wrong game count.
             ("deviations", "TEXT NOT NULL DEFAULT '{}'"),
+            # People per side. A restored 2v2 that came back as a duel would
+            # think it was full with half its players missing.
+            ("team_size", "INTEGER NOT NULL DEFAULT 1"),
         ],
     }
 
@@ -552,9 +555,9 @@ class Store:
                     lobby_host_steam, voided, voided_games, results,
                     lobby_password, aborted_side, aborted_reason,
                     concluded, done_at, lobby_at, guest_ready_at,
-                    extra_seconds, deviations)
+                    extra_seconds, deviations, team_size)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?)
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    join_code=excluded.join_code,
                    lobby_id=excluded.lobby_id,
@@ -572,7 +575,8 @@ class Store:
                    lobby_at=excluded.lobby_at,
                    guest_ready_at=excluded.guest_ready_at,
                    extra_seconds=excluded.extra_seconds,
-                   deviations=excluded.deviations""",
+                   deviations=excluded.deviations,
+                   team_size=excluded.team_size""",
             (session.id, session.join_code,
              json.dumps(session.original_map_pool or d.map_pool),
              json.dumps(d.commander_pool), d.best_of,
@@ -588,7 +592,8 @@ class Store:
              session.done_at, session.lobby_at, session.guest_ready_at,
              session.extra_seconds,
              json.dumps({str(g): v
-                         for g, v in session.deviations.items()})))
+                         for g, v in session.deviations.items()}),
+             session.team_size))
 
         self.db.execute("DELETE FROM draft_seats WHERE draft_id = ?", (session.id,))
         self.db.executemany(
@@ -638,6 +643,7 @@ class Store:
                 "extra_seconds": r["extra_seconds"] or 0.0,
                 "deviations": {int(g): list(v) for g, v in
                                _stored_json(r["deviations"], {}).items()},
+                "team_size": r["team_size"] or 1,
                 "voided_games": _stored_json(r["voided_games"], []),
                 "results": _stored_json(r["results"], {}),
                 "cancelled_by": r["cancelled_by"],

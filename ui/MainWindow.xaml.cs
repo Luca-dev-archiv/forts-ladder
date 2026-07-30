@@ -32,6 +32,11 @@ public partial class MainWindow : Window
         InitServerViews();
 
         _draft = new ServerDraft(_api);
+        // Everything the window remembers about a draft is dropped when the
+        // draft changes. It used to survive: an evening's deviation warnings
+        // stayed on screen across every draft that followed, so a fresh one
+        // announced that the wrong maps had been played before a game existed.
+        _draft.SwitchedDraft += ForgetLastDraft;
         _draft.Changed += RefreshDraft;
         // Only the countdown. Anything here that rebuilt a control would put the
         // three-clicks-to-ban bug straight back.
@@ -689,8 +694,23 @@ public partial class MainWindow : Window
             ShowDraftError(Loc.T("draft.too_little", maps.Count, commanders.Count));
             return;
         }
-        var bestOf = DraftFormat.SelectedIndex switch { 0 => 1, 2 => 5, _ => 3 };
-        if (!await _draft.CreateAsync(maps, commanders, bestOf))
+        var bestOf = DraftFormat.SelectedIndex switch
+        {
+            0 => 1, 2 => 5, 3 => 7, 4 => 9, _ => 3,
+        };
+        // Every game needs its own map and the bans have to split evenly, so a
+        // BoN needs an odd pool of at least N. Checked here rather than left to
+        // the server: "map pool smaller than the number of games" is a worse way
+        // to learn that this installation has eight maps.
+        var usable = maps.Count % 2 == 0 ? maps.Count - 1 : maps.Count;
+        if (usable < bestOf)
+        {
+            ShowDraftError(ErrorCodes.Text(ErrorCodes.PoolTooSmall,
+                Loc.T("draft.pool_for_bo", bestOf, bestOf, usable)));
+            return;
+        }
+        var teamSize = DraftTeams.SelectedIndex == 1 ? 2 : 1;
+        if (!await _draft.CreateAsync(maps, commanders, bestOf, teamSize))
             ShowDraftError(_draft.LastError ?? "?");
     }
 
@@ -1160,6 +1180,24 @@ public partial class MainWindow : Window
                        + CommanderNames.Display(got)));
     }
 
+    /// <summary>
+    /// Forget the last draft.
+    ///
+    /// Three separate sets, all keyed to a draft that is over: the warnings on
+    /// the panel, the games already reported, and the series already sent. Any
+    /// one of them surviving makes the next draft lie about itself.
+    /// </summary>
+    private void ForgetLastDraft()
+    {
+        _seriesWarnings.Clear();
+        SeriesWarnings.Text = "";
+        SeriesWarnings.Visibility = Visibility.Collapsed;
+        _reportedGames.Clear();
+        _reportedSeries.Clear();
+        _readyReported = null;
+        _restartPending = false;
+    }
+
     private void Warn(string line)
     {
         if (_seriesWarnings.Contains(line)) return;
@@ -1543,7 +1581,13 @@ public partial class MainWindow : Window
             Title = Loc.T("draft.game", g.Game, g.Map ?? "—"),
             // Which one is being played right now, said in the row rather than
             // left to be worked out from which commanders are still hidden.
-            Tag = g.Game == s.Revealed_Through && s.Done && !s.Series_Over
+            // When the server refused a game, this row is where it has to
+            // say so. It does not advance until the drafted map and commanders
+            // are actually played, and "PLAYING NOW" for the third time running
+            // reads as the client being stuck rather than as a rule.
+            Tag = s.Deviations.ContainsKey(g.Game.ToString())
+                    ? Loc.T("draft.replay_this")
+                : g.Game == s.Revealed_Through && s.Done && !s.Series_Over
                     ? Loc.T("draft.now_playing")
                 : s.Games_Played.Contains(g.Game) ? Loc.T("draft.game_done")
                 : g.Decider ? Loc.T("draft.decider")
@@ -1563,7 +1607,8 @@ public partial class MainWindow : Window
                         s.Display((s.Your_Side == "B" ? g.Commander_A
                                                       : g.Commander_B) ?? "?")),
             Accent = (Brush)FindResource(
-                g.Game == s.Revealed_Through && s.Done && !s.Series_Over
+                s.Deviations.ContainsKey(g.Game.ToString()) ? "Loss"
+                : g.Game == s.Revealed_Through && s.Done && !s.Series_Over
                     ? "Accent" : g.Decider ? "Warn" : "Stroke"),
         }).ToList();
     }

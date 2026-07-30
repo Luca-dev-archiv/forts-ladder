@@ -205,7 +205,8 @@ def test_a_third_player_cannot_take_a_seat():
     try:
         svc.join(third, s.join_code)
     except AuthError as e:
-        assert "two players" in str(e), str(e)
+        # The message counts the seats now, because a side can hold two.
+        assert "all 2 players" in str(e), str(e)
     else:
         raise AssertionError("a third player joined")
 
@@ -1297,6 +1298,135 @@ def test_reporting_without_evidence_still_works():
     st = s.note_game(a, 1, "A")
     assert st["games_played"] == [1]
     assert st["deviations"] == {}
+
+
+# ------------------------------------------------------- Two players a side
+# `seats` was a flat map and `full()` was "two of them" — a 1v1 assumption in the
+# middle of a project whose rule set has 2v2 modes.
+def four_players():
+    from server.auth import AuthService, Role
+    auth = AuthService()
+    out = []
+    for i, name in enumerate(("A1", "A2", "B1", "B2"), start=1):
+        a = auth.login_discord(f"t{i}", name)
+        a.role = Role.PLAYER
+        auth.attach_steam(a, f"7656119955000{i:04d}")
+        a.ufer_name = name
+        auth.set_tracking_consent(a, True)
+        out.append(a)
+    return auth, out
+
+
+def test_a_2v2_draft_waits_for_four_and_fills_a_before_b():
+    auth, (a1, a2, b1, b2) = four_players()
+    svc = DraftService()
+    s = svc.create(a1, MAPS, CMDS, best_of=3, team_size=2)
+    assert not s.full(), "a 2v2 was full with one player in it"
+
+    svc.join(a2, s.join_code)
+    assert not s.full()
+    assert {x.side for x in s.seats.values()} == {Side.A}, \
+        "the second player should complete side A, not open side B"
+
+    svc.join(b1, s.join_code)
+    svc.join(b2, s.join_code)
+    assert s.full()
+    sides = [x.side for x in s.seats.values()]
+    assert sides.count(Side.A) == 2 and sides.count(Side.B) == 2
+
+
+def test_a_fifth_player_is_refused_with_the_number():
+    auth, (a1, a2, b1, b2) = four_players()
+    svc = DraftService()
+    s = svc.create(a1, MAPS, CMDS, best_of=3, team_size=2)
+    for p in (a2, b1, b2):
+        svc.join(p, s.join_code)
+    extra = auth.login_discord("t9", "Spare")
+    from server.auth import Role
+    extra.role = Role.PLAYER
+    auth.attach_steam(extra, "76561199559999999")
+    auth.set_tracking_consent(extra, True)
+    try:
+        svc.join(extra, s.join_code)
+    except AuthError as e:
+        assert "all 4 players" in str(e), str(e)
+    else:
+        raise AssertionError("a fifth player took a seat in a 2v2")
+
+
+def test_both_names_on_a_side_are_shown_as_one_line():
+    """Everything downstream shows a side, so a 2v2 reads "A1, A2" where a duel
+    reads one name."""
+    auth, (a1, a2, b1, b2) = four_players()
+    svc = DraftService()
+    s = svc.create(a1, MAPS, CMDS, best_of=3, team_size=2)
+    for p in (a2, b1, b2):
+        svc.join(p, s.join_code)
+    seats = s.public_state(a1)["seats"]
+    assert seats["A"] == "A1, A2", seats
+    assert seats["B"] == "B1, B2", seats
+    assert s.public_state(a1)["team_size"] == 2
+
+
+def test_a_side_of_three_is_refused_at_creation():
+    auth, (a1, _, _, _) = four_players()
+    svc = DraftService()
+    try:
+        svc.create(a1, MAPS, CMDS, best_of=3, team_size=3)
+    except AuthError as e:
+        assert "one or two" in str(e), str(e)
+    else:
+        raise AssertionError("a 3v3 draft was created")
+
+
+def test_a_2v2_draft_plays_out_like_a_duel():
+    """The bans, the picks and the reveal are all per side — none of them cares
+    how many people a side is."""
+    auth, (a1, a2, b1, b2) = four_players()
+    svc = DraftService()
+    s = svc.create(a1, MAPS, CMDS, best_of=3, team_size=2)
+    for p in (a2, b1, b2):
+        svc.join(p, s.join_code)
+    # Either member of a side may act for it.
+    while s.draft.current is not None:
+        step = s.draft.current
+        if step.side is None:
+            for side, actor in ((Side.A, a2), (Side.B, b2)):
+                if s.draft.legal_options(side):
+                    s.apply(actor, s.draft.legal_options(side)[0])
+        else:
+            actor = a1 if step.side is Side.A else b1
+            s.apply(actor, s.draft.legal_options(step.side)[0])
+    assert s.draft.done
+    assert len(s.public_state(a1)["plan"]) == 3
+
+
+# --------------------------------------------------- Longer series, and Bo9
+def test_a_bo9_needs_nine_maps_and_says_so():
+    auth, a, b = two_players()
+    svc = DraftService()
+    try:
+        svc.create(a, MAPS, CMDS, best_of=9)      # five maps
+    except AuthError as e:
+        assert "map pool" in str(e), str(e)
+    else:
+        raise AssertionError("a Bo9 was built out of five maps")
+
+
+def test_a_bo9_works_with_an_odd_pool_of_nine():
+    auth, a, b = two_players()
+    svc = DraftService()
+    nine = [f"Map{i}" for i in range(9)]
+    s = svc.create(a, nine, CMDS, best_of=9)
+    svc.join(b, s.join_code)
+    play_all(s, a, b)
+    assert s.draft.done
+    assert len(s.public_state(a)["plan"]) == 9
+    # A Bo9 is decided at five.
+    assert s.series_over() is False
+    for g in range(1, 6):
+        s.note_game(a, g, "A")
+    assert s.series_over()
 
 
 def _run_all() -> int:

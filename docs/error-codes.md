@@ -49,6 +49,7 @@ it.
 | `FL-212` | The lobby settings differ from what the ladder set. | The host can put them back. The deviation is recorded either way. |
 | `FL-213` | Somebody in the lobby is not one of the two who drafted. | A spectator is fine. A *player* who did not draft is not, and the series is aborted rather than rated. |
 | `FL-230` | A finished game could not be matched to any series. | It stays in **Replays** unrated so you can point a referee at it. Usually means the lobby was opened outside the ladder. |
+| `FL-233` | Not enough maps for a series that long. | Every game of a series needs its own map and the bans have to split evenly, so a Bo9 needs an odd pool of at least nine. The message says how many are usable. Hillfort is permanently banned in duels and does not count. |
 | `FL-232` | This series was not arranged by the ladder. | Nothing is wrong: it is a game you played outside the queue, recorded here for you. A referee has nothing to look at for it, which is why **ask a referee to check this** is greyed out. Rows say `LADDER` when the ladder set the lobby up. |
 | `FL-231` | A game or series was matched but not counted. | The reason is on the row: usually the map or a commander was not the drafted one, in which case that game comes back for a replay. If you disagree, **ask a referee to check this** in Replays — the series is stored either way, which is why an unrated one is still shown. |
 

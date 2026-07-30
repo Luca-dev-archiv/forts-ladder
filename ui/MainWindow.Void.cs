@@ -57,7 +57,19 @@ public partial class MainWindow
                    .Where(x => !string.IsNullOrEmpty(x)).ToHashSet();
         var mine = _watcher.CurrentAccount;
         var bothPresent = ids.Count >= 2 && mine is not null && ids.Contains(mine);
-        if (!sameLobby && !bothPresent) return;
+        // The roster on its own is not enough. It is true of *every* game those
+        // two ever played together, so a fresh draft was inheriting the games
+        // from a lobby that closed an hour ago — and then calling them wrong-map
+        // deviations, which is how this was noticed. A game of this series cannot
+        // have been played before its lobby was opened; two minutes of slack for
+        // the clocks and for a log line written a little late.
+        if (!sameLobby)
+        {
+            if (!bothPresent) return;
+            if (s.LobbyOpenedAt is not { } opened
+                || m.PlayedAt < opened.AddMinutes(-2))
+                return;
+        }
         // Keyed by the *game*, not by the slot it goes in.
         //
         // Keying by number meant an invalid game reported as game 2 blocked the

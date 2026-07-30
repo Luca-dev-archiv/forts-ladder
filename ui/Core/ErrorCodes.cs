@@ -40,6 +40,7 @@ public static class ErrorCodes
     public const string StrangerInLobby = "FL-213";
     public const string UnmatchedGame = "FL-230";
     public const string NotLadderMatch = "FL-232";
+    public const string PoolTooSmall = "FL-233";
     public const string GameNotCounted = "FL-231";
 
     // --- 3xx: the game and its files

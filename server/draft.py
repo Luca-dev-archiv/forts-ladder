@@ -45,6 +45,13 @@ class DraftSession:
     #: Set once, from the queue or a tournament match, so a report can be tied
     #: back to the draft that authorised it.
     series_id: str | None = None
+    #: People per side. 1 for a duel, 2 for a 2v2.
+    #:
+    #: The sides stay A and B however many people are in them — the draft, the
+    #: bans, the commanders and the reveal are all per side, and none of them
+    #: cares how many players a side is. What changes is when the draft may
+    #: start, which is when every seat is taken rather than when there are two.
+    team_size: int = 1
     #: The pool as it was handed in. `Draft` removes the neutrally struck map
     #: from its own copy, so saving that one and rebuilding from it would strike
     #: a second map and change the board under the players.
@@ -273,7 +280,22 @@ class DraftSession:
         return seat
 
     def full(self) -> bool:
-        return len(self.seats) >= 2
+        """Everybody is here. Not "there are two" — that was the 1v1 assumption
+        that made a 2v2 draft impossible to express."""
+        return len(self.seats) >= 2 * self.team_size
+
+    def free_side(self) -> Side | None:
+        """A side with room, A before B.
+
+        Filling A first is deliberate: with a join code the host's own side is
+        the one people arrive for, and asking each of them which team they meant
+        is a question with an obvious answer three times out of four.
+        """
+        for side in (Side.A, Side.B):
+            if sum(1 for s in self.seats.values() if s.side is side) \
+                    < self.team_size:
+                return side
+        return None
 
     def opponent_of(self, seat: Seat) -> Seat | None:
         return next((s for s in self.seats.values() if s.side is not seat.side),
@@ -319,6 +341,15 @@ class DraftSession:
             "lobby_password": self.lobby_password if seat else None,
             "seats": self._seat_names(seat),
             "full": self.full(),
+            "team_size": self.team_size,
+            # When the lobby was opened, as a unix time. A game of this series
+            # cannot have been played before it existed, and a client that is not
+            # hosting has nothing else to tell this series' games apart from the
+            # ones the same two people played an hour earlier.
+            "lobby_at": self.lobby_at,
+            #: How many seats are still open, so the setup strip can say "waiting
+            #: for two more" instead of just "waiting".
+            "seats_open": max(0, 2 * self.team_size - len(self.seats)),
             "done": d.done,
             "step_index": d.step_index,
             "step_total": len(d.steps),
@@ -410,20 +441,28 @@ class DraftSession:
         return max(self.wins().values()) >= needed
 
     def _seat_names(self, seat: Seat | None) -> dict[str, str]:
-        """Who is in which seat — with the opponent anonymous while picking.
+        """Who is on which side — with the opponents anonymous while picking.
 
         Knowing who you are against changes how you ban, and a queue match is
         supposed to be decided by the board rather than by the name. Once the
         picking is over it is pointless to hide: you are about to play them.
 
-        Not applied to a draft somebody hosted with a join code — they invited a
-        specific person and already know who it is.
+        Not applied to a draft somebody hosted with a join code — they invited
+        specific people and already know who they are.
+
+        One string per side rather than per seat, so a 2v2 reads "Ada, Grace" in
+        the place a duel reads "Ada". Everything downstream shows a side.
         """
-        names = {s.side.value: s.display for s in self.seats.values()}
+        names: dict[str, str] = {}
+        for side in ("A", "B"):
+            people = [s.display for s in self.seats.values()
+                      if s.side.value == side]
+            if people:
+                names[side] = ", ".join(people)
         if self.draft.done or self.series_id is None or seat is None:
             return names
         return {side: (name if side == seat.side.value
-                       else "Opponent")
+                       else ("Opponents" if self.team_size > 1 else "Opponent"))
                 for side, name in names.items()}
 
     def _plan_for(self, seat: Seat | None) -> list[dict]:
@@ -822,7 +861,8 @@ class DraftService:
                commander_pool: list[str], best_of: int = 3,
                commander_bans_per_side: int = 1,
                step_seconds: float | None = 30.0,
-               series_id: str | None = None) -> DraftSession:
+               series_id: str | None = None,
+               team_size: int = 1) -> DraftSession:
         host.require("join_queue")
         # The strike seed is stored in the session, so the neutral strike can
         # be recomputed by anyone checking the draft afterwards. Drawing it
@@ -838,11 +878,14 @@ class DraftService:
         except ValueError as e:
             raise AuthError(str(e)) from e
 
+        if team_size not in (1, 2):
+            raise AuthError("a side is one or two players")
         s = DraftSession(id=secrets.token_hex(6),
                          join_code=secrets.token_hex(3).upper(),
                          draft=draft, series_id=series_id,
                          created_at=self._now(),
-                         original_map_pool=list(map_pool))
+                         original_map_pool=list(map_pool),
+                         team_size=team_size)
         s.seats[host.id] = Seat(Side.A, host.id, _name(host))
         if host.steam_id:
             s._steam_ids[host.id] = host.steam_id
@@ -858,8 +901,12 @@ class DraftService:
         if account.id in s.seats:
             return s
         if s.full():
-            raise AuthError("this draft already has two players")
-        s.seats[account.id] = Seat(Side.B, account.id, _name(account))
+            raise AuthError(
+                f"this draft already has all {2 * s.team_size} players")
+        side = s.free_side()
+        if side is None:                      # `full()` said otherwise: impossible
+            raise AuthError("no seat left in this draft")
+        s.seats[account.id] = Seat(side, account.id, _name(account))
         if account.steam_id:
             s._steam_ids[account.id] = account.steam_id
         # The first step gets its whole window from here, not from whenever
@@ -895,6 +942,7 @@ class DraftService:
                 continue
             s = DraftSession(id=row["id"], join_code=row["join_code"],
                              draft=draft, series_id=row.get("series_id"),
+                             team_size=row.get("team_size") or 1,
                              created_at=row["created_at"],
                              original_map_pool=list(row["map_pool"]),
                              lobby_id=row.get("lobby_id"),

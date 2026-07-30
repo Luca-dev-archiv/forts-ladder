@@ -120,6 +120,9 @@ public partial class MainWindow
     {
         ShowView("queue");
         _ = RefreshAccountAsync();
+        // Asked on arrival. The screen was showing whatever it last heard, which
+        // after a series was closed out was "you are still in a series".
+        _ = _queue.RefreshNowAsync();
     }
 
     // ---------------------------------------------------------------- Account

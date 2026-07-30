@@ -54,6 +54,10 @@ public sealed class ServerQueue : IDisposable
         };
         _display.Tick += (_, _) => { if (Status is not null) Tick?.Invoke(); };
         _display.Start();
+        // Running from the start. Before, nothing was asked until somebody
+        // pressed Find match, so a client that came back to an unfinished series
+        // did not know about it until it tried to queue.
+        _timer.Start();
     }
 
     public async Task<bool> JoinAsync(double rating, string mode = "ranked_1v1")
@@ -78,7 +82,11 @@ public sealed class ServerQueue : IDisposable
         // leaving. Discarding it left the picker showing the searcher this
         // client had just stopped being.
         var s = await _api.DeleteAsync<QueueStatusDto>("/queue");
-        _timer.Stop();
+        // The timer keeps running. Stopping it here is what made finishing a
+        // series look like nothing happening: the client left the queue when a
+        // draft started, never asked again, and kept showing "you are still in a
+        // series" long after the series was closed out. Idle costs one request
+        // every three seconds.
         _announced = null;
         if (s is not null)
         {
@@ -171,9 +179,19 @@ public sealed class ServerQueue : IDisposable
         if (s.Draft_Id is { Length: > 0 } id && id != _announced)
         {
             _announced = id;
-            _timer.Stop();
             DraftReady?.Invoke(id);
         }
+    }
+
+    /// <summary>Ask now rather than at the next tick.
+    ///
+    /// For opening the queue screen: three seconds of a stale answer is three
+    /// seconds of the screen saying something that is no longer true, and the
+    /// first thing somebody does after finishing a series is come here.</summary>
+    public Task RefreshNowAsync()
+    {
+        _timer.Start();
+        return RefreshAsync();
     }
 
     public void Dispose()

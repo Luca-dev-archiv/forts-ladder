@@ -1406,6 +1406,9 @@ public partial class MainWindow : Window
         // board is the state this button exists to leave.
         ShowView("queue");
         _ = RefreshAccountAsync();
+        // And ask, or the screen still says the series is open — which is what
+        // made pressing this look like it had done nothing at all.
+        _ = _queue.RefreshNowAsync();
     }
 
     /// <summary>

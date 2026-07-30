@@ -95,9 +95,15 @@ public sealed class LoginFlow
     /// </summary>
     public Task<ReportResultDto?> ReportSeriesAsync(
             Dictionary<string, int> sides, int games, int scoreLow,
-            DateTime playedAt, ulong? lobbyId, IEnumerable<string> replays) =>
+            DateTime playedAt, ulong? lobbyId, IEnumerable<string> replays,
+            string? draftId = null) =>
         _api.PostAsync<ReportResultDto>("/results", new
         {
+            // What makes both clients' reports one series rather than two
+            // rating changes. It cannot be derived from anything either client
+            // sends: only a host's log carries a lobby id, and the two logs
+            // disagree about the kickoff second.
+            draft_id = draftId,
             sides,
             games,
             score_low = scoreLow,

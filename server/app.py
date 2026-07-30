@@ -1101,6 +1101,22 @@ class GameBody(BaseModel):
     #: two accounts that drafted: a game played by somebody else is not that
     #: match, and must not become a rating change.
     steam_ids: list[str] = []
+    #: The map the game was actually played on, and who actually played which
+    #: commander, keyed by SteamID64.
+    #:
+    #: Keyed by Steam ID rather than by the log's side numbers because Forts
+    #: swaps sides between games: "side 1" is a different person in game 2 than
+    #: it was in game 1, and a Steam ID is the same person throughout.
+    #:
+    #: Checked against the draft on the server. A client cannot do it: the
+    #: opponent's commander is withheld until the game is over, so each client
+    #: can only ever check its own half — which is how a wrong commander on the
+    #: other side reached the ladder.
+    map_played: str | None = None
+    commanders: dict[str, str] = {}
+    #: SteamID64 of the winner, when the client knows it. Preferred over
+    #: `winner`, for the same swapping reason.
+    winner_steam: str | None = None
 
 
 @app.post("/drafts/{draft_id}/game")
@@ -1116,7 +1132,8 @@ def draft_note_game(draft_id: str, body: GameBody,
     """
     acc = require(session_token(ladder_session, authorization))
     s = guard(drafts.get, draft_id)
-    state = guard(s.note_game, acc, body.game, body.winner, body.steam_ids)
+    state = guard(s.note_game, acc, body.game, body.winner, body.steam_ids,
+                  body.map_played, body.commanders, body.winner_steam)
     store.save_draft(s)
     return state
 
@@ -1891,6 +1908,9 @@ class ResultBody2(BaseModel):
     played_at: str
     lobby_id: str | None = None
     replays: list[str] = []
+    #: The draft this series was played out of. What makes two reports of one
+    #: series one row rather than two rating changes.
+    draft_id: str | None = None
 
 
 @app.post("/results")
@@ -1914,7 +1934,8 @@ def report_result(body: ResultBody2, ladder_session: str | None = Cookie(None),
             raise HTTPException(400, "lobby id must be a number") from e
     r = guard(results.report, acc, lobby_id=lobby, sides=body.sides,
               games=body.games, score_low=body.score_low,
-              played_at=body.played_at, replays=body.replays)
+              played_at=body.played_at, replays=body.replays,
+              draft_id=body.draft_id)
     return {"id": r.id, "rated": r.rated, "reasons": r.reasons}
 
 

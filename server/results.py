@@ -77,8 +77,18 @@ class ResultService:
     # ------------------------------------------------------------- Accepting
     def report(self, account: Account, *, lobby_id: int | None,
                sides: dict[str, int], games: int, score_low: int,
-               played_at: str, replays: list[str] | None = None) -> Reported:
-        """Take one finished series from a client that played in it."""
+               played_at: str, replays: list[str] | None = None,
+               draft_id: str | None = None) -> Reported:
+        """Take one finished series from a client that played in it.
+
+        `draft_id` is what makes two reports of one series *one* series. Both
+        clients report — that is deliberate, so a series survives one of them
+        being closed — and the id used to be random, so the two arrivals became
+        two rows and the rating moved twice. It could not be derived from what
+        the clients send either: only the host's log has a lobby id, and the two
+        logs disagree about the kickoff second. The draft id is the one thing the
+        server itself handed to both of them.
+        """
         account.require("report_own_match")
         if account.steam_id is None:
             raise AuthError("link your Steam account before reporting")
@@ -92,7 +102,9 @@ class ResultService:
             raise AuthError("you are not in this series")
 
         reasons = self._why_not(lobby_id, sides)
-        r = Reported(id=self._store.next_result_id(), lobby_id=lobby_id,
+        # Derived, not drawn: same draft, same row.
+        rid = f"d-{draft_id}" if draft_id else self._store.next_result_id()
+        r = Reported(id=rid, lobby_id=lobby_id,
                      sides={str(k): int(v) for k, v in sides.items()},
                      games=games, score_low=score_low, played_at=played_at,
                      reported_by=account.id, rated=not reasons,

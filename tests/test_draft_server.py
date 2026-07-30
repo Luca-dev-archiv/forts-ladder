@@ -1198,6 +1198,107 @@ def test_the_counts_are_available_without_a_whole_status():
     assert q.waiting()["ranked_1v1"] == 0
 
 
+# --------------------------------------- A game that was not the drafted game
+# From a playtest: the last game of a series was played with the wrong commander
+# and the series was rated anyway. The client compared what was played against
+# the plan, printed a warning, and reported the result regardless — and it could
+# only ever check its *own* side, because the opponent's commander is withheld
+# until the game is over. So the one client able to catch it was the one that had
+# got it wrong.
+def played_series():
+    """A drafted queue match, with the plan and both Steam IDs in hand."""
+    q, clock, s, a, b = queue_match()
+    plan = s.draft.plan()
+    ids = {"A": s._steam_ids[a.id], "B": s._steam_ids[b.id]}
+    return s, a, b, plan, ids
+
+
+def test_the_drafted_game_is_counted():
+    s, a, b, plan, ids = played_series()
+    want = plan[0]
+    st = s.note_game(a, 1, "A", map_played=want["map"],
+                     commanders={ids["A"]: want["commander_a"],
+                                 ids["B"]: want["commander_b"]})
+    assert st["games_played"] == [1], st["games_played"]
+    assert st["deviations"] == {}
+
+
+def test_a_wrong_commander_is_not_counted_and_says_which_side():
+    s, a, b, plan, ids = played_series()
+    want = plan[0]
+    wrong = next(c for c in s.draft.commander_pool
+                 if c != want["commander_b"])
+    st = s.note_game(a, 1, "A", map_played=want["map"],
+                     commanders={ids["A"]: want["commander_a"],
+                                 ids["B"]: wrong})
+    assert st["games_played"] == [], "a wrong-commander game was counted"
+    assert "1" in st["deviations"], st["deviations"]
+    why = " ".join(st["deviations"]["1"])
+    assert "side B" in why and wrong in why, why
+    # Put back for a replay under the same number, not thrown away: the series
+    # is not over, that game just has not happened.
+    assert 1 in set(st["voided_games"])
+    assert st["revealed_through"] == 1
+
+
+def test_the_replay_counts_and_clears_the_notice():
+    s, a, b, plan, ids = played_series()
+    want = plan[0]
+    wrong = next(c for c in s.draft.commander_pool if c != want["commander_b"])
+    s.note_game(a, 1, "A", map_played=want["map"],
+                commanders={ids["A"]: want["commander_a"], ids["B"]: wrong})
+    st = s.note_game(a, 1, "A", map_played=want["map"],
+                     commanders={ids["A"]: want["commander_a"],
+                                 ids["B"]: want["commander_b"]})
+    assert st["games_played"] == [1], st["games_played"]
+    assert st["deviations"] == {}
+    assert 1 not in set(st["voided_games"])
+
+
+def test_the_wrong_map_is_not_counted_either():
+    s, a, b, plan, ids = played_series()
+    want = plan[0]
+    st = s.note_game(a, 1, "A", map_played="Somewhere Else",
+                     commanders={ids["A"]: want["commander_a"],
+                                 ids["B"]: want["commander_b"]})
+    assert st["games_played"] == []
+    assert "map" in " ".join(st["deviations"]["1"])
+
+
+def test_the_winner_is_taken_from_the_steam_id_not_the_side_number():
+    """Forts swaps sides between games, so the log's "side 1 won" cannot be
+    turned into a drafted side without knowing who side 1 was."""
+    s, a, b, plan, ids = played_series()
+    want = plan[0]
+    # The client's fallback says A won; the Steam ID says B did. B must win.
+    st = s.note_game(a, 1, "A", map_played=want["map"],
+                     commanders={ids["A"]: want["commander_a"],
+                                 ids["B"]: want["commander_b"]},
+                     winner_steam=ids["B"])
+    assert st["wins"] == {"A": 0, "B": 1}, st["wins"]
+
+
+def test_a_stranger_in_the_commander_list_is_not_this_check_s_business():
+    """Somebody who did not draft is the roster check's problem, and that one
+    aborts rather than asking for a replay."""
+    s, a, b, plan, ids = played_series()
+    want = plan[0]
+    st = s.note_game(a, 1, "A", map_played=want["map"],
+                     commanders={ids["A"]: want["commander_a"],
+                                 ids["B"]: want["commander_b"],
+                                 "76561199000000999": "commander-x-alpha"})
+    assert st["games_played"] == [1], st["deviations"]
+
+
+def test_reporting_without_evidence_still_works():
+    """An older client sends no map and no commanders. It must not be treated as
+    a mismatch — absence of evidence is not evidence of a wrong commander."""
+    s, a, b, plan, ids = played_series()
+    st = s.note_game(a, 1, "A")
+    assert st["games_played"] == [1]
+    assert st["deviations"] == {}
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

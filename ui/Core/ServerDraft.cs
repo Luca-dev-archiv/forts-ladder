@@ -354,7 +354,10 @@ public sealed class ServerDraft : IDisposable
     /// game's commanders, and lets the series end at two wins.
     /// </summary>
     public async Task<bool> NoteGameAsync(int game, string winnerSide,
-                                         IEnumerable<string>? steamIds = null)
+                                         IEnumerable<string>? steamIds = null,
+                                         string? mapPlayed = null,
+                                         IDictionary<string, string>? commanders = null,
+                                         string? winnerSteam = null)
     {
         if (DraftId is null) return false;
         var next = await _api.PostAsync<DraftStateDto>(
@@ -367,6 +370,14 @@ public sealed class ServerDraft : IDisposable
                 // two accounts that drafted: a game played by somebody else is
                 // not that match.
                 steam_ids = (steamIds ?? Array.Empty<string>()).ToList(),
+                // What was actually played. Compared against the draft on the
+                // server, because this client only knows its *own* commander
+                // until the game is over — so it can never check the whole game.
+                map_played = mapPlayed,
+                commanders = commanders ?? new Dictionary<string, string>(),
+                // Who won, by Steam ID. Forts swaps sides between games, so the
+                // log's "side 1" is a different person in game 2 than in game 1.
+                winner_steam = winnerSteam,
             });
         if (next is null) { LastError = _api.LastError; return false; }
         next.ReceivedAt = DateTime.UtcNow;

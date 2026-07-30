@@ -74,14 +74,28 @@ public partial class MainWindow
         CheckAgainstPlan(m, s.Revealed_Through);
         CheckLobbySettings();
 
-        // The log numbers sides 1 and 2; the draft calls them A and B.
+        // The log numbers sides 1 and 2; the draft calls them A and B. Sent as a
+        // fallback only — Forts swaps sides between games, so this mapping is
+        // wrong half the time and the Steam ID below is what the server uses.
         var side = m.WinnerSide == 1 ? "A" : "B";
         // Everyone the log listed, so the server can check that the people who
         // played are the people who drafted.
         var roster = m.Players.Values
             .Select(pl => pl.SteamId)
             .Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList();
-        if (!await _draft.NoteGameAsync(s.Revealed_Through, side, roster))
+        // Who won and who played what, both by Steam ID: the same person across
+        // every game of the series, which a side number is not.
+        var winnerSteam = m.Players.Values
+            .FirstOrDefault(pl => pl.Side == m.WinnerSide)?.SteamId;
+        var commanders = new Dictionary<string, string>();
+        foreach (var pl in m.Players.Values)
+            if (!string.IsNullOrEmpty(pl.SteamId)
+                && m.Commanders.TryGetValue(pl.Side, out var used)
+                && !string.IsNullOrEmpty(used))
+                commanders[pl.SteamId] = used;
+
+        if (!await _draft.NoteGameAsync(s.Revealed_Through, side, roster,
+                                        m.Map, commanders, winnerSteam))
         {
             ShowDraftError(_draft.LastError ?? "?");
             return;
@@ -91,6 +105,38 @@ public partial class MainWindow
         // id in the log to guess from.
         _draftedGames.Note(m.ReportKey, s.Id);
         RebuildSeries();
+    }
+
+    /// <summary>
+    /// Games the server threw out, and why.
+    ///
+    /// The client's own `CheckAgainstPlan` is an instant local hint and nothing
+    /// more: it can only compare *this* side's commander, because the opponent's
+    /// is withheld until the game is over. So the verdict comes from the server,
+    /// which sees both — and it has to be shown on both machines, because the
+    /// person who has to play the game again is usually the one who got it wrong
+    /// and has no other way of finding out.
+    /// </summary>
+    private void RenderDeviations(DraftStateDto s)
+    {
+        foreach (var (game, why) in s.Deviations)
+        {
+            var reasons = string.Join("; ", why.Select(DescribeDeviation));
+            Warn(ErrorCodes.Text(ErrorCodes.GameNotCounted,
+                                 Loc.T("deviation.replay", game, reasons)));
+        }
+    }
+
+    /// <summary>
+    /// Put a commander id into words. The server sends ids because it has no
+    /// Forts installation to look names up in; this machine has one.
+    /// </summary>
+    private static string DescribeDeviation(string raw)
+    {
+        // "side B: drafted commander-x-y, played commander-x-z"
+        return System.Text.RegularExpressions.Regex.Replace(
+            raw, @"commander-[a-z0-9-]+",
+            mm => CommanderNames.Display(mm.Value));
     }
 
     // ------------------------------------------------------------------ Voiding

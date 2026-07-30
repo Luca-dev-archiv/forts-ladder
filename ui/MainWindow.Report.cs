@@ -75,11 +75,19 @@ public partial class MainWindow
                             .Where(r => !string.IsNullOrEmpty(r))
                             .Select(r => System.IO.Path.GetFileName(r!)).ToList();
 
+        // The lobby id comes from the *draft*, not from the log.
+        //
+        // Only the host's log has one — "Setting lobby" is written when hosting —
+        // so a guest reported `null`, the server could not tie the series to a
+        // sanctioned lobby, and the whole thing came back unrated with FL-231.
+        // The id was never missing: the server told both clients what it was.
+        var lobby = ulong.TryParse(s.Lobby_Id, out var fromDraft)
+            ? fromDraft
+            : series.Matches.Select(m => m.LobbyId)
+                            .FirstOrDefault(x => x is not null);
         var res = await _login.ReportSeriesAsync(
             sides, series.Matches.Count, lowWins,
-            series.Matches[0].PlayedAt,
-            series.Matches.Select(m => m.LobbyId).FirstOrDefault(x => x is not null),
-            replays);
+            series.Matches[0].PlayedAt, lobby, replays, s.Id);
         if (res is null)
         {
             // Sending failed rather than being refused: let the next poll try.

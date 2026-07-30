@@ -6,6 +6,7 @@
   "common.close": "Schließen",
   "common.none": "—",
   "common.unknown": "unbekannt",
+  "deviation.replay": "Spiel {0} zählt nicht und muss wiederholt werden — {1}",
   "dialog.cancel": "Abbrechen",
   "dialog.input_hint": "Enter ist OK, Escape bricht ab.",
   "dialog.ok": "OK",

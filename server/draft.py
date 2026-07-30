@@ -108,6 +108,11 @@ class DraftSession:
     #: The host wrote lobby settings into a running Forts, which only reads them
     #: at start — so the password the guest is waiting for does not exist yet.
     host_restart_pending: bool = False
+    #: What was played differently from what was drafted, per game.
+    #:
+    #: Kept rather than only refused: both players need to see *why* a game is
+    #: being replayed, and a referee looking at the series later needs it more.
+    deviations: dict[int, list[str]] = field(default_factory=dict)
     #: Set when a decided series was closed out. Until then it counts as open,
     #: and an open series is what keeps both players out of the queue — a match
     #: that is still being played is not a match you may leave for another.
@@ -344,6 +349,10 @@ class DraftSession:
             "series_over": self.series_over(),
             "voided": self.voided,
             "voided_games": sorted(self.voided_games),
+            # Why a game was thrown out, for both sides and for whoever reviews
+            # it afterwards.
+            "deviations": {str(g): list(v)
+                           for g, v in sorted(self.deviations.items())},
             # Whether this series is over, and whether it is this viewer's turn
             # to say so. Without it the client cannot tell a series that is
             # waiting for a game from one that is waiting for a click.
@@ -603,8 +612,57 @@ class DraftSession:
         self.aborted_side = side
         self.aborted_reason = reason[:200]
 
+    def side_of_steam(self, steam_id: str) -> str | None:
+        """Which drafted side a Steam ID belongs to.
+
+        The log numbers sides 1 and 2 per game and Forts swaps them between
+        games, so a side number says nothing across a series. A Steam ID is the
+        same person in every game of it, and the draft already knows which seat
+        each one took.
+        """
+        for seat in self.seats.values():
+            if self._steam_ids.get(seat.account_id) == steam_id:
+                return seat.side.value
+        return None
+
+    def check_against_plan(self, game: int, map_played: str | None,
+                           commanders: dict[str, str] | None) -> list[str]:
+        """What was played that was not what was drafted.
+
+        Checked here rather than on a client for two reasons. A client only knows
+        its *own* commander until the game is over — the opponent's is withheld,
+        which is the point of a blind pick — so no client can check both sides.
+        And a verdict that lives on one machine is a verdict the other machine
+        cannot see.
+
+        `commanders` is keyed by Steam ID; the seats say which side each is.
+        """
+        plan = self.draft.plan()
+        if not 1 <= game <= len(plan):
+            return []
+        want = plan[game - 1]
+        out: list[str] = []
+
+        if map_played and want.get("map") and \
+                map_played.strip().casefold() != want["map"].strip().casefold():
+            out.append(f"map: drafted {want['map']}, played {map_played}")
+
+        for steam_id, played in (commanders or {}).items():
+            side = self.side_of_steam(steam_id)
+            if side is None:
+                # Somebody who did not draft. That is the roster check's job, and
+                # it aborts rather than replays — not this one's business.
+                continue
+            drafted = want.get(f"commander_{side.lower()}")
+            if drafted and played and played != drafted:
+                out.append(f"side {side}: drafted {drafted}, played {played}")
+        return out
+
     def note_game(self, account: Account, game: int, winner: str,
-                  steam_ids: list[str] | None = None) -> dict:
+                  steam_ids: list[str] | None = None,
+                  map_played: str | None = None,
+                  commanders: dict[str, str] | None = None,
+                  winner_steam: str | None = None) -> dict:
         """Record one finished game of the series.
 
         Reported by the clients from their own game log, which is the only place
@@ -641,6 +699,27 @@ class DraftSession:
                 return self.public_state(account)
         if game in self.draft.played_games():
             return self.public_state(account)
+
+        # What was actually played, against what was drafted. A game that does
+        # not match is not counted — it is put back for a replay under the same
+        # number, because the series is not over: that game has not happened.
+        #
+        # The result is deliberately *not* recorded first and undone after. A
+        # wrong-commander game that briefly counts is a wrong-commander game
+        # that the other client may report on top of.
+        if (off := self.check_against_plan(game, map_played, commanders)):
+            self.deviations[game] = off
+            self.voided_games.add(game)
+            return self.public_state(account)
+        # Played correctly after a replay: the game is live again.
+        self.voided_games.discard(game)
+        self.deviations.pop(game, None)
+
+        # The winner by Steam ID when the client sent one. The log's side
+        # numbers are per game and Forts swaps them, so "side 1 won" cannot be
+        # turned into a drafted side without knowing who side 1 was.
+        if winner_steam and (mapped := self.side_of_steam(winner_steam)):
+            winner = mapped
         try:
             side = Side(winner)
         except ValueError as e:
@@ -831,6 +910,7 @@ class DraftService:
                              lobby_at=row.get("lobby_at"),
                              guest_ready_at=row.get("guest_ready_at"),
                              extra_seconds=row.get("extra_seconds") or 0.0,
+                             deviations=dict(row.get("deviations") or {}),
                              voided_games=set(row.get("voided_games") or []))
             for seat in row["seats"]:
                 s.seats[seat["account_id"]] = Seat(

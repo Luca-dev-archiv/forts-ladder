@@ -48,12 +48,14 @@ class World:
         self.results = ResultService(self.auth, self.store, self.ranking)
 
     def duel(self, a="Alice", b="Bob", *, games=3, score_low=2,
-             lobby=111, by=None, played_at="2026-07-28T20:15:00"):
+             lobby=111, by=None, played_at="2026-07-28T20:15:00",
+             draft_id=None):
         return self.results.report(
             self.people[by or a],
             lobby_id=lobby,
             sides={STEAM[a]: 1, STEAM[b]: 2},
-            games=games, score_low=score_low, played_at=played_at)
+            games=games, score_low=score_low, played_at=played_at,
+            draft_id=draft_id)
 
     def rating(self, name):
         self.results.refresh_ranking()
@@ -261,6 +263,40 @@ def test_flagging_does_not_make_it_count():
     r = w.duel(lobby=999)
     w.results.flag(w.people["Alice"], r.id, "please check")
     assert w.rating("Alice") is None
+
+
+def test_an_unrated_report_does_not_lock_out_a_rateable_one():
+    """Whoever reported first used to decide.
+
+    Only the host's log carries a lobby id — "Setting lobby" is written when
+    hosting — so a guest reporting first wrote a row with no lobby, which cannot
+    be rated, and the host's good report could never displace it. That is how a
+    real series came back FL-231 unrated with both players watching.
+    """
+    w = World()
+    w.store.sanction_lobby(111)
+
+    first = w.duel(lobby=None, by="Bob", draft_id="abc123")
+    assert not first.rated and first.reasons, first.reasons
+
+    second = w.duel(lobby=111, by="Alice", draft_id="abc123")
+    assert second.rated, second.reasons
+    assert second.id == first.id, "the same series should have the same id"
+
+    stored = {r.id: r for r in w.store.load_results()}[first.id]
+    assert stored.rated, "the unrated row was kept over a rateable one"
+
+
+def test_a_rated_report_is_not_replaced_by_a_second_one():
+    """The original rule still holds where it was ever a rule: two rated reports
+    of one series should agree, and the first is the one that counted."""
+    w = World()
+    w.store.sanction_lobby(111)
+    first = w.duel(lobby=111, by="Alice", score_low=2, draft_id="abc123")
+    second = w.duel(lobby=111, by="Bob", score_low=1, draft_id="abc123")
+    assert first.id == second.id
+    stored = {r.id: r for r in w.store.load_results()}[first.id]
+    assert stored.score_low == 2, "the second arrival overwrote the first"
 
 
 def _run_all() -> int:

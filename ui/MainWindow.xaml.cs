@@ -804,6 +804,7 @@ public partial class MainWindow : Window
         RenderPlan(s!);
         RenderHandoff(s!);
         RenderVoid(s!);
+        RenderDeviations(s!);
         // Not a button anywhere: a decided series sends itself. Leaving it to a
         // click means the loser has a reason not to click.
         MaybeReportSeries(s!);

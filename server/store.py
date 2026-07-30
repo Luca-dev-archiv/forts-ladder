@@ -257,6 +257,9 @@ class Store:
             ("lobby_at", "REAL"),
             ("guest_ready_at", "REAL"),
             ("extra_seconds", "REAL NOT NULL DEFAULT 0"),
+            # Why a game was thrown out. A redeploy mid-series would otherwise
+            # lose the reason and quietly let the wrong game count.
+            ("deviations", "TEXT NOT NULL DEFAULT '{}'"),
         ],
     }
 
@@ -375,10 +378,19 @@ class Store:
     def save_result(self, r) -> None:
         """Write one reported series. Reporting it twice changes nothing.
 
-        Both clients in a match report, so the second arrival is expected. It
-        keeps the first version rather than overwriting: they should agree, and
-        if they do not, the earlier one is the one that was already rated.
+        Both clients in a match report, so the second arrival is expected, and
+        the first version is the one kept — they should agree.
+
+        With one exception. A stored row that could *not* be rated is replaced by
+        one that can: "the earlier one is the one that was already rated" is only
+        a reason while the earlier one was rated. Before this, a guest reporting
+        first — with no lobby id, because only a host's log has one — wrote an
+        unrated row that the host's good report could never displace.
         """
+        if r.rated:
+            existing = {x.id: x for x in self.load_results()}.get(r.id)
+            if existing is not None and not existing.rated:
+                self.db.execute("DELETE FROM results WHERE id = ?", (r.id,))
         self.db.execute(
             """INSERT OR IGNORE INTO results
                    (id, lobby_id, sides, games, score_low, played_at,
@@ -423,9 +435,9 @@ class Store:
                     lobby_host_steam, voided, voided_games, results,
                     lobby_password, aborted_side, aborted_reason,
                     concluded, done_at, lobby_at, guest_ready_at,
-                    extra_seconds)
+                    extra_seconds, deviations)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?)
+                       ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    join_code=excluded.join_code,
                    lobby_id=excluded.lobby_id,
@@ -442,7 +454,8 @@ class Store:
                    done_at=excluded.done_at,
                    lobby_at=excluded.lobby_at,
                    guest_ready_at=excluded.guest_ready_at,
-                   extra_seconds=excluded.extra_seconds""",
+                   extra_seconds=excluded.extra_seconds,
+                   deviations=excluded.deviations""",
             (session.id, session.join_code,
              json.dumps(session.original_map_pool or d.map_pool),
              json.dumps(d.commander_pool), d.best_of,
@@ -456,7 +469,9 @@ class Store:
              session.lobby_password, session.aborted_side,
              session.aborted_reason, int(session.concluded),
              session.done_at, session.lobby_at, session.guest_ready_at,
-             session.extra_seconds))
+             session.extra_seconds,
+             json.dumps({str(g): v
+                         for g, v in session.deviations.items()})))
 
         self.db.execute("DELETE FROM draft_seats WHERE draft_id = ?", (session.id,))
         self.db.executemany(
@@ -504,6 +519,8 @@ class Store:
                 "lobby_at": r["lobby_at"],
                 "guest_ready_at": r["guest_ready_at"],
                 "extra_seconds": r["extra_seconds"] or 0.0,
+                "deviations": {int(g): list(v) for g, v in
+                               _stored_json(r["deviations"], {}).items()},
                 "voided_games": _stored_json(r["voided_games"], []),
                 "results": _stored_json(r["results"], {}),
                 "cancelled_by": r["cancelled_by"],

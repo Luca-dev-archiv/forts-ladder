@@ -396,6 +396,14 @@ public sealed class DraftStateDto
 
     /// <summary>Games won per side, from the reported games.</summary>
     public Dictionary<string, int> Wins { get; set; } = new();
+
+    /// <summary>What was played differently from what was drafted, per game.
+    ///
+    /// Decided by the server, because only it sees both sides: a client's own
+    /// opponent's commander is withheld until the game is over, so no client can
+    /// check the whole game. A game listed here was not counted and is played
+    /// again under the same number.</summary>
+    public Dictionary<string, List<string>> Deviations { get; set; } = new();
     /// <summary>Decided — a Bo3 ends at two, not after three games.</summary>
     public bool Series_Over { get; set; }
 

@@ -44,12 +44,12 @@ it.
 | `FL-202` | The three minutes for opening or joining the lobby ran out. | Ask your opponent for more time in the series panel, or agree a void and start again. Neither costs anything. |
 | `FL-203` | You are still in a series that is not finished. | Play it out and press **Finish the series**, or agree a void. Your opponent is waiting for you specifically. |
 | `FL-204` | You left a match early, so the queue is closed to you for a while. | Wait it out. It is two minutes the first time and three more each repeat, and it is forgotten after a clean day. |
-| `FL-210` | The map played was not the map drafted. | If it was a mistake, agree a void for that game and replay it. If it was not, the series is flagged for a human. |
-| `FL-211` | A commander played was not the commander drafted. | Same as above. This is the commonest honest mistake: the game remembers the last commander used. |
+| `FL-210` | The map played was not the map drafted. | Nothing to agree: that game was not counted and comes back under the same number. Play it on the drafted map. Both clients say which map was expected. |
+| `FL-211` | A commander played was not the commander drafted. | Same: not counted, played again. This is the commonest honest mistake, because Forts remembers the last commander used — check it on the loadout screen before the game starts. |
 | `FL-212` | The lobby settings differ from what the ladder set. | The host can put them back. The deviation is recorded either way. |
 | `FL-213` | Somebody in the lobby is not one of the two who drafted. | A spectator is fine. A *player* who did not draft is not, and the series is aborted rather than rated. |
 | `FL-230` | A finished game could not be matched to any series. | It stays in **Replays** unrated so you can point a referee at it. Usually means the lobby was opened outside the ladder. |
-| `FL-231` | A game was matched but not counted. | The reason is on the row. Report it if you disagree — an unrated match is still shown, which is why. |
+| `FL-231` | A game or series was matched but not counted. | The reason is on the row: usually the map or a commander was not the drafted one, in which case that game comes back for a replay. If you disagree, **ask a referee to check this** in Replays — the series is stored either way, which is why an unrated one is still shown. |
 
 ## 3xx — the game and its files
 
@@ -65,6 +65,12 @@ it.
 | Code | What happened | What to do |
 |---|---|---|
 | `FL-400` | The client is already running. | Use the window that is open. Two clients read the same log and would report the same game twice. |
+
+When you ask a referee to check a series, they get a page with everything the
+server holds about it: who played, the lobby, why it was not rated, what deviated
+from the draft, and the replays your clients uploaded. They can take the rating
+back, with a reason that stays on the record. Replays are deleted after seven
+days, so ask while it still matters.
 
 ## 5xx — a tournament rule said no
 

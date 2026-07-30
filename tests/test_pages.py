@@ -157,7 +157,9 @@ def test_an_admin_cannot_promote_and_is_told_why():
     r = w.client.post("/admin/save", headers=admin,
                       data={"account": target.id, "role": "owner"})
     assert r.status_code == 200, "a refusal should come back as the page"
-    assert "requires Owner" in r.text
+    # The code names the refusal, and the missing role comes from our own
+    # permission table rather than from the exception's words.
+    assert "FL-600" in r.text and "needs Owner" in r.text
     assert target.role is Role.PLAYER, "the refusal must not have applied"
 
 
@@ -167,7 +169,7 @@ def test_you_cannot_change_your_own_row():
     owner, headers = w.person("Owner", Role.OWNER)
     r = w.client.post("/admin/save", headers=headers,
                       data={"account": owner.id, "role": "guest"})
-    assert "cannot change your own account" in r.text
+    assert "FL-604" in r.text and "your own row" in r.text
     assert owner.role is Role.OWNER
 
 
@@ -279,12 +281,12 @@ def test_an_impossible_result_is_explained_and_not_applied():
     url = f"/manage/tournaments/{tid}/report"
 
     for data, expected in (
-            ({"match": m.id, "winner": "Nobody"}, "does not play in"),
+            ({"match": m.id, "winner": "Nobody"}, "FL-504"),
             ({"match": m.id, "winner": m.b.name, "score": "banana"},
              "is not a score"),
             # 2:1 does not decide a Bo5.
             ({"match": m.id, "winner": m.b.name, "score": "2-1"},
-             "does not decide a Bo5")):
+             "FL-505")):
         r = w.client.post(url, headers=host, data=data)
         assert r.status_code == 200 and expected in r.text, r.text[-300:]
 
@@ -713,13 +715,13 @@ def test_a_missing_seat_is_not_reported_as_a_missing_tournament():
     r = w.client.post(f"/manage/tournaments/{tid}/rename", headers=h,
                       follow_redirects=False, data={"seat": "99", "name": "X"})
     assert r.status_code == 200, r.status_code
-    assert "no entrant 99" in r.text
+    assert "FL-510" in r.text and "#99" in r.text
     assert "no such tournament" not in r.text
 
     r = w.client.post(f"/manage/tournaments/{tid}/report", headers=h,
                       follow_redirects=False,
                       data={"match": "R9M9", "winner": "0", "score": "2:0"})
-    assert "no such match" in r.text
+    assert "FL-511" in r.text and "R9M9" in r.text
     assert "no such tournament" not in r.text
 
 
@@ -732,16 +734,17 @@ def test_only_a_rule_refusal_keeps_its_words():
     from ladder.errors import RuleError
     from server.auth import AuthError
 
-    keep = [RuleError("a tournament needs at least two entrants"),
-            AuthError("you do not have that permission")]
-    for e in keep:
-        assert app_mod.reason(e) == str(e), e
+    # A code keeps its sentence; the sentence is ours, not the exception's.
+    assert "FL-500" in app_mod.refusal(
+        RuleError("FL-500", "a tournament needs at least two entrants"))
+    assert "FL-601" in app_mod.refusal(
+        AuthError("x already belongs to another account", "FL-601"))
 
     # Everything a library raises, including the ValueError subclasses.
     try:
         _json.loads("not json")
     except ValueError as e:
-        leaked = app_mod.reason(e)
+        leaked = app_mod.refusal(e)
     assert "Expecting value" not in leaked, leaked
     assert "line 1" not in leaked, leaked
 
@@ -749,12 +752,12 @@ def test_only_a_rule_refusal_keeps_its_words():
     try:
         math.log2(0)
     except ValueError as e:
-        assert "math domain" not in app_mod.reason(e)
+        assert "math domain" not in app_mod.refusal(e)
 
     for e in (ValueError("could not convert string to float: 'x'"),
               KeyError("some internal key"),
               RuntimeError("dict changed size during iteration")):
-        out = app_mod.reason(e)
+        out = app_mod.refusal(e)
         assert "convert" not in out and "internal" not in out and "dict" not in out
 
 
@@ -778,6 +781,56 @@ def test_a_damaged_row_does_not_take_the_page_down():
         assert phrase not in r.text, phrase
     # And the entrant is still named, from the column that is intact.
     assert "Alice" in r.text
+
+
+def test_nothing_but_the_code_crosses_the_boundary():
+    """The load-bearing property. `refusal()` reads one attribute, checks it
+    against a closed table, and returns a string written in this repository — so
+    no message an exception carries can reach a page, whoever raised it."""
+    from ladder.errors import RuleError
+    from server.auth import AuthError
+
+    # A refusal whose *message* is hostile and whose code is real: the message
+    # must not appear, the code's own sentence must.
+    e = RuleError("FL-500", "SECRET /var/lib/forts-ladder/ladder.sqlite")
+    out = app_mod.refusal(e)
+    assert "SECRET" not in out and "sqlite" not in out, out
+    assert "FL-500" in out and "two entrants" in out
+
+    # Same for AuthError, which the admin pages catch.
+    out = app_mod.refusal(AuthError("SECRET internal detail", "FL-601"))
+    assert "SECRET" not in out and "FL-601" in out
+
+    # A code nobody wrote down is not printed either — it falls back.
+    out = app_mod.refusal(RuleError("FL-<script>", "SECRET"))
+    assert "script" not in out and "SECRET" not in out
+    assert app_mod.UNKNOWN_REFUSAL in out
+
+
+def test_every_code_a_rule_can_raise_has_a_sentence():
+    """A code with no entry renders as the fallback, which would hide a real
+    refusal behind "that did not work"."""
+    import re
+
+    raised = set(re.findall(r'RuleError\(\s*"(FL-\d+)"',
+                            Path("ladder/tournament.py").read_text(encoding="utf-8")))
+    raised |= set(re.findall(r'AuthError\([^)]*?"(FL-\d+)"',
+                             Path("server/auth.py").read_text(encoding="utf-8"),
+                             re.DOTALL))
+    assert raised, "no codes found — the search is wrong, not the code"
+    missing = sorted(c for c in raised if c not in app_mod.REFUSAL_TEXT)
+    assert not missing, f"codes with no sentence: {missing}"
+
+
+def test_the_codes_in_the_docs_match_the_codes_in_the_code():
+    """A code that means two different things in two places is worse than none."""
+    import re
+
+    doc = Path("docs/error-codes.md").read_text(encoding="utf-8")
+    documented = set(re.findall(r"`(FL-\d+)`", doc))
+    server_codes = {c for c in app_mod.REFUSAL_TEXT}
+    undocumented = sorted(server_codes - documented)
+    assert not undocumented, f"codes missing from the docs: {undocumented}"
 
 
 def _run_all() -> int:

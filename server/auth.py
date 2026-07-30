@@ -141,7 +141,18 @@ GRANT_UNLOCKS: dict[Grant, set[str]] = {
 
 
 class AuthError(Exception):
-    """Authentication or permission failure."""
+    """Authentication or permission failure.
+
+    Carries an optional code so a *web page* can show a sentence of ours chosen
+    by that code, rather than repeating whatever the exception says. The message
+    itself is still the detailed one, because the desktop client shows it to a
+    player and the specifics are the whole value there — "you left a series
+    early, so the queue is closed for another 240s" beats any code.
+    """
+
+    def __init__(self, message: str, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -205,7 +216,8 @@ class Account:
             f"{action} requires {needed.label}{hint}; "
             f"your account is {self.role.label}"
             + (f" with {', '.join(g.label for g in sorted(self.grants, key=str))}"
-               if self.grants else " with no extra grants"))
+               if self.grants else " with no extra grants"),
+            "FL-600")
 
 
 @dataclass
@@ -314,11 +326,12 @@ class AuthService:
         """
         ufer_name = ufer_name.strip()
         if not ufer_name:
-            raise AuthError("a ladder name cannot be empty")
+            raise AuthError("a ladder name cannot be empty", "FL-507")
         taken = next((a for a in self.accounts.values()
                       if a.ufer_name == ufer_name and a.id != account.id), None)
         if taken is not None:
-            raise AuthError(f"{ufer_name!r} already belongs to another account")
+            raise AuthError(
+                f"{ufer_name!r} already belongs to another account", "FL-601")
         matches_discord = (account.discord_name or "").casefold() == \
             ufer_name.casefold()
         if matches_discord or by_admin:
@@ -479,7 +492,8 @@ class AuthService:
     def grant_role(self, actor: Account, target: Account, role: Role) -> None:
         actor.require("grant_role")
         if role >= actor.role and actor.role is not Role.OWNER:
-            raise AuthError("cannot grant a role you do not outrank")
+            raise AuthError("cannot grant a role you do not outrank",
+                            "FL-605")
         target.role = role
 
     # ------------------------------------------------------------- Sessions
@@ -650,7 +664,10 @@ def exchange_discord_code(code: str, redirect_uri: str) -> dict:
             f"Discord rejected the code ({e.code}). The redirect URI must "
             f"match the application exactly: {redirect_uri}") from e
     except (urllib.error.URLError, OSError) as e:
-        raise AuthError(f"could not reach Discord: {e}") from e
+        # Deliberately without the underlying error's text: a network
+        # exception names hosts, ports and sometimes a URL with a token in
+        # it, and none of that helps whoever is trying to log in.
+        raise AuthError("could not reach Discord — try again") from e
 
     access = token.get("access_token")
     if not access:
@@ -664,7 +681,7 @@ def exchange_discord_code(code: str, redirect_uri: str) -> dict:
         with urllib.request.urlopen(req, timeout=15) as r:
             me = json.loads(r.read().decode())
     except (urllib.error.URLError, OSError) as e:
-        raise AuthError(f"could not read the Discord profile: {e}") from e
+        raise AuthError("could not read the Discord profile") from e
 
     if not me.get("id"):
         raise AuthError("Discord profile has no id")
@@ -709,7 +726,7 @@ def verify_steam_openid(params: dict[str, str]) -> str:
         with urllib.request.urlopen(req, timeout=15) as r:
             body = r.read().decode()
     except (urllib.error.URLError, OSError) as e:
-        raise AuthError(f"could not reach Steam: {e}") from e
+        raise AuthError("could not reach Steam — try again") from e
 
     # Steam answers a tiny key:value document. Anything other than an explicit
     # `is_valid:true` is a rejection — including a missing line.

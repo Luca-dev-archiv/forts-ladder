@@ -47,7 +47,8 @@ class Participant:
         # -NaN puts the bracket in whatever order the comparisons happened to
         # fall in.
         if not math.isfinite(self.rating):
-            raise RuleError(f"{self.name}: a rating has to be a number")
+            raise RuleError("FL-501",
+                            f"{self.name}: a rating has to be a number")
 
 
 @dataclass
@@ -126,7 +127,8 @@ class Tournament:
     def __post_init__(self) -> None:
         if len(self.participants) < 2:
             if not self.planning:
-                raise RuleError("a tournament needs at least two entrants")
+                raise RuleError("FL-500",
+                                "a tournament needs at least two entrants")
             # Nothing to draw yet. Two entrants and the bracket appears, still
             # while planning, which is the point of the preview.
             self.rounds = []
@@ -228,21 +230,23 @@ class Tournament:
                match_keys: list[str] | None = None) -> Match:
         m = self.match(match_id)
         if m.winner is not None and not m.bye:
-            raise RuleError(f"{match_id} is already decided "
-                             f"({m.winner.name})")
+            raise RuleError("FL-502", f"{match_id} is already decided "
+                                        f"({m.winner.name})")
         if m.a is None or m.b is None:
-            raise RuleError(f"{match_id} does not have two entrants yet")
+            raise RuleError("FL-503",
+                            f"{match_id} does not have two entrants yet")
         winner = next((p for p in (m.a, m.b) if p.name == winner_name), None)
         if winner is None:
             raise RuleError(
-                f"{winner_name!r} does not play in {match_id} "
-                f"({m.a.name} vs {m.b.name})")
+                "FL-504", f"{winner_name!r} does not play in {match_id} "
+                          f"({m.a.name} vs {m.b.name})")
         if score is not None:
             needed = self.series_length() // 2 + 1
             if max(score) < needed:
                 raise RuleError(
-                    f"{score[0]}:{score[1]} does not decide a "
-                    f"Bo{self.series_length()} — {needed} wins are needed")
+                    "FL-505", f"{score[0]}:{score[1]} does not decide a "
+                              f"Bo{self.series_length()} — {needed} wins "
+                              "are needed")
         m.winner = winner
         m.score = score
         m.match_keys = match_keys or []
@@ -258,15 +262,17 @@ class Tournament:
         """
         if any(m.winner is not None and not m.bye
                for r in self.rounds for m in r):
-            raise RuleError("a result has been reported — names are fixed now")
+            raise RuleError(
+                "FL-506", "a result has been reported — names are fixed now")
         name = name.strip()
         if not name:
-            raise RuleError("an entrant needs a name")
+            raise RuleError("FL-507", "an entrant needs a name")
         if not 0 <= seat < len(self.participants):
             raise KeyError(f"no entrant {seat}")
         if any(p.name == name for i, p in enumerate(self.participants)
                if i != seat):
-            raise RuleError(f"{name!r} is already in this tournament")
+            raise RuleError("FL-508",
+                            f"{name!r} is already in this tournament")
         old = self.participants[seat]
         old.name = name
         if old.members == [old.members[0]] and len(old.members) == 1:

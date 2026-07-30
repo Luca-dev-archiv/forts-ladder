@@ -4,14 +4,21 @@ Every failure the client shows carries a code like `FL-100`. Quote it — in
 Discord, in a bug report, to a referee. "Something went wrong" cannot be
 answered; `FL-202` can be answered in one message.
 
-The numbers here and the constants in `ui/Core/ErrorCodes.cs` are the same
-numbers. A code that means two different things in two places is worse than no
-code at all, so if you add one, add it in both.
+The numbers here are the numbers in `ui/Core/ErrorCodes.cs` and in
+`ladder/errors.py` plus `REFUSAL_TEXT` in `server/app.py`. A code that means two
+different things in two places is worse than no code at all, so a test checks
+that every code the server can raise has a sentence and appears here.
 
-- **1xx** — the connection and your account
-- **2xx** — a match or a series
-- **3xx** — the game and its files
-- **4xx** — this program
+The client owns 1xx–4xx; the website owns 5xx and 6xx. One list, because a
+player quoting a code should not have to know which half of the project produced
+it.
+
+- **1xx** — the connection and your account (client)
+- **2xx** — a match or a series (client)
+- **3xx** — the game and its files (client)
+- **4xx** — this program (client)
+- **5xx** — a tournament rule (website)
+- **6xx** — permission, account and form (website)
 
 ## 1xx — connection and account
 
@@ -58,3 +65,37 @@ code at all, so if you add one, add it in both.
 | Code | What happened | What to do |
 |---|---|---|
 | `FL-400` | The client is already running. | Use the window that is open. Two clients read the same log and would report the same game twice. |
+
+## 5xx — a tournament rule said no
+
+These come from the website, not the client: a tournament host or a referee sees
+them next to the form they were filling in. The sentence is the same every time;
+whatever the page adds in brackets after it — a seat number, a match id — is what
+that route knew about your request.
+
+| Code | What happened | What to do |
+|---|---|---|
+| `FL-500` | A tournament needs at least two entrants. | Add people in the planner. One name is a normal stage of building a cup, but starting needs two. |
+| `FL-501` | A rating has to be a number. | `nan` and `1e999` both parse and neither can be stored or sorted. Leave it blank for 1000. |
+| `FL-502` | That match already has a result. | Look at the bracket. If the result is wrong, it has to be undone by whoever runs the event. |
+| `FL-503` | That match does not have both entrants yet. | An earlier round has to finish first. |
+| `FL-504` | That player is not in that match. | Check the name against the two shown on the match. |
+| `FL-505` | That score does not decide the series. | A Bo5 needs three wins. Report the score that ended it. |
+| `FL-506` | A result has been reported, so the names are fixed. | Correct names before the first result. Afterwards a stored result would come loose from the player who earned it. |
+| `FL-507` | An entrant needs a name. | Type one. |
+| `FL-508` | Somebody with that name is already in this tournament. | Two entrants cannot share a name — the bracket refers to them by it. |
+| `FL-509` | Give the tournament a name. | Type one. |
+| `FL-510` | There is no entrant with that number here. | The list changed while you had the page open. Reload it. |
+| `FL-511` | There is no such match in this bracket. | Same — reload. |
+| `FL-599` | Something was refused that is not one of the above. | Nothing was changed. This is the fallback for a failure that is not a rule, so it is worth reporting. |
+
+## 6xx — permission, account and form
+
+| Code | What happened | What to do |
+|---|---|---|
+| `FL-600` | Refused: the permission is missing, or it no longer applies. | The page says what is needed in brackets, e.g. `(needs Owner)`. Roles are granted, not requested. |
+| `FL-601` | That ladder name is already held by somebody else. | Two accounts cannot hold one name — it is what ties a result to a person. |
+| `FL-602` | Nothing to do — the form did not ask for anything. | Harmless. Usually a double submit. |
+| `FL-603` | Unknown role or grant in the form. | Reload the page; it was rendered against an older list. |
+| `FL-604` | You cannot change your own row. | The one mistake on that page that cannot be undone from that page. Ask another owner. |
+| `FL-605` | Only an owner can change roles. | By design: an admin cannot promote anyone to their own level or above. |

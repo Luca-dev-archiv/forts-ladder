@@ -35,14 +35,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from ladder.errors import RuleError
+from ladder.errors import RULE_TEXT, RuleError
 from ladder.modes import BY_KEY
 from ladder.tournament import Participant, Tournament
 
 from . import page
 from .brackets import viewer_data
 from .auth import (
-    AuthError, AuthService, Grant, Role, discord_authorize_url,
+    REQUIRED_ROLE, AuthError, AuthService, Grant, Role, discord_authorize_url,
     exchange_discord_code, steam_openid_url, verify_steam_openid,
 )
 from .draft import DraftService
@@ -158,26 +158,82 @@ def path_for(*parts: str) -> str:
     return "/" + "/".join(quote(p.strip("/"), safe="") for p in parts if p)
 
 
-def reason(e: BaseException) -> str:
-    """The part of a refusal that belongs in front of a person.
+#: Every sentence a refusal may produce, by code. `RULE_TEXT` covers the
+#: tournament rules; these are the ones this layer refuses on its own.
+REFUSAL_TEXT: dict[str, str] = dict(RULE_TEXT) | {
+    # --- 6xx: permission, account and form refusals
+    "FL-600": "That was refused. You may not be allowed to do it, or it no "
+              "longer applies — nothing was changed.",
+    "FL-601": "That ladder name is already held by somebody else.",
+    "FL-602": "Nothing to do — the form did not ask for anything.",
+    "FL-603": "Unknown role or grant in the form.",
+    "FL-604": "You cannot change your own row.",
+    "FL-605": "Only an owner can change roles.",
+}
 
-    Every caller of this catches a refusal the rules raised on purpose —
-    `AuthError`, or a `ValueError` from `ladder/` — and those messages exist to
-    be read: refusing with an explanation instead of a bare 400 is most of what
-    makes this usable. They are HTML-escaped at every sink.
+def needed_for(action: str) -> str:
+    """What the permission table says an action takes.
 
-    It goes through one function anyway, for two reasons. A length cap, so no
-    message can turn a card into a wall of text. And a single place that decides
-    what reaches a page, so widening an `except` somewhere does not quietly
-    start showing the inside of the program to whoever tripped over it.
+    Read from `REQUIRED_ROLE`, which is ours — so a page can still say "needs
+    Owner" without repeating an exception's words. Without this the honest
+    code-only message ("that was refused") left an admin guessing at what they
+    were missing, which is the reason refusals carry explanations at all.
+    """
+    role = REQUIRED_ROLE.get(action)
+    return f"(needs {role.label})" if role is not None else ""
+
+
+def by_code(code: str, extra: str = "") -> str:
+    """A refusal in the shape everything else uses: code, sentence, specifics."""
+    text = f"[{code}] {REFUSAL_TEXT[code]}"
+    return f"{text} {extra.strip()}" if extra.strip() else text
+
+
+#: Shown when a refusal arrives without a code, or with one nobody wrote down.
+UNKNOWN_REFUSAL = "FL-599"
+
+
+def refusal(e: BaseException, extra: str = "") -> str:
+    """The sentence for a refusal — a literal of ours, chosen by its code.
+
+    This is the whole boundary, and it is deliberately narrow. The *only* thing
+    read off the exception is `code`, it is looked up in a closed table, and what
+    comes back is a string written in this repository. No message, no arguments,
+    no traceback: nothing an exception carries can reach a page through here.
+
+    That matters because catching `ValueError` cannot tell a rule refusing from
+    the program leaking — `json.JSONDecodeError` is a `ValueError`, and a damaged
+    row would otherwise put "Expecting value: line 1 column 1" in front of a
+    tournament host. A code cannot do that, because a code that is not in the
+    table is not printed at all.
+
+    A route that wants to name the match or the entrant passes it as `extra`,
+    from its own variables — that is request input, which is a different thing
+    entirely from repeating what a library put in an exception, and it is escaped
+    where it is rendered.
+    """
+    code = getattr(e, "code", None)
+    if not isinstance(code, str) or code not in REFUSAL_TEXT:
+        code = UNKNOWN_REFUSAL
+    return by_code(code, extra)
+
+
+def detail(e: BaseException) -> str:
+    """The detailed refusal, for the desktop client rather than a web page.
+
+    Two audiences, two answers. A web page gets `refusal()` — a literal chosen by
+    code, because a page is where a library's exception text would do damage. The
+    client gets this, because it shows the sentence to a player and the whole
+    value is in the specifics: "you left a series early, so the queue is closed
+    to you for another 240s" is actionable and "[FL-600] that was refused" is not.
+
+    Restricted to the two types this project defines and always raises with text
+    written for a reader. Anything else falls back to the code table, so a
+    library's `ValueError` cannot get through this way either.
     """
     if isinstance(e, (AuthError, RuleError)):
         return str(e).strip()[:300]
-    # Anything else describes the inside of the program. `ValueError` is not
-    # good enough to test for: `json.JSONDecodeError` is one, and a column that
-    # is no longer valid JSON would otherwise put "Expecting value: line 1
-    # column 1" in front of a tournament host.
-    return "That did not work. Try again, or ask an admin to look."
+    return refusal(e)
 
 
 def guard(fn, *a, **kw):
@@ -185,7 +241,10 @@ def guard(fn, *a, **kw):
     try:
         return fn(*a, **kw)
     except AuthError as e:
-        raise HTTPException(403, reason(e)) from e
+        # `detail`, not `refusal`: this is the client's channel, and it catches
+        # only `AuthError` — a type this project defines and never raises with
+        # anything but a sentence meant to be read.
+        raise HTTPException(403, detail(e)) from e
 
 
 # -------------------------------------------------------------------- Login
@@ -724,7 +783,7 @@ def tournament_create(body: TournamentBody,
             ("rating", "listed", "random") else "rating",
             best_of=body.best_of if body.best_of in (1, 3, 5, 7) else None)
     except ValueError as e:
-        raise HTTPException(400, reason(e)) from e
+        raise HTTPException(400, detail(e)) from e
     tid = secrets.token_hex(6)
     store.create_tournament(tid, t, created_by=acc.id)
     return {"id": tid, "bracket": t.bracket()}
@@ -764,7 +823,7 @@ def tournament_report(tid: str, match_id: str, body: ResultBody,
         raise HTTPException(404, "no such match in this tournament") from e
     except ValueError as e:
         # Domain refusal: impossible score, or a winner who is not playing.
-        raise HTTPException(400, reason(e)) from e
+        raise HTTPException(400, detail(e)) from e
     store.record_result(tid, match_id, body.winner, body.score, body.match_keys)
     if t.finished:
         store.mark_finished(tid)
@@ -1343,7 +1402,7 @@ async def admin_relink(request: Request,
         else:
             return _admin_page(acc, "Nothing to do.")
     except AuthError as e:
-        return _admin_page(acc, reason(e))
+        return _admin_page(acc, refusal(e))
     store.save_account(target, granted_by=acc.id)
     # Out of the queue as well: being paired needs a proven Steam ID, and an
     # account that is already waiting would otherwise be matched without one.
@@ -1374,7 +1433,9 @@ async def admin_name(request: Request,
         else:
             auth.reject_ufer_name(acc, target)
     except AuthError as e:
-        return _admin_page(acc, reason(e))
+        # Which permission was short, looked up from our own table rather than
+        # taken from the exception.
+        return _admin_page(acc, refusal(e, needed_for("grant_role")))
     store.save_account(target, granted_by=acc.id)
     return RedirectResponse("/admin", status_code=303)
 
@@ -1399,20 +1460,25 @@ async def admin_save(request: Request,
     cannot leave an account half-changed.
     """
     acc = require(session_token(ladder_session, authorization))
-    guard(acc.require, "grant_permission")
+    try:
+        acc.require("grant_permission")
+    except AuthError as e:
+        # As a page, not a JSON 403: this route is only ever reached from the
+        # admin page, and an error document there loses everything on screen.
+        return _admin_page(acc, refusal(e, needed_for("grant_permission")))
     form = await request.form()
     target = auth.accounts.get(str(form.get("account") or ""))
     if target is None:
         raise HTTPException(404, "unknown account")
     if target.id == acc.id:
-        return _admin_page(acc, "You cannot change your own account here.")
+        return _admin_page(acc, by_code("FL-604"))
 
     role_name = str(form.get("role") or "")
     try:
         wanted_role = Role[role_name.upper()] if role_name else target.role
         wanted_grants = {Grant(v) for v in form.getlist("grant")}
     except (KeyError, ValueError):
-        return _admin_page(acc, "Unknown role or grant in the form.")
+        return _admin_page(acc, by_code("FL-603"))
 
     add = wanted_grants - target.grants
     drop = target.grants - wanted_grants
@@ -1424,7 +1490,9 @@ async def admin_save(request: Request,
         for g in drop:
             auth.revoke_permission(acc, target, g)
     except AuthError as e:
-        return _admin_page(acc, reason(e))
+        # Which permission was short, looked up from our own table rather than
+        # taken from the exception.
+        return _admin_page(acc, refusal(e, needed_for("grant_role")))
     store.save_account(target, granted_by=acc.id)
     return RedirectResponse("/admin", status_code=303)
 
@@ -1637,14 +1705,14 @@ async def tournaments_page_create(request: Request,
             name=name, entrants=entrants))
 
     if not name:
-        return again("Give the tournament a name.")
+        return again(by_code("FL-509"))
     try:
         # Opened as a plan: the entrant list is filled in from here on, and
         # the two-entrant minimum applies when it starts.
         t = Tournament(name, _parse_entrants(entrants), mode=mode,
                        seeding=seeding, best_of=best_of, planning=True)
     except ValueError as e:
-        return again(reason(e))
+        return again(refusal(e))
     tid = secrets.token_hex(6)
     # Created as a plan, not as a finished bracket: a host adds people as they
     # sign up and looks at what comes out before anything is fixed.
@@ -1741,9 +1809,9 @@ async def bracket_page_rename(tid: str, request: Request,
     try:
         t.rename(seat, name)
     except KeyError:
-        return _bracket_page(acc, tid, f"There is no entrant {seat} here.")
+        return _bracket_page(acc, tid, by_code("FL-510", f"(#{seat})"))
     except ValueError as e:
-        return _bracket_page(acc, tid, reason(e))
+        return _bracket_page(acc, tid, refusal(e, f"(#{seat})"))
     store.rename_participant(tid, seat, name.strip())
     return RedirectResponse(path_for("manage", "tournaments", tid),
                             status_code=303)
@@ -1777,9 +1845,12 @@ async def bracket_page_report(tid: str, request: Request,
     try:
         t.report(match_id, winner, score)
     except KeyError:
-        return _bracket_page(acc, tid, "There is no such match in this bracket.")
+        return _bracket_page(acc, tid, by_code("FL-511", f"({match_id})"))
     except ValueError as e:
-        return _bracket_page(acc, tid, reason(e))
+        # The match and the winner come from the form this route just read, not
+        # from the exception — so the page still says which one it was about.
+        return _bracket_page(acc, tid,
+                             refusal(e, f"({match_id}, {winner!r})"))
     store.record_result(tid, match_id, winner, score)
     if t.finished:
         store.mark_finished(tid)

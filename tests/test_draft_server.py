@@ -1310,7 +1310,7 @@ def four_players():
     for i, name in enumerate(("A1", "A2", "B1", "B2"), start=1):
         a = auth.login_discord(f"t{i}", name)
         a.role = Role.PLAYER
-        auth.attach_steam(a, f"7656119955000{i:04d}")
+        auth.attach_steam(a, f"7656119900000{100 + i:04d}")
         a.ufer_name = name
         auth.set_tracking_consent(a, True)
         out.append(a)
@@ -1344,7 +1344,7 @@ def test_a_fifth_player_is_refused_with_the_number():
     extra = auth.login_discord("t9", "Spare")
     from server.auth import Role
     extra.role = Role.PLAYER
-    auth.attach_steam(extra, "76561199559999999")
+    auth.attach_steam(extra, "76561199000009999")
     auth.set_tracking_consent(extra, True)
     try:
         svc.join(extra, s.join_code)

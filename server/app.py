@@ -59,7 +59,30 @@ from .store import Store
 #: for free. Off unless asked for: LADDER_DOCS=1.
 _DOCS = os.environ.get("LADDER_DOCS") == "1"
 
-app = FastAPI(title="Forts Ladder", version="0.1.0",
+def _version() -> str:
+    """What is running, from the deploy rather than from a literal.
+
+    A hand-typed version is a version that stops being true at the first release
+    somebody bumps in a hurry — this one said 0.1.0 through eleven tags. So it is
+    read from a VERSION file the deploy stamps out of `git describe`, with the
+    environment able to override for anything that starts the app another way.
+
+    "dev" when neither exists, which is honest: a checkout running straight out
+    of the working tree has no version, and claiming one would be worse.
+    """
+    if (env := os.environ.get("LADDER_VERSION", "").strip()):
+        return env
+    stamp = os.path.join(os.path.dirname(__file__), "..", "VERSION")
+    try:
+        with open(stamp, encoding="utf-8") as fh:
+            return fh.read().strip() or "dev"
+    except OSError:
+        return "dev"
+
+
+VERSION = _version()
+
+app = FastAPI(title="Forts Ladder", version=VERSION,
               docs_url="/docs" if _DOCS else None,
               redoc_url="/redoc" if _DOCS else None,
               openapi_url="/openapi.json" if _DOCS else None)
@@ -1961,5 +1984,11 @@ def ranking_reload(ladder_session: str | None = Cookie(None),
 
 @app.get("/health")
 def health():
-    return {"ok": True, "accounts": len(auth.accounts),
+    """Up, and *which* code is up.
+
+    Without the version, a deploy could only be confirmed as far as "the service
+    restarted" — not as "the service restarted with what I just sent", which is
+    the only part worth checking.
+    """
+    return {"ok": True, "version": VERSION, "accounts": len(auth.accounts),
             "live_matches": len(live.matches)}

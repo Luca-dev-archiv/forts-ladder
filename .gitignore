@@ -27,6 +27,11 @@ data/server.txt
 data/seed/
 matches/
 
+# Stamped by deploy/deploy.sh out of `git describe`, so the running server can
+# say which code it is. A committed copy would be a version number that is right
+# once and wrong from the next commit on.
+VERSION
+
 # Backups lobby_config.py writes
 *.backup_*
 

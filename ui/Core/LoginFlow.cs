@@ -262,6 +262,16 @@ public sealed class LoginFlow
     /// </summary>
     public Task<PresenceDto?> PingAsync() => _api.PostAsync<PresenceDto>("/presence");
 
+    /// <summary>
+    /// Send one game's replay up, so a dispute has something to look at.
+    ///
+    /// Kept for a week on the server and then deleted. The point is a referee
+    /// being able to watch the game somebody complained about — not an archive,
+    /// which is a different thing from what the community agreed to.
+    /// </summary>
+    public Task<bool> UploadReplayAsync(string resultId, int game, string path)
+        => _api.UploadAsync($"/results/{resultId}/replay?index={game}", path);
+
     /// <summary>Your own reported series, so a case can be opened against one
     /// long after this client reported it.</summary>
     public Task<MyResultsDto?> MyResultsAsync() =>

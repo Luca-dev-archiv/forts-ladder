@@ -120,6 +120,10 @@ REQUIRED_ROLE: dict[str, Role] = {
     "create_tournament": Role.ADMIN,
     "run_tournament": Role.ADMIN,
     "report_any_match": Role.ADMIN,
+    # Looking at a disputed series and taking its rating back. Admin by rank, or
+    # the referee grant — the people who would have to arbitrate it anyway, and
+    # the same set that may already watch a rated match.
+    "review_results": Role.ADMIN,
     "link_other_account": Role.ADMIN,
     "override_observer_lock": Role.ADMIN,
     "grant_role": Role.OWNER,

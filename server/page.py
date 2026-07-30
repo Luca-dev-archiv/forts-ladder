@@ -360,7 +360,8 @@ def admin(*, accounts: list[dict], grants: list[str], my_id: str,
     for f in (flags or []):
         reported += (
             "<div class=card>"
-            f"<div class=row><span class=val>{html.escape(f['played_at'])}</span>"
+            f"<div class=row><a class=val href='/manage/review/"
+            f"{html.escape(f['id'])}'>{html.escape(f['played_at'])}</a>"
             + ("<span class=ok>rated</span>" if f["rated"]
                else "<span class=warn>not rated</span>")
             + "</div>"
@@ -447,6 +448,105 @@ def tournaments(*, listing: list[dict], is_admin: bool,
           "<button>Create</button></form></div>" if can_create else "")
         + (f"<p class=label>{len(listing)} tournament(s)</p>" + rows if listing
            else "<div class=card><p>None yet.</p></div>"))
+
+
+def review(*, series: dict, players: list[dict], replays: list[str],
+           deviations: dict, is_admin: bool, error: str = "",
+           keep_days: int = 7) -> str:
+    """One reported series, with everything there is to know about it.
+
+    The admin page used to show a flagged series as a date, a score and a
+    sentence — nothing anybody could act on. Somebody asking for a human got a
+    human with no facts and no lever.
+
+    Everything here is a fact the server already held and was not showing: who
+    played, on which side, whether each is trackable, the lobby, why it was not
+    rated, what deviated from the draft, and the replays. The one action is
+    annulling, which needs a reason typed in.
+    """
+    rows = ""
+    for p in players:
+        rows += (
+            "<div class=row>"
+            f"<span class=val>{html.escape(p['name'])}</span>"
+            f"<span class=muted>side {html.escape(str(p['side']))}"
+            + ("" if p["trackable"] else " · not trackable")
+            + "</span></div>")
+
+    why = "".join(
+        f"<div class=row><span class=muted>not rated</span>"
+        f"<span class=warn>{html.escape(x)}</span></div>"
+        for x in series.get("reasons") or [])
+
+    off = ""
+    for game, lines in sorted(deviations.items()):
+        off += ("<div class=row>"
+                f"<span class=muted>game {html.escape(str(game))}</span>"
+                f"<span class=warn>{html.escape('; '.join(lines))}</span>"
+                "</div>")
+    if off:
+        off = ("<p class=label>Played differently from the draft</p>"
+               f"<div class=card>{off}</div>")
+
+    files = ""
+    for name in replays:
+        files += ("<div class=row><span class=muted>"
+                  f"{html.escape(name)}</span>"
+                  f"<a class=val href='/manage/review/{html.escape(series['id'])}"
+                  f"/replay/{html.escape(name)}'>download</a></div>")
+    files = (f"<div class=card>{files}</div>" if files else
+             "<div class=card><p class=sub style='margin:0'>No replays were "
+             "uploaded for this series. The clients send them when it is "
+             "reported, and they are deleted after "
+             f"{keep_days} days.</p></div>")
+
+    annulled = series.get("annulled_by")
+    action = ""
+    if is_admin:
+        if annulled:
+            action = (
+                "<div class=card><p class=label>This rating was taken back</p>"
+                f"<p class=sub>{html.escape(series.get('annul_note') or '')}</p>"
+                f"<form method=post action='/manage/review/"
+                f"{html.escape(series['id'])}'>"
+                "<button class='btn sec' name=do value=reinstate>"
+                "Put it back</button></form></div>")
+        else:
+            action = (
+                "<div class=card><p class=label>Take the rating back</p>"
+                "<p class=sub>The series stays on record and stays visible — "
+                "both players are entitled to see that somebody decided this, "
+                "and why. The standings are recomputed without it.</p>"
+                f"<form method=post action='/manage/review/"
+                f"{html.escape(series['id'])}'>"
+                "<p>" + _input("note", "Why", "", width="320px") + "</p>"
+                "<button name=do value=annul>Annul this series</button>"
+                "</form></div>")
+
+    return _shell(
+        "<h1>Series review</h1>"
+        f"<p class=sub>{html.escape(series['played_at'])} · "
+        f"{series['games']} games · "
+        + ("<span class=warn>not rated</span>" if not series["rated"]
+           else "<span class=ok>rated</span>")
+        + "</p>"
+        + _nav(is_admin, True) + _error(error)
+        + "<p><a class='btn sec' href='/admin'>Back to admin</a></p>"
+        + "<p class=label>Who played</p>"
+        + f"<div class=card>{rows}</div>"
+        + "<p class=label>What the ladder recorded</p>"
+        + "<div class=card>"
+        + f"<div class=row><span class=muted>lobby</span><span>"
+        + html.escape(str(series.get("lobby_id") or "—")) + "</span></div>"
+        + f"<div class=row><span class=muted>score</span><span>"
+        + f"{series['score_low']} of {series['games']}</span></div>"
+        + (f"<div class=row><span class=muted>player asked for review</span>"
+           f"<span class=warn>{html.escape(series.get('flag_note') or 'yes')}"
+           "</span></div>" if series.get("flagged") else "")
+        + why + "</div>"
+        + off
+        + "<p class=label>Replays</p>" + files
+        + action)
 
 
 def planner(*, name: str, mode: str, best_of: int, seeding: str,

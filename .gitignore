@@ -14,6 +14,9 @@ data/recorded/
 data/identity.json
 # Who agreed to be tracked — a list of real Steam IDs, so the same applies.
 data/consent.json
+# Replays uploaded for review. Somebody else's recording of somebody else's
+# match, held for a week so a dispute can be settled — never something to commit.
+data/replays/
 # Any database, not just the default name: the sidecar -wal/-shm files are
 # just as revealing and easy to miss.
 data/*.sqlite*

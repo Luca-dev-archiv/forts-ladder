@@ -97,12 +97,36 @@ public partial class MainWindow
         }
 
         _resultIds[s.Id] = res.Id;
+        // The replays go up with it. A referee reading "the wrong commander was
+        // loaded in game 3" can then watch game 3, which is the difference
+        // between a report and a complaint.
+        _ = UploadReplaysAsync(res.Id, series);
         // Said either way. "Recorded but not rated" is information a player
         // needs — it is what they would open a case about.
         ShowDraftError(res.Rated
             ? Loc.T("report.rated")
             : ErrorCodes.Text(ErrorCodes.GameNotCounted,
                               string.Join("; ", res.Reasons)));
+    }
+
+    /// <summary>
+    /// Send this series' replays to the server.
+    ///
+    /// Best effort and deliberately quiet: a failed upload must not make a
+    /// reported series look unreported. The server keeps them for a week, caps
+    /// the size and names the stored file itself, so nothing here needs to be
+    /// careful on its behalf.
+    /// </summary>
+    private async Task UploadReplaysAsync(string resultId, Core.Series series)
+    {
+        var (files, _) = series.ReplayFiles();
+        var game = 0;
+        foreach (var f in files)
+        {
+            game++;
+            if (!f.Exists) continue;
+            await _login.UploadReplayAsync(resultId, game, f.FullName);
+        }
     }
 
     /// <summary>

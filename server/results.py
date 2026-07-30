@@ -26,6 +26,7 @@ nobody.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass, field
 
@@ -49,6 +50,16 @@ class Reported:
     rated: bool = True
     reasons: list[str] = field(default_factory=list)
     replays: list[str] = field(default_factory=list)
+    #: Taken back by a reviewer: who, when and why.
+    #:
+    #: Not a deletion. The row stays and stays visible, because "this did not
+    #: count" is a decision somebody made and the person it was made about is
+    #: entitled to see it. `events()` skips it, and the standings are recomputed
+    #: from what is left — the same mechanism that makes withdrawing consent
+    #: retroactive.
+    annulled_by: str | None = None
+    annulled_at: float | None = None
+    annul_note: str = ""
     #: A player asked for a human to look at this one.
     #:
     #: The reason a series is stored even when it cannot be rated: "it did not
@@ -102,8 +113,17 @@ class ResultService:
             raise AuthError("you are not in this series")
 
         reasons = self._why_not(lobby_id, sides)
-        # Derived, not drawn: same draft, same row.
-        rid = f"d-{draft_id}" if draft_id else self._store.next_result_id()
+        # Derived, not drawn: same series, same row.
+        #
+        # The draft id when there is one — the server handed it to both clients,
+        # so it is the one thing they cannot disagree about. Failing that, a hash
+        # of what identifies a series anyway: the lobby, the kickoff and who
+        # played. Either way two reports of one series collide on the primary
+        # key, where a random id made them two rows and two rating changes.
+        rid = f"d-{draft_id}" if draft_id else "s-" + hashlib.sha256(
+            "|".join([str(lobby_id), played_at,
+                      *sorted(f"{k}:{v}" for k, v in sides.items())])
+            .encode()).hexdigest()[:16]
         r = Reported(id=rid, lobby_id=lobby_id,
                      sides={str(k): int(v) for k, v in sides.items()},
                      games=games, score_low=score_low, played_at=played_at,
@@ -128,6 +148,54 @@ class ResultService:
         r.flag_note = (note or "").strip()[:500]
         self._store.update_result_flag(r)
         return r
+
+    def annul(self, actor: Account, result_id: str, note: str) -> "Reported":
+        """Take a series' rating back.
+
+        The one thing a reviewer can do that a player cannot, and the reason a
+        player's flag is worth anything: without this, "please look at this" ends
+        in somebody agreeing with you and being unable to act.
+
+        A note is required. A rating that vanished for no recorded reason is
+        indistinguishable from a bug, and the two players will ask.
+        """
+        actor.require("review_results")
+        note = (note or "").strip()
+        if not note:
+            raise AuthError("say why — a rating taken back without a reason "
+                            "cannot be told apart from a bug")
+        rows = {x.id: x for x in self._store.load_results()}
+        row = rows.get(result_id)
+        if row is None:
+            raise AuthError("unknown series")
+        if row.annulled_by is not None:
+            return row
+        row.annulled_by = actor.id
+        row.annulled_at = time.time()
+        row.annul_note = note[:500]
+        row.rated = False
+        row.reasons = list(row.reasons) + [f"annulled: {row.annul_note}"]
+        self._store.update_result_review(row)
+        return row
+
+    def reinstate(self, actor: Account, result_id: str) -> "Reported":
+        """Undo an annulment, for when the reviewer was the one who was wrong."""
+        actor.require("review_results")
+        rows = {x.id: x for x in self._store.load_results()}
+        row = rows.get(result_id)
+        if row is None:
+            raise AuthError("unknown series")
+        row.annulled_by = None
+        row.annulled_at = None
+        row.annul_note = ""
+        # Rateable again only if nothing *else* was standing in the way.
+        row.reasons = [x for x in row.reasons if not x.startswith("annulled:")]
+        row.rated = not row.reasons
+        self._store.update_result_review(row)
+        return row
+
+    def one(self, result_id: str) -> "Reported | None":
+        return {x.id: x for x in self._store.load_results()}.get(result_id)
 
     def flagged(self) -> list["Reported"]:
         """Everything waiting for a human, newest first."""

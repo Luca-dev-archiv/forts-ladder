@@ -167,11 +167,9 @@ CREATE TABLE IF NOT EXISTS results (
     created_at  REAL NOT NULL
 );
 
--- One series reported twice is one series. Two clients in the same match both
--- report it, on purpose — whichever is running wins — so the pair of lobby and
--- kickoff time is what makes the second one a no-op.
-CREATE UNIQUE INDEX IF NOT EXISTS results_once
-    ON results (lobby_id, played_at);
+-- No unique index on (lobby_id, played_at) any more; see `_migrate`, which
+-- drops the one older databases still have. Identity is the draft id, which is
+-- in the primary key.
 """
 
 
@@ -218,6 +216,12 @@ class Store:
         "results": [
             ("flagged", "INTEGER NOT NULL DEFAULT 0"),
             ("flag_note", "TEXT NOT NULL DEFAULT ''"),
+            # A rating taken back by a reviewer. Recorded rather than applied
+            # silently: the two players are entitled to know that somebody
+            # decided this, who, and why.
+            ("annulled_by", "TEXT"),
+            ("annulled_at", "REAL"),
+            ("annul_note", "TEXT NOT NULL DEFAULT ''"),
         ],
         "tournaments": [
             # A tournament that is still being built. Entrants can be added,
@@ -264,6 +268,17 @@ class Store:
     }
 
     def _migrate(self) -> None:
+        # A series used to be identified by (lobby_id, played_at) through a
+        # unique index. It was the wrong pair twice over. Only a *host's* log
+        # carries a lobby id, so a guest's report had NULL there — and NULLs are
+        # distinct in a SQLite unique index, so the two reports of one series
+        # never met. Meanwhile two genuinely different series in the same lobby
+        # at the same recorded second silently discarded the second one.
+        #
+        # The identity is the draft id now, which the server itself handed to
+        # both clients and which is the primary key. The old index can only lose
+        # data from here on.
+        self.db.execute("DROP INDEX IF EXISTS results_once")
         for table, columns in self._ADDED_COLUMNS.items():
             have = {r["name"] for r in
                     self.db.execute(f"PRAGMA table_info({table})")}
@@ -407,6 +422,83 @@ class Store:
             (int(r.flagged), r.flag_note, r.id))
         self.db.commit()
 
+    def update_result_review(self, r) -> None:
+        """Write a reviewer's decision. `rated` moves with it, which is what
+        makes the standings follow — they are recomputed from the rows that still
+        count, exactly as they are when somebody withdraws consent."""
+        self.db.execute(
+            "UPDATE results SET annulled_by = ?, annulled_at = ?, "
+            "annul_note = ?, rated = ?, reasons = ? WHERE id = ?",
+            (r.annulled_by, r.annulled_at, r.annul_note, int(r.rated),
+             json.dumps(r.reasons), r.id))
+        self.db.commit()
+
+    # ------------------------------------------------------------- Replays
+    #: How long an uploaded replay is kept.
+    #:
+    #: Long enough for a dispute to be looked at, short enough that the server is
+    #: not quietly accumulating everybody's match history. The clearance from the
+    #: game's community was for tracking *results*; recordings are a different
+    #: thing and are not kept as if they were the same.
+    REPLAY_KEEP_S = 7 * 24 * 3600
+    #: One replay, and one series' worth. A .fwr of a long duel is tens of
+    #: kilobytes, so these are generous by an order of magnitude and still stop
+    #: an upload endpoint being free storage.
+    REPLAY_MAX_BYTES = 4 * 1024 * 1024
+    REPLAY_MAX_PER_SERIES = 8
+
+    def replay_dir(self, result_id: str) -> "Path":
+        """Where a series' replays live.
+
+        The id is used as a single path component and nothing else is taken from
+        the caller — the uploaded filename never reaches the filesystem, because
+        a name is the shortest route out of a directory there is.
+        """
+        from pathlib import Path as _P
+        safe = "".join(c for c in result_id if c.isalnum() or c in "-_")[:64]
+        return _P(self.path).parent / "replays" / (safe or "unknown")
+
+    def save_replay(self, result_id: str, index: int, data: bytes) -> str:
+        """Store one replay under a name this server chose."""
+        d = self.replay_dir(result_id)
+        d.mkdir(parents=True, exist_ok=True)
+        name = f"game{int(index):02d}.fwr"
+        (d / name).write_bytes(data)
+        return name
+
+    def replays_for(self, result_id: str) -> list[str]:
+        d = self.replay_dir(result_id)
+        try:
+            return sorted(p.name for p in d.iterdir() if p.is_file())
+        except OSError:
+            return []
+
+    def prune_replays(self, now: float | None = None) -> int:
+        """Delete anything past its keep-by date.
+
+        Called from the pages that list replays, so the retention is enforced by
+        somebody looking rather than by a timer that can be dead without anybody
+        noticing.
+        """
+        import shutil
+        import time as _t
+        from pathlib import Path as _P
+        root = _P(self.path).parent / "replays"
+        cutoff = (now or _t.time()) - self.REPLAY_KEEP_S
+        gone = 0
+        try:
+            entries = list(root.iterdir())
+        except OSError:
+            return 0
+        for d in entries:
+            try:
+                if d.stat().st_mtime < cutoff:
+                    shutil.rmtree(d, ignore_errors=True)
+                    gone += 1
+            except OSError:
+                continue
+        return gone
+
     def load_results(self) -> list:
         from .results import Reported
         return [Reported(
@@ -416,7 +508,9 @@ class Store:
             played_at=r["played_at"], reported_by=r["reported_by"],
             rated=bool(r["rated"]), reasons=_stored_json(r["reasons"], []),
             replays=_stored_json(r["replays"], []), created_at=r["created_at"],
-            flagged=bool(r["flagged"]), flag_note=r["flag_note"] or "")
+            flagged=bool(r["flagged"]), flag_note=r["flag_note"] or "",
+            annulled_by=r["annulled_by"], annulled_at=r["annulled_at"],
+            annul_note=r["annul_note"] or "")
             for r in self.db.execute(
                 "SELECT * FROM results ORDER BY played_at, created_at")]
 

@@ -833,6 +833,111 @@ def test_the_codes_in_the_docs_match_the_codes_in_the_code():
     assert not undocumented, f"codes missing from the docs: {undocumented}"
 
 
+# ------------------------------------------------- Replays for a review
+# An upload endpoint is free storage and a path-traversal hole until it is not,
+# so the interesting tests here are the refusals.
+def reported_series(w: World, headers: dict, steam_id: str,
+                    other: str = "76561199000000777") -> str:
+    # A fresh draft id per call. It is the identity of a series now, so a shared
+    # one would make every test in this file report the *same* series — which is
+    # exactly what it is for, and useless here.
+    r = w.client.post("/results", headers=headers, json={
+        "sides": {steam_id: 1, other: 2},
+        "games": 2, "score_low": 2,
+        "played_at": "2026-07-30T21:00:00",
+        "lobby_id": "4242", "draft_id": f"probe-{next(_ids)}"})
+    assert r.status_code == 200, r.text[:200]
+    return r.json()["id"]
+
+
+def test_only_a_player_in_the_series_may_upload_a_replay():
+    w = World()
+    player, ph = w.person("Player")
+    _, oh = w.person("Outsider")
+    rid = reported_series(w, ph, player.steam_id)
+
+    files = {"file": ("whatever.fwr", b"replay bytes",
+                      "application/octet-stream")}
+    ok = w.client.post(f"/results/{rid}/replay?index=1", headers=ph, files=files)
+    assert ok.status_code == 200, ok.text[:200]
+
+    files = {"file": ("whatever.fwr", b"replay bytes",
+                      "application/octet-stream")}
+    no = w.client.post(f"/results/{rid}/replay?index=1", headers=oh, files=files)
+    assert no.status_code == 403, no.status_code
+
+
+def test_the_stored_name_is_the_servers_not_the_uploaders():
+    w = World()
+    player, ph = w.person("Player")
+    rid = reported_series(w, ph, player.steam_id)
+    files = {"file": ("../../etc/passwd", b"x", "application/octet-stream")}
+    r = w.client.post(f"/results/{rid}/replay?index=3", headers=ph, files=files)
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["stored"] == "game03.fwr", r.json()
+
+
+def test_an_oversized_replay_is_refused():
+    w = World()
+    player, ph = w.person("Player")
+    rid = reported_series(w, ph, player.steam_id)
+    big = b"x" * (app_mod.store.REPLAY_MAX_BYTES + 10)
+    files = {"file": ("big.fwr", big, "application/octet-stream")}
+    r = w.client.post(f"/results/{rid}/replay?index=1", headers=ph, files=files)
+    assert r.status_code == 413, r.status_code
+
+
+def test_only_a_reviewer_may_read_a_replay_back():
+    """The players uploaded it; watching somebody's game afterwards is a
+    reviewer's job, and the page it hangs off says so too."""
+    w = World()
+    player, ph = w.person("Player")
+    _, admin = w.person("Ref", Role.ADMIN)
+    rid = reported_series(w, ph, player.steam_id)
+    files = {"file": ("g.fwr", b"bytes", "application/octet-stream")}
+    w.client.post(f"/results/{rid}/replay?index=1", headers=ph, files=files)
+
+    assert w.client.get(f"/manage/review/{rid}/replay/game01.fwr",
+                        headers=admin).status_code == 200
+    assert w.client.get(f"/manage/review/{rid}/replay/game01.fwr",
+                        headers=ph).status_code == 403
+    # And a name that is not there is not opened, whatever it points at.
+    assert w.client.get(f"/manage/review/{rid}/replay/..%2F..%2Fladder.sqlite",
+                        headers=admin).status_code == 404
+
+
+def test_the_review_page_shows_what_a_reviewer_needs():
+    w = World()
+    player, ph = w.person("Player")
+    _, admin = w.person("Ref", Role.ADMIN)
+    rid = reported_series(w, ph, player.steam_id)
+    body = w.client.get(f"/manage/review/{rid}", headers=admin).text
+    assert "Series review" in body
+    assert "Annul this series" in body
+    # The player's ladder name, never their Steam ID: this page is for settling
+    # a dispute, not for looking people up.
+    assert player.steam_id not in body
+
+
+def test_annulling_from_the_page_takes_the_rating_back():
+    w = World()
+    player, ph = w.person("Player")
+    _, admin = w.person("Ref", Role.ADMIN)
+    rid = reported_series(w, ph, player.steam_id)
+
+    r = w.client.post(f"/manage/review/{rid}", headers=admin,
+                      follow_redirects=False,
+                      data={"do": "annul", "note": "wrong map in game 2"})
+    assert r.status_code == 303, r.text[:200]
+    row = app_mod.results.one(rid)
+    assert not row.rated and "wrong map" in row.annul_note
+
+    # And a player cannot.
+    r = w.client.post(f"/manage/review/{rid}", headers=ph,
+                      data={"do": "annul", "note": "no"})
+    assert r.status_code == 403, r.status_code
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

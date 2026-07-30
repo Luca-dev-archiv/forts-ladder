@@ -329,6 +329,49 @@ public sealed class ApiClient
         }
     }
 
+    /// <summary>
+    /// Upload one file as multipart form data.
+    ///
+    /// Used for replays. The server names the stored file itself and caps the
+    /// size, so nothing here has to be trusted — but the *reason* it is a
+    /// separate method rather than a JSON body is size: a replay base64'd into
+    /// JSON is a third larger for no benefit.
+    /// </summary>
+    public async Task<bool> UploadAsync(string path, string filePath,
+                                        string field = "file")
+    {
+        LastError = null;
+        if (!Configured) return false;
+        try
+        {
+            using var content = new MultipartFormDataContent();
+            var bytes = await File.ReadAllBytesAsync(filePath);
+            var part = new ByteArrayContent(bytes);
+            part.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue(
+                    "application/octet-stream");
+            content.Add(part, field, Path.GetFileName(filePath));
+
+            using var req = new HttpRequestMessage(HttpMethod.Post,
+                                                   $"{BaseUrl}{path}");
+            if (Token is not null)
+                req.Headers.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue(
+                        "Bearer", Token);
+            req.Content = content;
+            using var r = await _http.SendAsync(req);
+            if (r.IsSuccessStatusCode) return true;
+            LastError = Describe(r.StatusCode, await r.Content.ReadAsStringAsync());
+            return false;
+        }
+        catch (Exception ex) when (ex is HttpRequestException
+                                      or TaskCanceledException or IOException)
+        {
+            LastError = Unreachable(ex);
+            return false;
+        }
+    }
+
     public Task<bool> PingAsync() => GetAsync<Dictionary<string, JsonElement>>("/health")
         .ContinueWith(t => t.Result is not null);
 }

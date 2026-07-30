@@ -13,6 +13,7 @@ tracked. A series that fails either is kept and marked, never silently dropped
 
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -297,6 +298,122 @@ def test_a_rated_report_is_not_replaced_by_a_second_one():
     assert first.id == second.id
     stored = {r.id: r for r in w.store.load_results()}[first.id]
     assert stored.score_low == 2, "the second arrival overwrote the first"
+
+
+# ------------------------------------------------------------------ Reviewing
+# A flagged series used to reach an admin as a date, a score and a sentence.
+# Nothing to act on, and no way to take a rating back — so "please look at this"
+# ended in somebody agreeing with you and being unable to do anything.
+def reviewer(w, name="Alice"):
+    """Somebody who may review. Made from an existing account, so the roster
+    stays the one the ratings are computed from."""
+    acc = w.people[name]
+    acc.role = Role.ADMIN
+    return acc
+
+
+def test_annulling_takes_the_rating_back_and_says_who_and_why():
+    w = World()
+    w.store.sanction_lobby(111)
+    r = w.duel(draft_id="abc")
+    assert r.rated and w.rating("Alice") > 1000
+
+    ref = reviewer(w, "Carol") if "Carol" in w.people else reviewer(w)
+    row = w.results.annul(ref, r.id, "game 3 was played on the wrong map")
+    assert not row.rated
+    assert row.annulled_by == ref.id and row.annulled_at
+    assert "wrong map" in row.annul_note
+
+    # Retroactive for free: the standings are recomputed from what still counts,
+    # which is the same mechanism that makes withdrawing consent retroactive.
+    assert w.rating("Alice") is None or w.rating("Alice") == 1000
+
+
+def test_an_annulment_needs_a_reason():
+    """A rating that vanished for no recorded reason cannot be told apart from a
+    bug, and the two players will ask."""
+    w = World()
+    w.store.sanction_lobby(111)
+    r = w.duel(draft_id="abc")
+    ref = reviewer(w)
+    try:
+        w.results.annul(ref, r.id, "   ")
+    except AuthError as e:
+        assert "say why" in str(e), str(e)
+    else:
+        raise AssertionError("a rating was taken back with no reason")
+
+
+def test_a_player_cannot_annul_their_own_loss():
+    w = World()
+    w.store.sanction_lobby(111)
+    r = w.duel(draft_id="abc")
+    loser = w.people["Bob"]
+    loser.role = Role.PLAYER
+    try:
+        w.results.annul(loser, r.id, "I did not like it")
+    except AuthError as e:
+        assert "review_results" in str(e), str(e)
+    else:
+        raise AssertionError("a player annulled a series they played in")
+
+
+def test_an_annulment_survives_a_reload_and_can_be_undone():
+    w = World()
+    w.store.sanction_lobby(111)
+    r = w.duel(draft_id="abc")
+    ref = reviewer(w)
+    w.results.annul(ref, r.id, "wrong commander")
+
+    reloaded = {x.id: x for x in w.store.load_results()}[r.id]
+    assert not reloaded.rated and reloaded.annul_note == "wrong commander"
+
+    back = w.results.reinstate(ref, r.id)
+    assert back.rated, back.reasons
+    assert back.annulled_by is None
+
+
+def test_reinstating_does_not_rate_something_that_was_never_rateable():
+    """Putting an annulment back must not paper over the reason it could not be
+    rated in the first place."""
+    w = World()
+    r = w.duel(lobby=999, draft_id="abc")        # unsanctioned lobby
+    assert not r.rated
+    ref = reviewer(w)
+    w.results.annul(ref, r.id, "and also this")
+    back = w.results.reinstate(ref, r.id)
+    assert not back.rated, back.reasons
+    assert any("not set up by this ladder" in x for x in back.reasons)
+
+
+# -------------------------------------------------------------------- Replays
+def test_a_replay_is_stored_under_a_name_the_server_chose():
+    """Nothing the client sends becomes a path. A filename from a request is the
+    shortest route out of a directory there is."""
+    w = World()
+    name = w.store.save_replay("d-abc", 2, b"fake replay bytes")
+    assert name == "game02.fwr"
+    assert w.store.replays_for("d-abc") == ["game02.fwr"]
+
+    # A hostile series id cannot climb out either.
+    hostile = w.store.replay_dir("../../etc/passwd")
+    assert ".." not in str(hostile), hostile
+
+
+def test_replays_are_deleted_after_the_keep_window():
+    w = World()
+    w.store.save_replay("d-abc", 1, b"x")
+    assert w.store.replays_for("d-abc")
+    # A week and a minute later.
+    w.store.prune_replays(now=time.time() + w.store.REPLAY_KEEP_S + 60)
+    assert w.store.replays_for("d-abc") == [], "a replay outlived its week"
+
+
+def test_replays_inside_the_window_are_kept():
+    w = World()
+    w.store.save_replay("d-abc", 1, b"x")
+    w.store.prune_replays(now=time.time() + w.store.REPLAY_KEEP_S - 60)
+    assert w.store.replays_for("d-abc") == ["game01.fwr"]
 
 
 def _run_all() -> int:

@@ -31,7 +31,8 @@ import secrets
 from urllib.parse import quote
 
 from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1409,6 +1410,135 @@ def _admin_page(acc, error: str = "") -> HTMLResponse:
         my_id=acc.id, pools=queue_pools(), ranking_count=len(ranking.players),
         may_set_roles=acc.may("grant_role"), error=error, claims=claims,
         flags=flags))
+
+
+def _review_page(acc, result_id: str, error: str = "") -> HTMLResponse:
+    row = results.one(result_id)
+    if row is None:
+        raise HTTPException(404, "no such series")
+    # Enforced by somebody looking, rather than by a timer that can be dead
+    # without anybody noticing.
+    store.prune_replays()
+
+    by_steam = {x.steam_id: x for x in auth.accounts.values() if x.steam_id}
+    players = []
+    for steam_id, side in sorted(row.sides.items(), key=lambda kv: kv[1]):
+        who = by_steam.get(steam_id)
+        players.append({
+            # A ladder name where there is one. Never the Steam ID: this page is
+            # for deciding a dispute, not for looking people up.
+            "name": (who.ufer_name or who.discord_name or "unknown") if who
+                    else "not linked to any account",
+            "side": side,
+            "trackable": bool(who and who.trackable),
+        })
+
+    devs = {}
+    for s in drafts.sessions.values():
+        if row.id == f"d-{s.id}":
+            devs = {g: list(v) for g, v in s.deviations.items()}
+            break
+
+    return HTMLResponse(page.review(
+        series={"id": row.id, "played_at": row.played_at, "games": row.games,
+                "score_low": row.score_low, "rated": row.rated,
+                "reasons": row.reasons, "flagged": row.flagged,
+                "flag_note": row.flag_note, "lobby_id": row.lobby_id,
+                "annulled_by": row.annulled_by,
+                "annul_note": row.annul_note},
+        players=players, replays=store.replays_for(row.id),
+        deviations=devs, is_admin=acc.may("review_results"), error=error,
+        keep_days=round(store.REPLAY_KEEP_S / 86400)))
+
+
+@app.get("/manage/review/{result_id}", response_class=HTMLResponse)
+def review_page(result_id: str, ladder_session: str | None = Cookie(None),
+                authorization: str | None = Header(None)):
+    """One reported series, with everything there is to know about it."""
+    acc = current(session_token(ladder_session, authorization))
+    if acc is None:
+        return _login_first(path_for("manage", "review", result_id))
+    guard(acc.require, "review_results")
+    return _review_page(acc, result_id)
+
+
+@app.post("/manage/review/{result_id}", response_class=HTMLResponse)
+async def review_act(result_id: str, request: Request,
+                     ladder_session: str | None = Cookie(None),
+                     authorization: str | None = Header(None)):
+    """Take a rating back, or put it back.
+
+    The reason a player's flag is worth anything: without an action here, "please
+    look at this" ends in somebody agreeing with you and being unable to do
+    anything about it.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    guard(acc.require, "review_results")
+    form = await request.form()
+    what = str(form.get("do") or "")
+    try:
+        if what == "annul":
+            results.annul(acc, result_id, str(form.get("note") or ""))
+        elif what == "reinstate":
+            results.reinstate(acc, result_id)
+        else:
+            return _review_page(acc, result_id, by_code("FL-602"))
+    except AuthError as e:
+        return _review_page(acc, result_id, detail(e))
+    return RedirectResponse(path_for("manage", "review", result_id),
+                            status_code=303)
+
+
+@app.get("/manage/review/{result_id}/replay/{name}")
+def review_replay(result_id: str, name: str,
+                  ladder_session: str | None = Cookie(None),
+                  authorization: str | None = Header(None)):
+    """Hand over one uploaded replay.
+
+    The name is checked against what is actually there rather than being joined
+    onto a path — a filename from a URL is the shortest route out of a directory
+    that exists.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    guard(acc.require, "review_results")
+    store.prune_replays()
+    if name not in store.replays_for(result_id):
+        raise HTTPException(404, "no such replay")
+    return FileResponse(store.replay_dir(result_id) / name,
+                        media_type="application/octet-stream",
+                        filename=name)
+
+
+@app.post("/results/{result_id}/replay")
+async def upload_replay(result_id: str, index: int, file: UploadFile,
+                        ladder_session: str | None = Cookie(None),
+                        authorization: str | None = Header(None)):
+    """Take one replay from a client that played in the series.
+
+    Held for a week, so a dispute can be looked at without the server quietly
+    accumulating everybody's match history — the community's clearance was for
+    tracking results, and a recording is a different thing.
+
+    Only a participant may upload, and nothing the client sends becomes a path:
+    the name is this server's, the size is capped, and so is the count.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    row = results.one(result_id)
+    if row is None:
+        raise HTTPException(404, "no such series")
+    if acc.steam_id not in row.sides:
+        raise HTTPException(403, "only the players in a series may upload it")
+    if not 1 <= index <= store.REPLAY_MAX_PER_SERIES:
+        raise HTTPException(400, "game number out of range")
+
+    data = await file.read(store.REPLAY_MAX_BYTES + 1)
+    if len(data) > store.REPLAY_MAX_BYTES:
+        raise HTTPException(413, "that replay is too large")
+    if not data:
+        raise HTTPException(400, "empty file")
+    store.prune_replays()
+    stored = store.save_replay(result_id, index, data)
+    return {"stored": stored, "keep_days": round(store.REPLAY_KEEP_S / 86400)}
 
 
 @app.post("/admin/relink", response_class=HTMLResponse)

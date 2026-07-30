@@ -582,6 +582,63 @@ def test_the_listing_marks_your_own_match_for_you_and_not_for_others():
     assert "lobby_id" not in next(x for x in anon if x["id"] == mid)
 
 
+# ------------------------------------------------------------ Redirect targets
+# `return_to` decides where somebody lands after proving who they are, which is
+# exactly when a redirect is worth stealing: the link is ours, the login is
+# real, and only the destination is not.
+OFF_SITE = [
+    "https://example.invalid/",
+    "http://example.invalid/",
+    "//example.invalid/",
+    "/\\example.invalid/",
+    "javascript:alert(1)",
+    "",
+    "manage/tournaments",          # no leading slash: not a path on this site
+]
+
+
+def test_only_a_path_on_this_site_survives_the_check():
+    for bad in OFF_SITE:
+        assert app_mod.safe_return_to(bad) == "/", bad
+    for good in ("/", "/admin", "/manage/tournaments",
+                 "/manage/plan/abc?x=1#y"):
+        assert app_mod.safe_return_to(good) == good, good
+
+
+def test_a_control_character_cannot_ride_along():
+    """How header splitting is attempted."""
+    for bad in ("/admin\r\nX-Evil: 1", "/admin\n", "/admin\x00", "/admin\t"):
+        assert app_mod.safe_return_to(bad) == "/", repr(bad)
+
+
+def test_the_login_refuses_to_send_anyone_off_site():
+    # A client id, or the route refuses before it ever stores anything.
+    os.environ["DISCORD_CLIENT_ID"] = "test-client-id"
+    w = World()
+    r = w.client.get("/auth/discord/start",
+                     params={"return_to": "https://example.invalid/",
+                             "json": 1})
+    assert r.status_code == 200, r.text[:200]
+    state = r.json()["state"]
+    # What was stored is what the callback will honour, and it must be ours.
+    assert app_mod.auth.pending[state].return_to == "/"
+
+
+def test_a_tournament_id_cannot_shape_the_location():
+    """The id is escaped whole, so it can never contribute a slash or a query."""
+    assert app_mod.path_for("manage", "plan", "a/b") == "/manage/plan/a%2Fb"
+    assert app_mod.path_for("manage", "plan", "..") == "/manage/plan/.."
+    assert app_mod.path_for("manage", "plan", "x?y=1") == "/manage/plan/x%3Fy%3D1"
+
+
+def test_an_unknown_tournament_does_not_echo_the_id_back():
+    w = World()
+    _, h = w.person("Host", Role.PLAYER, Grant.TOURNAMENT_HOST)
+    r = w.client.get("/manage/tournaments/nope-does-not-exist", headers=h)
+    assert r.status_code == 404, r.status_code
+    assert "nope-does-not-exist" not in r.text
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

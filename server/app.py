@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from urllib.parse import quote
 
 from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -119,12 +120,66 @@ def require(token: str | None):
     return acc
 
 
+def safe_return_to(value: str | None) -> str:
+    r"""A place on this site, or the front page.
+
+    `return_to` decides where somebody lands *after proving who they are*, which
+    is precisely the moment a redirect is worth stealing: the link is ours, the
+    login is real, and only the destination is not. So anything that is not a
+    plain path here is dropped rather than repaired — a redirect that is nearly
+    right is the dangerous kind.
+
+    What gets rejected, and why each one matters:
+
+      * anything not starting with `/` — an absolute URL, with or without a
+        scheme;
+      * `//host` and `/\host` — both protocol-relative to a browser, which
+        makes them absolute URLs wearing a path's clothes;
+      * anything with a control character in it, which is how header splitting
+        is attempted.
+    """
+    if not value or not value.startswith("/"):
+        return "/"
+    if value[1:2] in ("/", "\\"):
+        return "/"
+    if any(c in value for c in "\r\n\t\x00"):
+        return "/"
+    return value
+
+
+def path_for(*parts: str) -> str:
+    """Build a site path out of values that came from outside.
+
+    Each part is escaped whole, so an id can never contribute a `/` or a `?` and
+    turn a path into something else.
+    """
+    return "/" + "/".join(quote(p.strip("/"), safe="") for p in parts if p)
+
+
+def reason(e: BaseException) -> str:
+    """The part of a refusal that belongs in front of a person.
+
+    Every caller of this catches a refusal the rules raised on purpose —
+    `AuthError`, or a `ValueError` from `ladder/` — and those messages exist to
+    be read: refusing with an explanation instead of a bare 400 is most of what
+    makes this usable. They are HTML-escaped at every sink.
+
+    It goes through one function anyway, for two reasons. A length cap, so no
+    message can turn a card into a wall of text. And a single place that decides
+    what reaches a page, so widening an `except` somewhere does not quietly
+    start showing the inside of the program to whoever tripped over it.
+    """
+    if isinstance(e, (AuthError, ValueError, KeyError)):
+        return str(e).strip()[:300]
+    return "That did not work. Try again, or ask an admin to look."
+
+
 def guard(fn, *a, **kw):
     """Pass domain refusals through as 403, not as a server error."""
     try:
         return fn(*a, **kw)
     except AuthError as e:
-        raise HTTPException(403, str(e)) from e
+        raise HTTPException(403, reason(e)) from e
 
 
 # -------------------------------------------------------------------- Login
@@ -136,8 +191,10 @@ def discord_start(return_to: str = "/", json: int = 0):
     looking at a JSON blob has to copy a URL out of it by hand. `?json=1` keeps
     the machine-readable form for anything scripted.
     """
-    p = guard(auth.begin_login, "discord", return_to)
-    url = discord_authorize_url(p.state, f"{BASE_URL}/auth/discord/callback")
+    # Checked before it is stored, so nothing unsafe is ever kept.
+    p = guard(auth.begin_login, "discord", safe_return_to(return_to))
+    url = guard(discord_authorize_url, p.state,
+                f"{BASE_URL}/auth/discord/callback")
     if json:
         return {"url": url, "state": p.state}
     return RedirectResponse(url, status_code=303)
@@ -157,7 +214,10 @@ def discord_callback(code: str, state: str, response: Response):
     store.save_account(acc)
     store.save_session(session)
 
-    response = RedirectResponse(pending.return_to or "/", status_code=303)
+    # Checked again on the way out: a pending login created before the check
+    # above existed would otherwise still be honoured.
+    response = RedirectResponse(safe_return_to(pending.return_to),
+                                status_code=303)
     response.set_cookie(
         SESSION_COOKIE, session.token,
         httponly=True,                       # not readable from JavaScript
@@ -176,7 +236,7 @@ def steam_start(return_to: str = "/", json: int = 0, ticket: str | None = None):
     no browser has, so it asks for a single-use ticket and passes it here. The
     ticket rides inside `openid.return_to`, which Steam signs.
     """
-    guard(auth.begin_login, "steam", return_to)
+    guard(auth.begin_login, "steam", safe_return_to(return_to))
     callback = f"{BASE_URL}/auth/steam/callback"
     if ticket:
         callback += f"?ticket={ticket}"
@@ -658,7 +718,7 @@ def tournament_create(body: TournamentBody,
             ("rating", "listed", "random") else "rating",
             best_of=body.best_of if body.best_of in (1, 3, 5, 7) else None)
     except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, reason(e)) from e
     tid = secrets.token_hex(6)
     store.create_tournament(tid, t, created_by=acc.id)
     return {"id": tid, "bracket": t.bracket()}
@@ -669,7 +729,11 @@ def tournament_show(tid: str):
     try:
         t = store.load_tournament(tid)
     except KeyError as e:
-        raise HTTPException(404, str(e)) from e
+        # A fixed sentence rather than the exception's text: the message names
+        # the id that was asked for, which is input coming straight back out.
+        # It is escaped everywhere it is rendered, and it still tells the caller
+        # nothing they did not already type.
+        raise HTTPException(404, "no such tournament") from e
     return {"name": t.name, "mode": t.mode.label, "bracket": t.bracket(),
             "best_of": t.series_length(), "seeding": t.seeding,
             "playable": [m.id for m in t.playable()],
@@ -686,10 +750,14 @@ def tournament_report(tid: str, match_id: str, body: ResultBody,
         t = store.load_tournament(tid)
         t.report(match_id, body.winner, body.score, body.match_keys)
     except KeyError as e:
-        raise HTTPException(404, str(e)) from e
+        # A fixed sentence rather than the exception's text: the message names
+        # the id that was asked for, which is input coming straight back out.
+        # It is escaped everywhere it is rendered, and it still tells the caller
+        # nothing they did not already type.
+        raise HTTPException(404, "no such tournament") from e
     except ValueError as e:
         # Domain refusal: impossible score, or a winner who is not playing.
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, reason(e)) from e
     store.record_result(tid, match_id, body.winner, body.score, body.match_keys)
     if t.finished:
         store.mark_finished(tid)
@@ -1202,8 +1270,12 @@ def logout_page(ladder_session: str | None = Cookie(None),
 
 def _login_first(return_to: str) -> RedirectResponse:
     """A page nobody is signed in for sends them to sign in, not to a 401."""
-    return RedirectResponse(f"/auth/discord/start?return_to={return_to}",
-                            status_code=303)
+    # Encoded, or a return path containing `&` or `#` would silently become
+    # something else — and it is checked again at the other end anyway.
+    return RedirectResponse(
+        "/auth/discord/start?return_to=" + quote(safe_return_to(return_to),
+                                                 safe="/"),
+        status_code=303)
 
 
 def _roster_rows() -> list[dict]:
@@ -1264,7 +1336,7 @@ async def admin_relink(request: Request,
         else:
             return _admin_page(acc, "Nothing to do.")
     except AuthError as e:
-        return _admin_page(acc, str(e))
+        return _admin_page(acc, reason(e))
     store.save_account(target, granted_by=acc.id)
     # Out of the queue as well: being paired needs a proven Steam ID, and an
     # account that is already waiting would otherwise be matched without one.
@@ -1295,7 +1367,7 @@ async def admin_name(request: Request,
         else:
             auth.reject_ufer_name(acc, target)
     except AuthError as e:
-        return _admin_page(acc, str(e))
+        return _admin_page(acc, reason(e))
     store.save_account(target, granted_by=acc.id)
     return RedirectResponse("/admin", status_code=303)
 
@@ -1345,7 +1417,7 @@ async def admin_save(request: Request,
         for g in drop:
             auth.revoke_permission(acc, target, g)
     except AuthError as e:
-        return _admin_page(acc, str(e))
+        return _admin_page(acc, reason(e))
     store.save_account(target, granted_by=acc.id)
     return RedirectResponse("/admin", status_code=303)
 
@@ -1409,7 +1481,11 @@ def _planner_page(acc, tid: str, error: str = "") -> HTMLResponse:
     try:
         t = store.load_tournament(tid)
     except KeyError as e:
-        raise HTTPException(404, str(e)) from e
+        # A fixed sentence rather than the exception's text: the message names
+        # the id that was asked for, which is input coming straight back out.
+        # It is escaped everywhere it is rendered, and it still tells the caller
+        # nothing they did not already type.
+        raise HTTPException(404, "no such tournament") from e
     return HTMLResponse(page.planner(
         name=t.name, mode=t.mode.key, best_of=t.series_length(),
         seeding=t.seeding,
@@ -1430,10 +1506,11 @@ def plan_page(tid: str, ladder_session: str | None = Cookie(None),
     """
     acc = current(session_token(ladder_session, authorization))
     if acc is None:
-        return _login_first(f"/manage/plan/{tid}")
+        return _login_first(path_for("manage", "plan", tid))
     guard(acc.require, "create_tournament")
     if not store.is_planning(tid):
-        return RedirectResponse(f"/manage/tournaments/{tid}", status_code=303)
+        return RedirectResponse(path_for("manage", "tournaments", tid),
+                            status_code=303)
     return _planner_page(acc, tid)
 
 
@@ -1456,7 +1533,11 @@ async def plan_edit(tid: str, request: Request,
     try:
         t = store.load_tournament(tid)
     except KeyError as e:
-        raise HTTPException(404, str(e)) from e
+        # A fixed sentence rather than the exception's text: the message names
+        # the id that was asked for, which is input coming straight back out.
+        # It is escaped everywhere it is rendered, and it still tells the caller
+        # nothing they did not already type.
+        raise HTTPException(404, "no such tournament") from e
     people = list(t.participants)
 
     def rating_of(raw: str) -> float:
@@ -1508,17 +1589,18 @@ async def plan_edit(tid: str, request: Request,
             seeding = "rating"
         name = str(form.get("name") or "").strip() or t.name
         store.set_tournament_format(tid, name, mode.key, seeding, best_of)
-        return RedirectResponse(f"/manage/plan/{tid}", status_code=303)
+        return RedirectResponse(path_for("manage", "plan", tid), status_code=303)
     elif what == "start":
         if len(people) < 2:
             return _planner_page(acc, tid, "A tournament needs two entrants.")
         store.set_planning(tid, False)
-        return RedirectResponse(f"/manage/tournaments/{tid}", status_code=303)
+        return RedirectResponse(path_for("manage", "tournaments", tid),
+                            status_code=303)
     else:
         return _planner_page(acc, tid, "Nothing to do.")
 
     store.replace_participants(tid, people)
-    return RedirectResponse(f"/manage/plan/{tid}", status_code=303)
+    return RedirectResponse(path_for("manage", "plan", tid), status_code=303)
 
 
 @app.post("/manage/tournaments", response_class=HTMLResponse)
@@ -1552,19 +1634,23 @@ async def tournaments_page_create(request: Request,
         t = Tournament(name, _parse_entrants(entrants), mode=mode,
                        seeding=seeding, best_of=best_of, planning=True)
     except ValueError as e:
-        return again(str(e))
+        return again(reason(e))
     tid = secrets.token_hex(6)
     # Created as a plan, not as a finished bracket: a host adds people as they
     # sign up and looks at what comes out before anything is fixed.
     store.create_tournament(tid, t, created_by=acc.id, planning=True)
-    return RedirectResponse(f"/manage/plan/{tid}", status_code=303)
+    return RedirectResponse(path_for("manage", "plan", tid), status_code=303)
 
 
 def _bracket_page(acc, tid: str, error: str = "") -> HTMLResponse:
     try:
         t = store.load_tournament(tid)
     except KeyError as e:
-        raise HTTPException(404, str(e)) from e
+        # A fixed sentence rather than the exception's text: the message names
+        # the id that was asked for, which is input coming straight back out.
+        # It is escaped everywhere it is rendered, and it still tells the caller
+        # nothing they did not already type.
+        raise HTTPException(404, "no such tournament") from e
     # Renaming stops at the first reported result: from then on the pairings
     # and the stored results both rest on these names.
     started = any(m["winner"] and not m["bye"]
@@ -1589,11 +1675,11 @@ def bracket_page(tid: str, ladder_session: str | None = Cookie(None),
     bracket. Only a host or referee gets the report forms."""
     acc = current(session_token(ladder_session, authorization))
     if acc is None:
-        return _login_first(f"/manage/tournaments/{tid}")
+        return _login_first(path_for("manage", "tournaments", tid))
     # Still being built: the planner is where it belongs, and only somebody who
     # may create one gets to see it half-finished.
     if store.is_planning(tid) and acc.may("create_tournament"):
-        return RedirectResponse(f"/manage/plan/{tid}", status_code=303)
+        return RedirectResponse(path_for("manage", "plan", tid), status_code=303)
     return _bracket_page(acc, tid)
 
 
@@ -1608,7 +1694,11 @@ def tournament_viewer_data(tid: str):
     try:
         t = store.load_tournament(tid)
     except KeyError as e:
-        raise HTTPException(404, str(e)) from e
+        # A fixed sentence rather than the exception's text: the message names
+        # the id that was asked for, which is input coming straight back out.
+        # It is escaped everywhere it is rendered, and it still tells the caller
+        # nothing they did not already type.
+        raise HTTPException(404, "no such tournament") from e
     return viewer_data(t, tid)
 
 
@@ -1634,11 +1724,16 @@ async def bracket_page_rename(tid: str, request: Request,
         t = store.load_tournament(tid)
         t.rename(seat, name)
     except KeyError as e:
-        raise HTTPException(404, str(e)) from e
+        # A fixed sentence rather than the exception's text: the message names
+        # the id that was asked for, which is input coming straight back out.
+        # It is escaped everywhere it is rendered, and it still tells the caller
+        # nothing they did not already type.
+        raise HTTPException(404, "no such tournament") from e
     except ValueError as e:
-        return _bracket_page(acc, tid, str(e))
+        return _bracket_page(acc, tid, reason(e))
     store.rename_participant(tid, seat, name.strip())
-    return RedirectResponse(f"/manage/tournaments/{tid}", status_code=303)
+    return RedirectResponse(path_for("manage", "tournaments", tid),
+                            status_code=303)
 
 
 @app.post("/manage/tournaments/{tid}/report", response_class=HTMLResponse)
@@ -1666,13 +1761,18 @@ async def bracket_page_report(tid: str, request: Request,
         t = store.load_tournament(tid)
         t.report(match_id, winner, score)
     except KeyError as e:
-        raise HTTPException(404, str(e)) from e
+        # A fixed sentence rather than the exception's text: the message names
+        # the id that was asked for, which is input coming straight back out.
+        # It is escaped everywhere it is rendered, and it still tells the caller
+        # nothing they did not already type.
+        raise HTTPException(404, "no such tournament") from e
     except ValueError as e:
-        return _bracket_page(acc, tid, str(e))
+        return _bracket_page(acc, tid, reason(e))
     store.record_result(tid, match_id, winner, score)
     if t.finished:
         store.mark_finished(tid)
-    return RedirectResponse(f"/manage/tournaments/{tid}", status_code=303)
+    return RedirectResponse(path_for("manage", "tournaments", tid),
+                            status_code=303)
 
 
 # ---------------------------------------------------------------- Results

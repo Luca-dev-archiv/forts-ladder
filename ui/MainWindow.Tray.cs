@@ -127,7 +127,10 @@ public partial class MainWindow
             _trackItem.Checked = _prefs.Get(Prefs.TrackInBackground);
         if (_startupItem is not null)
             _startupItem.Checked = Autostart.Enabled;
-        _watcher.Paused = !on;
+        // Null while the constructor is still running. It was not supposed to be
+        // possible to get here that early, and then it was — and the whole client
+        // failed to start rather than the tray icon looking wrong for a moment.
+        if (_watcher is not null) _watcher.Paused = !on;
     }
 
     private void ToggleTracking()

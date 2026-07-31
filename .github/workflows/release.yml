@@ -74,6 +74,32 @@ jobs:
             -p:Version=${{ steps.version.outputs.numeric }} \
             -p:InformationalVersion=${{ steps.version.outputs.version }}
 
+      # v0.1.16 shipped a client that threw in its own constructor and could not
+      # open at all. The build was clean and every test passed: neither says
+      # anything about whether the program starts, which for a desktop release is
+      # the one question that matters. So it is started here, before there is an
+      # asset to download.
+      - name: It has to start
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath publish/FortsLadder.exe -PassThru `
+                 -RedirectStandardError startup-error.txt
+          Start-Sleep -Seconds 10
+          if ($p.HasExited) {
+            Write-Host "::error::the client exited with $($p.ExitCode) instead of opening"
+            if (Test-Path startup-error.txt) { Get-Content startup-error.txt }
+            exit 1
+          }
+          $live = Get-Process -Id $p.Id
+          # A crash and a hang look the same from outside, so both are checked:
+          # the process is there, and it managed to put a window up.
+          if (-not $live.MainWindowHandle -or $live.MainWindowHandle -eq 0) {
+            Write-Host "::error::the client is running but never opened a window"
+            exit 1
+          }
+          Write-Host "started, window title: '$($live.MainWindowTitle)'"
+          Stop-Process -Id $p.Id -Force
+
       - name: Name the asset after its version
         id: asset
         shell: bash

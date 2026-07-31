@@ -55,7 +55,6 @@ public partial class MainWindow : Window
         InitQueue();
         InitObservers();
         InitPresence();
-        InitTray();
 
         _watcher = new LogWatcher(TimeSpan.FromSeconds(1));
         _watcher.StatusChanged += (s, ok) => Dispatcher.Invoke(() => SetStatus(s, ok));
@@ -73,6 +72,14 @@ public partial class MainWindow : Window
         // left a finished game looking like it was still running.
         _watcher.MatchDecided += m => Dispatcher.Invoke(() => MaybeReportSeriesGame(m));
         _watcher.LobbySeen += id => Dispatcher.Invoke(() => OnLobbySeen(id));
+
+        // After the watcher, not before it. `UpdateTray` sets `_watcher.Paused`,
+        // so calling this from higher up the constructor threw a
+        // NullReferenceException before the first window ever appeared — the
+        // client would not start at all. The guard in `UpdateTray` makes the
+        // order stop mattering; this line puts it in the right place anyway,
+        // because an invisible ordering requirement is a trap either way.
+        InitTray();
 
         // lobby.dat carries the id the moment the lobby exists, which the log
         // only gets round to mentioning later.

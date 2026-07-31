@@ -312,6 +312,14 @@ public partial class MainWindow
         var s = _queue.Status;
         var proposal = s?.Proposal;
 
+        // The one thing an open series takes away, said on the nav item so
+        // nobody has to work out why the button behind it does nothing. Every
+        // other view stays reachable — a series in progress is a reason not to
+        // start another match, not a reason to lock the program.
+        var blocked = s?.Blocked_By_Series is { Length: > 0 };
+        NavQueue.ToolTip = blocked ? Loc.T("queue.in_series_sub") : null;
+        NavQueue.Opacity = blocked ? 0.6 : 1.0;
+
         // Free: the poll carries it, and while somebody is queueing it is the
         // freshest number there is.
         //

@@ -737,6 +737,31 @@ public sealed class MyResultDto
     public string? Lobby_Id { get; set; }
 }
 
+/// <summary>
+/// What the ladder makes of one of your series.
+///
+/// The server's answer rather than the client's guess: two clients showed
+/// different labels for the same match because the host has a lobby id in its log
+/// and the guest does not, and a guest's record of a game only exists if the game
+/// was accepted. Matched locally on roster and kickoff, the two things every log
+/// contains.
+/// </summary>
+public sealed class LadderSeriesDto
+{
+    public string? Result_Id { get; set; }
+    public string? Lobby_Id { get; set; }
+    public string Played_At { get; set; } = "";
+    public List<string> Roster { get; set; } = new();
+    /// <summary>"rated", "unrated", "invalid", "open" or "closed".</summary>
+    public string State { get; set; } = "open";
+    public List<string> Reasons { get; set; } = new();
+}
+
+public sealed class LadderSeriesListDto
+{
+    public List<LadderSeriesDto> Series { get; set; } = new();
+}
+
 /// <summary>Lobby ids as strings: 64 bits do not survive a JSON number.</summary>
 public sealed class LobbyListDto
 {

@@ -273,6 +273,12 @@ public sealed class LoginFlow
         => _api.UploadAsync($"/results/{resultId}/replay?index={game}", path);
 
     /// <summary>
+    /// What the ladder makes of your series — the label, not a guess at it.
+    /// </summary>
+    public Task<LadderSeriesListDto?> MySeriesAsync() =>
+        _api.GetAsync<LadderSeriesListDto>("/series/mine");
+
+    /// <summary>
     /// Which of your lobbies the ladder set up.
     ///
     /// The client keeps its own list as each draft hands off a lobby, but that

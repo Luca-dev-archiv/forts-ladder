@@ -28,6 +28,7 @@ from __future__ import annotations
 import math
 import os
 import secrets
+import time
 from urllib.parse import quote
 
 from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response
@@ -2144,6 +2145,72 @@ def flag_result(result_id: str, body: FlagBody,
     acc = require(session_token(ladder_session, authorization))
     r = guard(results.flag, acc, result_id, body.note)
     return {"id": r.id, "flagged": r.flagged}
+
+
+@app.get("/series/mine")
+def my_series(ladder_session: str | None = Cookie(None),
+              authorization: str | None = Header(None)):
+    """What the ladder makes of your series — so two clients cannot disagree.
+
+    They did. One client showed a match as the ladder's and the other as a casual
+    game, and both were right about what they could see: only a host's log carries
+    a lobby id, and a guest's local record of a game exists only if the game was
+    accepted — which that one had not been, because the wrong commander was
+    played. Each side reasoned locally from different evidence.
+
+    So it is answered here once, for both. `roster` and `played_at` are what a
+    client can match against, because they are the two things every game log
+    contains; a lobby id is on one side only and a draft id is in no log at all.
+    """
+    acc = require(session_token(ladder_session, authorization))
+    if acc.steam_id is None:
+        return {"series": []}
+
+    out: list[dict] = []
+    seen_lobbies: set[int] = set()
+    for r in store.load_results():
+        if acc.steam_id not in r.sides:
+            continue
+        if r.lobby_id is not None:
+            seen_lobbies.add(int(r.lobby_id))
+        out.append({
+            "result_id": r.id,
+            "lobby_id": str(r.lobby_id) if r.lobby_id else None,
+            "played_at": r.played_at,
+            "roster": sorted(r.sides),
+            # One word each client can render the same way. "unrated" is not a
+            # failure to report — the series is on record and says why.
+            "state": "rated" if r.rated else "unrated",
+            "reasons": list(r.reasons),
+            "ladder": True,
+        })
+
+    # A series being played right now has no result yet, and is exactly the one a
+    # client is most likely to be looking at.
+    for s in drafts.sessions.values():
+        if acc.id not in s.seats or not s.lobby_id:
+            continue
+        if int(s.lobby_id) in seen_lobbies:
+            continue
+        reasons = [line for lines in s.deviations.values() for line in lines]
+        out.append({
+            "result_id": None,
+            "lobby_id": str(s.lobby_id),
+            "played_at": _iso(s.lobby_at),
+            "roster": sorted(x for x in s._steam_ids.values() if x),
+            "state": ("invalid" if reasons else
+                      "closed" if s.settled else "open"),
+            "reasons": reasons,
+            "ladder": True,
+        })
+    return {"series": out}
+
+
+def _iso(stamp: float | None) -> str:
+    """A wall-clock stamp as the clients write it, or empty."""
+    if not stamp:
+        return ""
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(stamp))
 
 
 @app.get("/lobbies/mine")

@@ -119,6 +119,10 @@ public partial class MainWindow
         RebuildSeries();
     }
 
+    /// <summary>Games already announced, so a one-second poll does not open a
+    /// dialog a second. Cleared with everything else when the draft changes.</summary>
+    private readonly HashSet<string> _toldAboutGame = new();
+
     /// <summary>
     /// Games the server threw out, and why.
     ///
@@ -134,8 +138,16 @@ public partial class MainWindow
         foreach (var (game, why) in s.Deviations)
         {
             var reasons = string.Join("; ", why.Select(DescribeDeviation));
-            Warn(ErrorCodes.Text(ErrorCodes.GameNotCounted,
-                                 Loc.T("deviation.replay", game, reasons)));
+            var line = Loc.T("deviation.replay", game, reasons);
+            Warn(ErrorCodes.Text(ErrorCodes.GameNotCounted, line));
+
+            // And said out loud, once. In the panel alone this was a twelve-point
+            // line in a narrow column, invisible from any other view — and the
+            // person who has to replay the game is usually the one who got the
+            // commander wrong and has no other way to find out.
+            if (!_toldAboutGame.Add($"{s.Id}:{game}")) continue;
+            AppDialog.Info(this, ErrorCodes.Text(ErrorCodes.GameNotCounted, line),
+                           Loc.T("deviation.title"), AppDialog.Kind.Warning);
         }
     }
 

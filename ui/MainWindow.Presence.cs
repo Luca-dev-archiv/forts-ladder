@@ -41,6 +41,7 @@ public partial class MainWindow
         var p = await _login.PingAsync();
         ShowOnline(p?.Online);
         await SyncLadderLobbiesAsync();
+        await SyncVerdictsAsync();
         // Keeps the mode picker honest while nobody is queueing, which is when
         // the old count used to freeze.
         _queue.MergeWaiting(p?.Waiting);
@@ -64,6 +65,27 @@ public partial class MainWindow
             if (ulong.TryParse(raw, out var id) && _ladderLobbies.Add(id))
                 added = true;
         if (added) RebuildSeries();
+    }
+
+    /// <summary>
+    /// Take the ladder's word for what each series is.
+    ///
+    /// The alternative was each client deducing it from what its own log happened
+    /// to contain, and two clients then showing different labels for one match.
+    /// </summary>
+    private async Task SyncVerdictsAsync()
+    {
+        if (!_api.LoggedIn) return;
+        var res = await _login.MySeriesAsync();
+        if (res is null) return;
+        var before = string.Join("|", _verdicts.Select(
+            v => v.Lobby_Id + v.Played_At + v.State));
+        _verdicts = res.Series;
+        var after = string.Join("|", _verdicts.Select(
+            v => v.Lobby_Id + v.Played_At + v.State));
+        // Only when something moved: rebuilding the list under the cursor loses
+        // the selection.
+        if (before != after) RebuildSeries();
     }
 
     /// <summary>

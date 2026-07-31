@@ -1106,6 +1106,79 @@ def test_login_attempts_do_not_pile_up_for_ever():
     assert app_mod.auth.pending == {}, app_mod.auth.pending
 
 
+# --------------------------------------- Both clients get the same answer
+# Two clients showed different labels for one match: the host has a lobby id in
+# its log and the guest does not, and a guest's record of a game only exists if
+# the game was accepted — which that one had not been. Both were reasoning
+# locally from different evidence, so the answer moved to the server.
+def test_both_players_are_told_the_same_thing_about_a_series():
+    w = World()
+    host, hh = w.person("Host")
+    guest, gh = w.person("Guest")
+    app_mod.store.sanction_lobby(70707, "s-1", created_by=host.id,
+                                 roster=[host.steam_id, guest.steam_id])
+    r = w.client.post("/results", headers=hh, json={
+        "sides": {host.steam_id: 1, guest.steam_id: 2},
+        "games": 2, "score_low": 2, "played_at": "2026-08-01T20:00:00",
+        "lobby_id": "70707", "draft_id": f"same-{next(_ids)}"})
+    assert r.status_code == 200, r.text[:200]
+
+    def only_ours(headers):
+        rows = w.client.get("/series/mine", headers=headers).json()["series"]
+        return [x for x in rows if x["lobby_id"] == "70707"]
+
+    a, b = only_ours(hh), only_ours(gh)
+    assert len(a) == 1 and len(b) == 1, (a, b)
+    # The label, the reasons and the roster: identical, because there is one of
+    # each rather than one per client.
+    assert a[0]["state"] == b[0]["state"], (a[0], b[0])
+    assert a[0]["reasons"] == b[0]["reasons"]
+    assert a[0]["roster"] == b[0]["roster"] == sorted(
+        [host.steam_id, guest.steam_id])
+
+
+def test_a_series_the_ladder_never_ran_is_not_listed():
+    """Which is what makes 'casual game' the honest label for the rest."""
+    w = World()
+    player, ph = w.person("Player")
+    rows = w.client.get("/series/mine", headers=ph).json()["series"]
+    assert rows == [], rows
+
+
+def test_an_unrated_series_says_unrated_rather_than_vanishing():
+    """It used to read as a casual game on one side, which is the opposite of
+    what it is: the ladder ran it and refused to rate it."""
+    w = World()
+    host, hh = w.person("Host")
+    guest, _ = w.person("Guest")
+    app_mod.store.sanction_lobby(70808, "s-2", created_by=host.id)
+    w.client.post("/results", headers=hh, json={
+        "sides": {host.steam_id: 1, guest.steam_id: 2},
+        "games": 2, "score_low": 2, "played_at": "2026-08-01T21:00:00",
+        "lobby_id": "70808", "draft_id": f"same-{next(_ids)}"})
+
+    row = next(x for x in w.client.get("/series/mine", headers=hh).json()["series"]
+               if x["lobby_id"] == "70808")
+    assert row["state"] == "unrated", row
+    assert row["reasons"], "unrated with no reason is indistinguishable from a bug"
+
+
+def test_nobody_learns_about_a_series_they_were_not_in():
+    w = World()
+    host, hh = w.person("Host")
+    guest, _ = w.person("Guest")
+    _, other = w.person("Somebody else")
+    app_mod.store.sanction_lobby(70909, "s-3", created_by=host.id,
+                                 roster=[host.steam_id, guest.steam_id])
+    w.client.post("/results", headers=hh, json={
+        "sides": {host.steam_id: 1, guest.steam_id: 2},
+        "games": 2, "score_low": 2, "played_at": "2026-08-01T22:00:00",
+        "lobby_id": "70909", "draft_id": f"same-{next(_ids)}"})
+
+    rows = w.client.get("/series/mine", headers=other).json()["series"]
+    assert all(x["lobby_id"] != "70909" for x in rows), rows
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

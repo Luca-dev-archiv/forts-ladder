@@ -369,6 +369,46 @@ public partial class MainWindow : Window
         if (!quiet) RebuildSeries();
     }
 
+    /// <summary>The ladder's verdicts on this account's series, from the server.
+    ///
+    /// Refreshed on the same heartbeat as everything else. Empty when there is no
+    /// server to ask, which is when the local signals are all there is.</summary>
+    private List<Core.LadderSeriesDto> _verdicts = new();
+
+    /// <summary>
+    /// Which verdict belongs to a series in the list.
+    ///
+    /// Roster and kickoff, because they are the two things every game log
+    /// contains — a lobby id is on the host's side only, and a draft id appears
+    /// in no log at all. Ninety minutes of slack: the server stores the kickoff
+    /// the *reporting* client saw, and two logs do not agree to the second.
+    /// </summary>
+    private Core.LadderSeriesDto? VerdictFor(Core.Series s)
+    {
+        if (_verdicts.Count == 0 || s.Matches.Count == 0) return null;
+        var mine = s.Matches
+            .SelectMany(m => m.Players.Values)
+            .Select(p => p.SteamId)
+            .Where(x => !string.IsNullOrEmpty(x))
+            .Distinct().ToHashSet();
+        if (mine.Count < 2) return null;
+        var when = s.Matches[0].PlayedAt;
+
+        Core.LadderSeriesDto? best = null;
+        var bestGap = double.MaxValue;
+        foreach (var v in _verdicts)
+        {
+            if (!v.Roster.All(mine.Contains)) continue;
+            if (!DateTime.TryParse(v.Played_At,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var theirs))
+                continue;
+            var gap = Math.Abs((theirs - when).TotalMinutes);
+            if (gap < 90 && gap < bestGap) { best = v; bestGap = gap; }
+        }
+        return best;
+    }
+
     private void RebuildSeries()
     {
         var selectedKey = _selected?.Matches.FirstOrDefault()?.Key;
@@ -377,7 +417,7 @@ public partial class MainWindow : Window
         _series.Clear();
         foreach (var s in grouped)
             _series.Add(new SeriesVm(s, _identity, _ladderLobbies.All,
-                                     _draftedGames));
+                                     _draftedGames, VerdictFor(s)));
 
         StatSeries.Text = grouped.Count.ToString();
         StatMatches.Text = grouped.Sum(s => s.Matches.Count).ToString();
@@ -1201,6 +1241,7 @@ public partial class MainWindow : Window
         SeriesWarnings.Visibility = Visibility.Collapsed;
         _reportedGames.Clear();
         _reportedSeries.Clear();
+        _toldAboutGame.Clear();
         _readyReported = null;
         _restartPending = false;
     }
@@ -1685,20 +1726,39 @@ public sealed class SeriesVm
 
     public SeriesVm(Series s, IdentityStore ids,
                     IReadOnlySet<ulong>? ladderLobbies = null,
-                    DraftedGames? drafted = null)
+                    DraftedGames? drafted = null,
+                    LadderSeriesDto? verdict = null)
     {
         Model = s;
-        // Two independent ways of knowing, because either can be missing. The
-        // lobby id is absent from a guest's log entirely; the drafted-game record
-        // is per machine and does not survive a reinstall.
-        FromLadder =
-            s.Matches.Any(m => m.LobbyId is not null
-                               && ladderLobbies?.Contains(m.LobbyId.Value) == true)
+        // The server's word first. Two clients used to reason locally from
+        // different evidence — the host has a lobby id in its log, the guest does
+        // not, and a guest's record of a game only exists if the game was
+        // accepted — so they showed different labels for one match. The local
+        // signals stay as a fallback for when there is no server to ask.
+        FromLadder = verdict is not null
+            || s.Matches.Any(m => m.LobbyId is not null
+                                  && ladderLobbies?.Contains(m.LobbyId.Value) == true)
             || s.Matches.Any(m => drafted?.SeriesOf(m.ReportKey) is not null);
-        OriginLabel = Loc.T(FromLadder ? "series.from_ladder" : "series.casual");
-        OriginBrush = FromLadder
-            ? (Brush)System.Windows.Application.Current.Resources["Accent"]
-            : (Brush)System.Windows.Application.Current.Resources["TextMid"];
+        var res = System.Windows.Application.Current.Resources;
+        OriginLabel = !FromLadder ? Loc.T("series.casual")
+            : verdict?.State switch
+            {
+                // Said in the list, because "why is this not on the ladder" is
+                // the question a row like this raises and the answer is short.
+                "rated" => Loc.T("series.state_rated"),
+                "unrated" => Loc.T("series.state_unrated"),
+                "invalid" => Loc.T("series.state_invalid"),
+                _ => Loc.T("series.from_ladder"),
+            };
+        OriginBrush = (Brush)res[
+            !FromLadder ? "TextMid"
+            : verdict?.State switch
+            {
+                "rated" => "Win",
+                "unrated" => "Warn",
+                "invalid" => "Loss",
+                _ => "Accent",
+            }];
         var sides = s.Sides();
         var (wins, _) = s.Score();
         var own = s.LocalSide() ?? (sides.Count > 0 ? sides.Keys.Min() : 0);

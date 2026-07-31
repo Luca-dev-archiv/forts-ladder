@@ -61,6 +61,10 @@ public partial class MainWindow
 
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(Loc.T("tray.quit"), null, (_, _) => QuitForReal());
+        // In the application's colours. A ContextMenuStrip left alone is light
+        // grey with a blue highlight, and once the window is closed this menu is
+        // the whole interface.
+        DarkMenu.Apply(menu);
         _tray.ContextMenuStrip = menu;
 
         // The registry is the truth about startup, not the preference file: an

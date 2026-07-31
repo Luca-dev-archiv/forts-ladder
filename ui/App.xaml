@@ -32,6 +32,59 @@
         <Setter Property="TextOptions.TextFormattingMode" Value="Ideal"/>
       </Style>
 
+      <!-- The box is drawn rather than themed. A CheckBox left to Windows is a
+           white square with a blue tick, which in this window looks like a
+           control from another program — and these particular three decide
+           whether the thing runs in the background, so they are the last place
+           to look bolted on. -->
+      <Style TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{StaticResource TextHi}"/>
+        <Setter Property="FontFamily" Value="Segoe UI"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="CheckBox">
+              <StackPanel Orientation="Horizontal" Background="Transparent">
+                <Border x:Name="box" Width="17" Height="17" CornerRadius="4"
+                        Background="{StaticResource BgPanel}"
+                        BorderBrush="{StaticResource Stroke}"
+                        BorderThickness="1" VerticalAlignment="Center">
+                  <!-- Segoe MDL2 rather than a Path: the title-bar glyphs
+                       already come from there, so there is one font to be
+                       missing instead of two ways of drawing a tick. -->
+                  <TextBlock x:Name="tick" Text="&#xE73E;"
+                             FontFamily="Segoe MDL2 Assets" FontSize="11"
+                             Foreground="{StaticResource BgDeep}"
+                             HorizontalAlignment="Center"
+                             VerticalAlignment="Center" Opacity="0"/>
+                </Border>
+                <ContentPresenter Margin="9,0,0,0" VerticalAlignment="Center"
+                                  RecognizesAccessKey="True"/>
+              </StackPanel>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsChecked" Value="True">
+                  <Setter TargetName="box" Property="Background"
+                          Value="{StaticResource Accent}"/>
+                  <Setter TargetName="box" Property="BorderBrush"
+                          Value="{StaticResource Accent}"/>
+                  <Setter TargetName="tick" Property="Opacity" Value="1"/>
+                </Trigger>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="box" Property="BorderBrush"
+                          Value="{StaticResource Accent}"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                  <Setter Property="Opacity" Value="0.45"/>
+                  <Setter Property="Cursor" Value="Arrow"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
       <Style x:Key="Label" TargetType="TextBlock">
         <Setter Property="Foreground" Value="{StaticResource TextLow}"/>
         <Setter Property="FontSize" Value="11"/>

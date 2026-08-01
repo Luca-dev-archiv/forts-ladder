@@ -60,15 +60,37 @@ public partial class MainWindow
         if (s is null || !s.Done || s.Voided) return;
         if (!s.YouHostLobby) return;
         if (s.Lobby_Id is not { Length: > 0 } lobby) return;
-        if (_publishedMatchId is not null) return;
+        if (_publishedMatchId is not null || _publishing) return;
 
-        var players = s.Seats.OrderBy(kv => kv.Key).Select(kv => kv.Value).ToList();
-        var res = await _login.PublishLiveAsync(
-            mode: "ranked_1v1", label: Loc.T("live.series_label", s.Plan.Count),
-            players: players, slotsUsed: players.Count, lobbyId: lobby,
-            // What was written into multiplayer.lua for this lobby. Anything
-            // else is an invitation to a seat that does not exist.
-            slotsTotal: _lobbySize);
+        // Claimed before the request, not after it. This runs from the draft
+        // refresh, which ticks about once a second, and the check above only
+        // sees an id that a *finished* publish set — so two refreshes went out
+        // while the first was still in flight and the match appeared twice in
+        // everybody's live list.
+        _publishing = true;
+        try
+        {
+            var players = s.Seats.OrderBy(kv => kv.Key).Select(kv => kv.Value).ToList();
+            var res = await _login.PublishLiveAsync(
+                mode: "ranked_1v1", label: Loc.T("live.series_label", s.Plan.Count),
+                players: players, slotsUsed: players.Count, lobbyId: lobby,
+                // What was written into multiplayer.lua for this lobby. Anything
+                // else is an invitation to a seat that does not exist.
+                slotsTotal: _lobbySize,
+                // A ladder lobby always has one, and an admitted spectator got
+                // as far as the game's password prompt without it.
+                lobbyPassword: s.Lobby_Password);
+            Published(res);
+        }
+        finally { _publishing = false; }
+    }
+
+    /// <summary>A publish is in flight. See <see cref="PublishSeriesAsync"/>.
+    /// </summary>
+    private bool _publishing;
+
+    private void Published(PublishedDto? res)
+    {
         if (res?.Match_Id is { Length: > 0 } id)
         {
             _publishedMatchId = id;
@@ -108,13 +130,40 @@ public partial class MainWindow
         if (!_api.LoggedIn) return;
         var inbox = await _login.ObserverInboxAsync();
         var pending = inbox?.Pending ?? new List<ObserverPendingDto>();
-        ObserverInbox.ItemsSource = pending.Select(r => new
+        var rows = pending.Select(r => new
         {
             r.Id,
             Who = Loc.T("live.asks_to_watch", r.Who),
         }).ToList();
-        ObserverInboxBar.Visibility = pending.Count == 0
+        // Both copies. The Live screen is where somebody browsing finds it; the
+        // draft is where the host is while the request is worth answering.
+        ObserverInbox.ItemsSource = rows;
+        DraftObserverInbox.ItemsSource = rows;
+        ObserverInboxBar.Visibility = rows.Count == 0
             ? Visibility.Collapsed : Visibility.Visible;
+
+        // Who is already in, so the host knows there is somebody to place. The
+        // note stays up after the inbox empties — admitting is the moment the
+        // work starts, not the moment it ends.
+        var admitted = await AdmittedNamesAsync();
+        DraftSpectatorNote.Text = admitted.Count == 0 ? ""
+            : Loc.T("live.put_in_observer", string.Join(", ", admitted));
+        DraftSpectatorNote.Visibility = admitted.Count == 0
+            ? Visibility.Collapsed : Visibility.Visible;
+        DraftSpectatorBar.Visibility = rows.Count == 0 && admitted.Count == 0
+            ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>The spectators admitted to the match this client published.
+    ///
+    /// Read back from the server rather than counted here: an admin admitted by
+    /// the override never passed through this client at all.</summary>
+    private async Task<List<string>> AdmittedNamesAsync()
+    {
+        if (_publishedMatchId is null or "-") return new List<string>();
+        var data = await _api.GetAsync<LiveListDto>("/live");
+        return data?.Matches.FirstOrDefault(m => m.Id == _publishedMatchId)
+                   ?.Observers ?? new List<string>();
     }
 
     private async void BtnAdmitObserver_Click(object sender, RoutedEventArgs e)
@@ -147,7 +196,15 @@ public partial class MainWindow
                 // the wrong conclusion, and "no room" is arithmetic.
                 Note = r.State switch
                 {
-                    "approved" => Loc.T("live.admitted"),
+                    // The password and what to do after joining. A ladder lobby
+                    // always has one, so "admitted" plus a join link stopped at
+                    // the game's password prompt — and once inside, nothing this
+                    // program can write moves anybody to the observer slot: the
+                    // settings file is read at start and the series locks teams.
+                    // The host has to do it, so the spectator is told to ask.
+                    "approved" => r.Lobby_Password is { Length: > 0 } pw
+                        ? Loc.T("live.admitted_with_password", pw)
+                        : Loc.T("live.admitted"),
                     "declined" => Loc.T("live.declined", r.Reason),
                     _ => Loc.T("live.waiting"),
                 },

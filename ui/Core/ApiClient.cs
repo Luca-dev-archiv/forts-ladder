@@ -705,6 +705,9 @@ public sealed class ObserverRequestDto
     /// <summary>Only present once admitted: it is what lets someone in.</summary>
     public string? Lobby_Id { get; set; }
     public string? Join_Url { get; set; }
+    /// <summary>Also only once admitted. Every ladder lobby has a password, so
+    /// the join link on its own stops at the game's password prompt.</summary>
+    public string? Lobby_Password { get; set; }
 }
 
 public sealed class MyObserverRequestsDto

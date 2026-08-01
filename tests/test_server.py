@@ -697,6 +697,90 @@ def test_the_terms_say_what_a_spectator_is_agreeing_to():
     assert "do not pass" in terms
 
 
+# ------------------------------------------- One entry, and the way into it
+def test_publishing_the_same_lobby_twice_does_not_list_it_twice():
+    """The client publishes from its draft refresh, which ticks about once a
+    second, and its own guard is only set once the request comes back. Two of
+    them went out while the first was in flight and the same match appeared
+    twice in everybody's live list — and a client restarted mid-series did it
+    again, which no guard living in a client can prevent."""
+    _, acc, live, m = live_setup()
+    again = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1",
+                         ["Host", "Opponent"], slots_used=2, slots_total=9,
+                         lobby_id=m.lobby_id)
+    assert again.id == m.id, "the same lobby was published as a second match"
+    assert len(live.listing()) == 1
+
+
+def test_republishing_does_not_forget_the_spectators_already_in():
+    """slots_used carries the admitted ones, and the client only ever knows
+    about the players — so taking its number would open the seats again."""
+    _, acc, live, m = live_setup()
+    r = live.request_observer(acc["Caster"], m.id)
+    live.answer(acc["Host"], r.id, approve=True)
+    used = m.slots_used
+
+    live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1",
+                 ["Host", "Opponent"], slots_used=2, slots_total=9,
+                 lobby_id=m.lobby_id)
+    assert m.slots_used == used, "a re-publish freed an occupied seat"
+    assert m.observers == [acc["Caster"].ufer_name]
+
+
+def test_a_different_lobby_is_a_different_match():
+    """The dedup is per lobby, not per host: playing a second series after the
+    first is not a duplicate of it."""
+    _, acc, live, m = live_setup()
+    other = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1",
+                         ["Host", "Opponent"], slots_used=2, slots_total=9,
+                         lobby_id=109775240000000002)
+    assert other.id != m.id
+    assert len(live.listing()) == 2
+
+
+def test_an_admitted_spectator_is_given_the_lobby_password():
+    """Every ladder lobby has one — the client writes it into multiplayer.lua —
+    so being admitted with only a join link got somebody as far as the game's
+    password prompt and no further."""
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Caster", Role.CASTER))
+    live = LiveService()
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["Host"],
+                     slots_used=1, slots_total=6,
+                     lobby_id=109775240000000003, lobby_password="K7QMB")
+    r = live.request_observer(acc["Caster"], m.id)
+    live.answer(acc["Host"], r.id, approve=True)
+
+    assert live.join_info(acc["Caster"], r.id)["lobby_password"] == "K7QMB"
+    mine = live.requests_for(acc["Caster"])[0]
+    assert mine["lobby_password"] == "K7QMB"
+
+
+def test_the_password_is_not_in_the_public_listing():
+    """It is the second half of what lets somebody in, so it follows the same
+    rule the lobby id does."""
+    auth, acc = service_with(("1", "Host", Role.PLAYER),
+                             ("2", "Caster", Role.CASTER))
+    live = LiveService()
+    m = live.publish(acc["Host"], "unranked_1v1", "Unranked 1v1", ["Host"],
+                     slots_used=1, slots_total=6,
+                     lobby_id=109775240000000003, lobby_password="K7QMB")
+    entry = live.listing()[0]
+    assert "lobby_password" not in entry
+    assert "K7QMB" not in str(entry)
+
+    # And not before the host has said yes, either.
+    r = live.request_observer(acc["Caster"], m.id)
+    waiting = live.requests_for(acc["Caster"])[0]
+    assert "lobby_password" not in waiting, waiting
+    try:
+        live.join_info(acc["Caster"], r.id)
+    except AuthError:
+        pass
+    else:
+        raise AssertionError("a pending request was handed the way in")
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

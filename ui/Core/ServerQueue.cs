@@ -87,7 +87,14 @@ public sealed class ServerQueue : IDisposable
         // draft started, never asked again, and kept showing "you are still in a
         // series" long after the series was closed out. Idle costs one request
         // every three seconds.
-        _announced = null;
+        //
+        // What must *not* happen here is forgetting which draft was announced.
+        // Leaving the queue is the first thing the client does when a draft
+        // starts, so clearing it meant the next poll saw the same draft id as
+        // unannounced, raised it again, left the queue again — and the handler
+        // switches to the draft board. Every three seconds, for the whole
+        // series, whatever screen you had opened. A new draft has a new id and
+        // announces itself on that alone.
         if (s is not null)
         {
             s.ReceivedAt = DateTime.UtcNow;

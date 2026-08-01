@@ -637,6 +637,10 @@ class PublishBody(BaseModel):
     slots_total: int = 9
     lobby_id: int | None = None
     tournament: str | None = None
+    #: The password this lobby was opened with. Handed on only to spectators the
+    #: host admitted — without it, being admitted got somebody as far as the
+    #: game's password prompt and no further.
+    lobby_password: str | None = None
 
 
 @app.get("/live")
@@ -665,7 +669,8 @@ def live_publish(body: PublishBody, ladder_session: str | None = Cookie(None),
     # to put anybody's name on a match they never played.
     body.players = [str(x)[:40] for x in body.players[:8]]
     m = guard(live.publish, acc, body.mode_key, body.mode_label, body.players,
-              body.slots_used, body.slots_total, body.lobby_id, body.tournament)
+              body.slots_used, body.slots_total, body.lobby_id, body.tournament,
+              (body.lobby_password or "").strip()[:32] or None)
     return {"match_id": m.id}
 
 

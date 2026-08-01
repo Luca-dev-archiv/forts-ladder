@@ -62,6 +62,14 @@ class LiveMatch:
     #: failed until it was passed properly.
     host_steam: str | None = None
     password_protected: bool = True
+    #: The lobby password, for admitted spectators only.
+    #:
+    #: A ladder lobby always has one, so an admitted spectator who was given the
+    #: id and the join link still could not get in — the link opens the lobby
+    #: window and the game then asks for a password nobody had sent them. It
+    #: goes out on exactly the two routes the lobby id goes out on, and never in
+    #: `public()`.
+    lobby_password: str | None = None
     observers: list[str] = field(default_factory=list)
     accepting_requests: bool = True
     #: The host can refuse spectators outright, which is a different statement
@@ -106,7 +114,8 @@ class LiveService:
     def publish(self, host: Account, mode_key: str, mode_label: str,
                 players: list[str], slots_used: int, slots_total: int,
                 lobby_id: int | None = None,
-                tournament: str | None = None) -> LiveMatch:
+                tournament: str | None = None,
+                lobby_password: str | None = None) -> LiveMatch:
         host.require("publish_live_match")
         # A live entry names who is playing, so it is publication like any
         # other. The host cannot consent for the table, only for themselves.
@@ -114,11 +123,30 @@ class LiveService:
             raise AuthError(
                 "you have not agreed to be listed — opt in first "
                 "(POST /me/consent)")
+
+        # One entry per lobby. The client publishes from its draft refresh and
+        # the check it made happened before the request, so two refreshes a
+        # second apart both got past it and the same match appeared twice in
+        # everybody's list. Restarting the client mid-series did the same thing
+        # for the same reason, and no guard living in a client can fix that one.
+        if lobby_id is not None:
+            for m in self.matches.values():
+                if m.host_account_id == host.id and m.lobby_id == lobby_id:
+                    m.last_seen = self._now()
+                    m.players = list(players)
+                    m.slots_total = slots_total
+                    # Not slots_used: admitted spectators are counted into it
+                    # here, and a re-publish would forget them.
+                    if lobby_password:
+                        m.lobby_password = lobby_password
+                    return m
+
         m = LiveMatch(
             id=secrets.token_hex(6), host_account_id=host.id,
             mode_key=mode_key, mode_label=mode_label, players=list(players),
             slots_used=slots_used, slots_total=slots_total,
             lobby_id=lobby_id, tournament=tournament,
+            lobby_password=lobby_password,
             # Taken from the account rather than the request body: the host is
             # whoever is logged in, and their Steam ID is already proven.
             host_steam=host.steam_id,
@@ -190,9 +218,13 @@ class LiveService:
                    "mode": m.mode_label if m else None}
             if r.state is RequestState.APPROVED and m is not None:
                 # The lobby id is the thing that lets someone in, so it appears
-                # only here and only once the host has said yes.
+                # only here and only once the host has said yes. The password
+                # travels with it for the same reason it exists: a ladder lobby
+                # always has one, so an admitted spectator without it got as far
+                # as the password prompt and no further.
                 row["lobby_id"] = str(m.lobby_id) if m.lobby_id else None
                 row["join_url"] = self._join_url(m)
+                row["lobby_password"] = m.lobby_password
             out.append(row)
         return sorted(out, key=lambda x: x["id"])
 
@@ -335,6 +367,7 @@ class LiveService:
             "lobby_id": str(m.lobby_id) if m.lobby_id else None,
             "join_url": self._join_url(m),
             "password_protected": m.password_protected,
+            "lobby_password": m.lobby_password,
         }
 
     def _match(self, match_id: str) -> LiveMatch:

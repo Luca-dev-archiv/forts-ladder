@@ -859,6 +859,45 @@
               </DockPanel>
             </Border>
 
+            <!-- Who is asking to watch, on the screen the host is on. It lived
+                 only under Live, which is the one place a host in the middle of
+                 a series never looks — so requests sat there unanswered. -->
+            <Border DockPanel.Dock="Bottom" x:Name="DraftSpectatorBar"
+                    Visibility="Collapsed" Background="{StaticResource BgPanel}"
+                    Padding="20,12" BorderBrush="{StaticResource Stroke}"
+                    BorderThickness="0,1,0,0">
+              <StackPanel>
+                <TextBlock Text="{core:T live.inbox}" Style="{StaticResource Label}"/>
+                <ItemsControl x:Name="DraftObserverInbox" Margin="0,6,0,0">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <DockPanel Margin="0,0,0,6">
+                        <WrapPanel DockPanel.Dock="Right">
+                          <Button Content="{core:T live.admit}"
+                                  Style="{StaticResource BtnAccent}"
+                                  Padding="12,5" FontSize="12"
+                                  Tag="{Binding Id}" Click="BtnAdmitObserver_Click"/>
+                          <Button Content="{core:T live.decline}"
+                                  Style="{StaticResource Btn}" Margin="6,0,0,0"
+                                  Padding="12,5" FontSize="12"
+                                  Tag="{Binding Id}" Click="BtnDeclineObserver_Click"/>
+                        </WrapPanel>
+                        <TextBlock Text="{Binding Who}" FontSize="13"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                      </DockPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <!-- Nothing this program writes can move somebody into the
+                     observer slot: Forts reads multiplayer.lua at start, and
+                     the ladder locks teams for the series. The host does it. -->
+                <TextBlock x:Name="DraftSpectatorNote" FontSize="12"
+                           Foreground="{StaticResource Warn}"
+                           TextWrapping="Wrap" Visibility="Collapsed"/>
+              </StackPanel>
+            </Border>
+
             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20,18">
               <StackPanel>
                 <TextBlock x:Name="DraftEmpty" Text="{core:T draft.hint_start}"

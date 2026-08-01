@@ -198,7 +198,7 @@ public sealed class LoginFlow
     /// </summary>
     public Task<PublishedDto?> PublishLiveAsync(string mode, string label,
             List<string> players, int slotsUsed, string lobbyId,
-            int slotsTotal) =>
+            int slotsTotal, string? lobbyPassword = null) =>
         _api.PostAsync<PublishedDto>("/live", new
         {
             mode_key = mode,
@@ -210,6 +210,9 @@ public sealed class LoginFlow
             // seats and a spectator was admitted to a room with three.
             slots_total = slotsTotal,
             lobby_id = long.TryParse(lobbyId, out var l) ? l : (long?)null,
+            // Held back from the public listing and given only to spectators the
+            // host admits — the same rule the lobby id already follows.
+            lobby_password = lobbyPassword,
         });
 
     public Task<object?> HeartbeatLiveAsync(string matchId) =>

@@ -163,13 +163,17 @@ public partial class MainWindow
         BtnConsent.Visibility = me.Tracking_Consent
             ? Visibility.Collapsed : Visibility.Visible;
 
-        // Only an admin sees this, and only while the server still has no pool.
-        // Once it is set, the button would just be a way to overwrite it by
-        // accident.
         var admin = me.Role is "Admin" or "Owner";
         var pools = await _login.PoolsAsync();
-        BtnPublishPools.Visibility = admin && pools?.Configured == false
-            ? Visibility.Visible : Visibility.Collapsed;
+        // Always offered to an admin, not only while the pools are empty.
+        //
+        // Hidden once set, there was no way to change them again — and the map
+        // pool changes every season, so the queue kept drafting last season's
+        // maps with nothing in the program able to fix it.
+        BtnPublishPools.Visibility = admin ? Visibility.Visible
+                                           : Visibility.Collapsed;
+        BtnPublishPools.Content = Loc.T(pools?.Configured == true
+            ? "queue.update_pools" : "queue.publish_pools");
         if (pools?.Configured == false && !admin)
             QueueError.Text = Loc.T("queue.no_pools_yet");
 
@@ -189,6 +193,15 @@ public partial class MainWindow
     private async void BtnPublishPools_Click(object sender, RoutedEventArgs e)
     {
         if (!await EnsureReadyAsync()) return;
+        // Replacing a pool changes what everybody drafts from the next match on,
+        // so it is asked once rather than being a button that quietly reshapes
+        // the season.
+        var pools = await _login.PoolsAsync();
+        if (pools?.Configured == true
+            && !AppDialog.Confirm(this, Loc.T("queue.replace_pools_ask"),
+                                  Loc.T("queue.update_pools"),
+                                  AppDialog.Kind.Question))
+            return;
         var maps = LeagueMapPool();
         var commanders = CommanderNames.Installed();
         if (maps.Count < 5 || commanders.Count < 4)

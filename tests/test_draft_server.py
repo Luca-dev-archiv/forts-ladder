@@ -842,7 +842,10 @@ def test_the_expected_roster_is_accepted():
 def test_an_aborted_series_takes_no_further_results():
     svc, s, a, b = started()
     play_all(s, a, b)
-    s.note_game(a, 1, "A", steam_ids=[a.steam_id])   # B never played
+    # Somebody else in B's seat. A roster that is merely *short* is a player who
+    # quit before the game was recorded, which is a replay rather than an abort.
+    s.note_game(a, 1, "A",
+                steam_ids=[a.steam_id, "76561199000003333"])
     try:
         s.note_game(b, 1, "B", steam_ids=[a.steam_id, b.steam_id])
     except AuthError as e:
@@ -856,7 +859,9 @@ def test_both_sides_are_told_which_one_it_was():
     shared fault."""
     svc, s, a, b = started()
     play_all(s, a, b)
-    s.note_game(b, 1, "B", steam_ids=[b.steam_id])   # A never played
+    # Somebody else in A's seat, which is what aborting is for.
+    s.note_game(b, 1, "B",
+                steam_ids=[b.steam_id, "76561199000003333"])
     assert s.public_state(a)["aborted_side"] == "A"
     assert s.public_state(b)["aborted_side"] == "A"
 
@@ -1460,6 +1465,75 @@ def test_a_bo9_works_with_an_odd_pool_of_nine():
     for g in range(1, 6):
         played(s, a, g, "A")
     assert s.series_over()
+
+
+# ------------------------------- Leaving the game first is not cheating
+def test_a_missing_player_is_a_replay_not_an_abort():
+    """Whoever quits Forts first hands their client a log the other player has
+    already left. Aborting on that fired on whichever of the two closed the game
+    first, which is the harshest verdict there is reached from a timing
+    artefact."""
+    s, a, b, plan, ids = played_series()
+    want = plan[0]
+    st = s.note_game(a, 1, "A", steam_ids=[ids["A"]],   # B already gone
+                     map_played=want["map"],
+                     commanders={ids["A"]: want["commander_a"],
+                                 ids["B"]: want["commander_b"]})
+    assert st["aborted"] is False, st["aborted_reason"]
+    assert st["games_played"] == [], "a half-recorded game was counted"
+    assert "was not in the game" in " ".join(st["deviations"]["1"])
+
+
+def test_somebody_else_in_the_seat_still_aborts():
+    """The case aborting is actually for: a drafted player missing while
+    somebody undrafted is present is a substitution, not a quit."""
+    s, a, b, plan, ids = played_series()
+    want = plan[0]
+    st = s.note_game(a, 1, "A",
+                     steam_ids=[ids["A"], "76561199000004444"],
+                     map_played=want["map"],
+                     commanders={ids["A"]: want["commander_a"],
+                                 ids["B"]: want["commander_b"]})
+    assert st["aborted"] is True, st
+    assert "different Steam account" in (st["aborted_reason"] or "")
+
+
+def test_a_draft_that_never_reached_a_lobby_stops_blocking_sooner():
+    """Both clients closing during the picking left a draft on the server that
+    held two people out of matchmaking for three hours."""
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500)
+    q.join(b, 1500)
+    clock[0] += 1
+    q.status(a)
+    q.accept(a)
+    st = q.accept(b)
+    s = q.drafts.get(st["draft_id"])
+    assert q.open_series(a) is s
+
+    # A quarter of an hour with no lobby: not a match anybody is in the middle of.
+    clock[0] += q.UNSTARTED_BLOCK_MAX_S + 1
+    assert q.open_series(a) is None
+    q.join(a, 1500)
+    assert q.status(a)["in_queue"]
+
+
+def test_a_series_with_a_lobby_still_blocks_for_the_full_time():
+    """The short cutoff is for drafts that never started, not for a match being
+    played slowly."""
+    q, clock, (a, b) = queue_with("A", "B")
+    q.join(a, 1500)
+    q.join(b, 1500)
+    clock[0] += 1
+    q.status(a)
+    q.accept(a)
+    st = q.accept(b)
+    s = q.drafts.get(st["draft_id"])
+    play_all(s, a, b)
+    s.set_lobby(a, 4242)
+
+    clock[0] += q.UNSTARTED_BLOCK_MAX_S + 1
+    assert q.open_series(a) is s, "a live series stopped blocking too early"
 
 
 def _run_all() -> int:

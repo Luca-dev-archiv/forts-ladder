@@ -111,16 +111,30 @@ class QueueService:
     #: several times the longest Bo5 anybody plays.
     SERIES_BLOCK_MAX_S = 3 * 3600
 
+    #: How long a draft that never reached a lobby may keep somebody out of the
+    #: queue.
+    #:
+    #: Three hours is right for a series being played and far too long for one
+    #: that never started: both clients closing during the picking left a draft
+    #: on the server that held two people out of matchmaking for an evening. A
+    #: draft that has not produced a lobby in a quarter of an hour is not a
+    #: match anybody is in the middle of.
+    UNSTARTED_BLOCK_MAX_S = 15 * 60
+
     def open_series(self, account: Account):
         """A series of theirs that is still live, if any.
 
         The newest one: an older unsettled draft is the residue of a crash or a
         restart, and it is not what they are sitting in front of.
         """
-        cutoff = self._now() - self.SERIES_BLOCK_MAX_S
+        now = self._now()
+        cutoff = now - self.SERIES_BLOCK_MAX_S
+        unstarted = now - self.UNSTARTED_BLOCK_MAX_S
         mine = [s for s in self.drafts.sessions.values()
                 if account.id in s.seats and not s.settled and s.full()
-                and s.created_at > cutoff]
+                and s.created_at > cutoff
+                # A draft that never reached a lobby is not a match in progress.
+                and (s.lobby_id is not None or s.created_at > unstarted)]
         return max(mine, key=lambda s: s.created_at) if mine else None
 
     def note_dodge(self, account: Account) -> float:

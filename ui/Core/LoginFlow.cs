@@ -197,14 +197,18 @@ public sealed class LoginFlow
     /// travels with it and is handed on only to admitted spectators.
     /// </summary>
     public Task<PublishedDto?> PublishLiveAsync(string mode, string label,
-            List<string> players, int slotsUsed, string lobbyId) =>
+            List<string> players, int slotsUsed, string lobbyId,
+            int slotsTotal) =>
         _api.PostAsync<PublishedDto>("/live", new
         {
             mode_key = mode,
             mode_label = label,
             players,
             slots_used = slotsUsed,
-            slots_total = 9,          // Forts' hard limit, spectators included
+            // The size this lobby was actually opened with, not Forts' maximum.
+            // Nine was hard-coded, so a 1v1 lobby of five advertised seven free
+            // seats and a spectator was admitted to a room with three.
+            slots_total = slotsTotal,
             lobby_id = long.TryParse(lobbyId, out var l) ? l : (long?)null,
         });
 

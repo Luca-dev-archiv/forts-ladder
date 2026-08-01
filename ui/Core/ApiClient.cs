@@ -301,7 +301,11 @@ public sealed class ApiClient
         switch ((int)code)
         {
             case 401:
-                Invalidate();
+                // Only when we actually sent something. A 401 to a request that
+                // carried no token says nothing about the token we hold — and
+                // treating it as proof turned one missing header into a logout
+                // every time somebody pressed the spectate button.
+                if (Token is not null) Invalidate();
                 return ErrorCodes.Text(ErrorCodes.SessionExpired);
             case 403:
                 return ErrorCodes.Text(ErrorCodes.NotAllowed, detail);
@@ -345,10 +349,12 @@ public sealed class ApiClient
         if (!Configured) return false;
         try
         {
-            var r = await _http.PostAsync($"{BaseUrl}{path}", null);
+            // Through `Request`, like every other call. Built by hand, this one
+            // never attached the bearer token — so the single button that used
+            // it, asking to spectate, was sent anonymously and came back 401
+            // every time while everything else worked.
+            using var r = await _http.SendAsync(Request(HttpMethod.Post, path));
             if (r.IsSuccessStatusCode) return true;
-            // Through Describe like every other call. This one produced the raw
-            // `HTTP 401: {"detail":"not logged in"}` the spectate button showed.
             LastError = Describe(r.StatusCode, await r.Content.ReadAsStringAsync());
             return false;
         }

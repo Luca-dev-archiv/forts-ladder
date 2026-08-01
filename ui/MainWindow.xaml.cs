@@ -950,7 +950,12 @@ public partial class MainWindow : Window
         // Offered to whoever has not been settled as the other side's job.
         BtnHostLobby.Visibility = !haveLobby && !theirs
             ? Visibility.Visible : Visibility.Collapsed;
+        // Checked on every refresh so a wait that will never end does not hold
+        // the button — and the button says which of the two it is.
+        GiveUpWaitingIfStale();
         BtnHostLobby.IsEnabled = !_awaitingLobby;
+        BtnHostLobby.Content = Loc.T(_awaitingLobby ? "handoff.waiting_lobby"
+                                                    : "handoff.host");
         BtnJoinLobby.Visibility = haveLobby && theirs
             ? Visibility.Visible : Visibility.Collapsed;
         // Starting Forts is the host's job; the other side is launched into the
@@ -1242,6 +1247,12 @@ public partial class MainWindow : Window
         _reportedGames.Clear();
         _reportedSeries.Clear();
         _toldAboutGame.Clear();
+        // Left set, this disabled "I am hosting" for every draft that followed:
+        // the button is only enabled while nothing is being waited for, and the
+        // wait belonged to a draft that had already ended.
+        _awaitingLobby = false;
+        _lobbyBefore = null;
+        _waitingSince = null;
         _readyReported = null;
         _restartPending = false;
     }
@@ -1324,8 +1335,33 @@ public partial class MainWindow : Window
         }
         _lobbyBefore = LobbySettings.CurrentLobby();
         _awaitingLobby = true;
+        _waitingSince = DateTime.UtcNow;
         WriteLobbySettings();
         RefreshDraft();
+    }
+
+    /// <summary>When the wait for a lobby started, so it can end.</summary>
+    private DateTime? _waitingSince;
+
+    /// <summary>
+    /// How long "waiting for your lobby" may last before the button comes back.
+    ///
+    /// The wait ends when a *new* lobby appears in the log. If Forts was never
+    /// restarted, or the host was already sitting in a lobby, or they simply
+    /// changed their mind, no new one ever appears — and the button stayed dead
+    /// with the draft stuck behind it. Ninety seconds is far longer than opening
+    /// a lobby takes and short enough not to lose an evening.
+    /// </summary>
+    private static readonly TimeSpan LobbyWait = TimeSpan.FromSeconds(90);
+
+    private void GiveUpWaitingIfStale()
+    {
+        if (!_awaitingLobby || _waitingSince is not { } since) return;
+        if (DateTime.UtcNow - since < LobbyWait) return;
+        _awaitingLobby = false;
+        _waitingSince = null;
+        ShowDraftError(ErrorCodes.Text(ErrorCodes.NoLobbyYet,
+                                       Loc.T("handoff.no_lobby_appeared")));
     }
 
     /// <summary>

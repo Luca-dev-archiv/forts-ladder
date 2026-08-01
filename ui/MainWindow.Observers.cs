@@ -65,7 +65,10 @@ public partial class MainWindow
         var players = s.Seats.OrderBy(kv => kv.Key).Select(kv => kv.Value).ToList();
         var res = await _login.PublishLiveAsync(
             mode: "ranked_1v1", label: Loc.T("live.series_label", s.Plan.Count),
-            players: players, slotsUsed: players.Count, lobbyId: lobby);
+            players: players, slotsUsed: players.Count, lobbyId: lobby,
+            // What was written into multiplayer.lua for this lobby. Anything
+            // else is an invitation to a seat that does not exist.
+            slotsTotal: _lobbySize);
         if (res?.Match_Id is { Length: > 0 } id)
         {
             _publishedMatchId = id;

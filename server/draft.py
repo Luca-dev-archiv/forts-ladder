@@ -731,12 +731,29 @@ class DraftSession:
         if steam_ids:
             missing = self.check_roster(steam_ids)
             if missing:
-                # The side whose player was absent — not the side that reported
-                # it. The reporter is usually the one who noticed, and blaming the
-                # messenger would be exactly backwards.
-                self.abort(missing[0],
-                           f"side {', '.join(missing)} was played by a "
-                           "different Steam account than the one that drafted")
+                # Absence and substitution are not the same thing, and treating
+                # them the same aborted real series. Whoever quits Forts first
+                # hands their client a log the other player has already left, so
+                # a drafted side goes missing for a reason that is nobody's
+                # fault — and the abort fired on whichever of the two closed the
+                # game first.
+                #
+                # Somebody undrafted in the seat is the case aborting is for.
+                # Nobody in the seat is a game that did not happen properly, and
+                # that is a replay, exactly like a wrong commander.
+                drafted = {self._steam_ids.get(s.account_id)
+                           for s in self.seats.values()}
+                stranger = any(x and x not in drafted for x in steam_ids)
+                if stranger:
+                    self.abort(missing[0],
+                               f"side {', '.join(missing)} was played by a "
+                               "different Steam account than the one that "
+                               "drafted")
+                else:
+                    self.deviations[game] = [
+                        f"side {', '.join(missing)} was not in the game — "
+                        "somebody left before it was recorded"]
+                    self.voided_games.add(game)
                 return self.public_state(account)
         if game in self.draft.played_games():
             return self.public_state(account)

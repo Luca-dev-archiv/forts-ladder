@@ -89,11 +89,12 @@ public partial class MainWindow : Window
         _lobbyFile.Start();
 
         Loaded += (_, _) => SyncSettingsToggles();
-        // Launched at login by the autostart entry: the tray icon and the log
-        // watcher, and no window nobody asked for.
-        Loaded += (_, _) => { if (App.StartHidden) HideToTray(); };
         Loaded += (_, _) => LoadHistory();
-        Loaded += (_, _) => _ = CheckForUpdateAsync();
+        // Not while starting hidden. It asks with a modal dialog owned by this
+        // window, and at login this window is not on screen — so the question
+        // arrived parented to something invisible, on top of whatever the person
+        // was doing, from a program they could not see. Asked when they open it.
+        Loaded += (_, _) => { if (!App.StartHidden) _ = CheckForUpdateAsync(); };
         // Closing the window is not necessarily closing the program. The
         // reason is a playtest: somebody forgets to start this before playing,
         // and Forts clears its log at startup — so a match nobody watched while
@@ -118,6 +119,12 @@ public partial class MainWindow : Window
             _lobbyFile?.Stop();
             _watcher.Dispose(); _draft.Dispose(); _queue.Dispose();
             _tray?.Dispose();
+            // Shutdown is explicit-only so that hiding to the tray does not
+            // quit, which leaves the window closing for real with nothing that
+            // ends the process. It does end today without this — measured, not
+            // assumed — and this is here so it cannot quietly stop doing so:
+            // the failure mode is a process nobody can see or reach.
+            if (!_reallyClosing) Application.Current?.Shutdown();
         };
     }
 
@@ -129,8 +136,14 @@ public partial class MainWindow : Window
     /// should not wait on a network call, and a failed check is not an error
     /// worth showing.
     /// </summary>
+    /// <summary>Asked at most once a session, and only with a window to ask
+    /// in.</summary>
+    private bool _updateAsked;
+
     private async Task CheckForUpdateAsync()
     {
+        if (_updateAsked || _hidden) return;
+        _updateAsked = true;
         var rel = await Updater.CheckAsync();
         if (rel is null) return;
 
@@ -942,9 +955,15 @@ public partial class MainWindow : Window
         // Checked on every refresh so a wait that will never end does not hold
         // the button — and the button says which of the two it is.
         GiveUpWaitingIfStale();
-        BtnHostLobby.IsEnabled = !_awaitingLobby;
-        BtnHostLobby.Content = Loc.T(_awaitingLobby ? "handoff.waiting_lobby"
-                                                    : "handoff.host");
+        // A running game cannot be hosted into. Said on the button rather than
+        // only after the click, because the answer is "close Forts" and that
+        // takes a moment somebody would rather spend before pressing anything.
+        _gameBlocksHosting = !haveLobby && !theirs && FortsIsRunningCached();
+        BtnHostLobby.IsEnabled = !_awaitingLobby && !_gameBlocksHosting;
+        BtnHostLobby.Content =
+            Loc.T(_awaitingLobby ? "handoff.waiting_lobby"
+                  : _gameBlocksHosting ? "handoff.close_forts_to_host"
+                  : "handoff.host");
         BtnJoinLobby.Visibility = haveLobby && theirs
             ? Visibility.Visible : Visibility.Collapsed;
         // Starting Forts is the host's job; the other side is launched into the
@@ -1095,11 +1114,38 @@ public partial class MainWindow : Window
                             : "";
         RestartWarning.Visibility = mine || theirs
             ? Visibility.Visible : Visibility.Collapsed;
-        BtnCloseForts.Visibility = mine ? Visibility.Visible : Visibility.Collapsed;
+        // Also for the case the settings were never written at all: hosting is
+        // refused while the game is up, and closing it is the way out of that
+        // too. This ran after the host button and used to switch the button off
+        // again a moment after it was offered.
+        BtnCloseForts.Visibility = mine || _gameBlocksHosting
+            ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>Set when lobby settings were written into a running Forts.</summary>
     private bool _restartPending;
+
+    /// <summary>Forts is up, so this side cannot open a lobby for the series.
+    /// </summary>
+    private bool _gameBlocksHosting;
+
+    /// <summary>
+    /// Whether Forts is up, asked at most twice a second.
+    ///
+    /// The handoff renders on every draft poll and enumerating every process on
+    /// the machine once a second to draw one button is not worth it.
+    /// </summary>
+    private bool FortsIsRunningCached()
+    {
+        var now = DateTime.UtcNow;
+        if (now - _fortsCheckedAt < TimeSpan.FromMilliseconds(500))
+            return _fortsWasRunning;
+        _fortsCheckedAt = now;
+        return _fortsWasRunning = FortsIsRunning();
+    }
+
+    private DateTime _fortsCheckedAt = DateTime.MinValue;
+    private bool _fortsWasRunning;
 
     /// <summary>
     /// Whether Forts is up right now.
@@ -1315,6 +1361,21 @@ public partial class MainWindow : Window
 
     private async void BtnHostLobby_Click(object sender, RoutedEventArgs e)
     {
+        // Before anything is claimed. Forts reads multiplayer.lua while it
+        // starts and never again, so with the game already open the settings
+        // cannot be written — and pressing this claimed the host on the server
+        // anyway, disabled the button, and left the other side waiting for a
+        // password that was never going to exist. The whole draft was stuck
+        // behind a click that could not have worked.
+        if (FortsIsRunning())
+        {
+            ShowDraftError(ErrorCodes.Text(ErrorCodes.GameNotRestarted,
+                                           Loc.T("handoff.close_forts_first")));
+            // Offered here rather than left to be found: the fix is one button
+            // and it is already on this bar.
+            BtnCloseForts.Visibility = Visibility.Visible;
+            return;
+        }
         // Claimed on the server first: both clients used to offer this until one
         // pressed it, which is two people about to open the same match.
         if (!await _draft.ClaimHostAsync())

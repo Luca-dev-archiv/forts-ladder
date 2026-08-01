@@ -1086,6 +1086,17 @@
                                 Click="BtnJoinAsObserver_Click"
                                 Visibility="{Binding CanJoin,
                                   Converter={StaticResource BoolToVisible}}"/>
+                        <!-- Reading five characters off the screen and typing
+                             them into the game's prompt is the one step left
+                             where a spectator can still get it wrong. -->
+                        <Button DockPanel.Dock="Right"
+                                Content="{core:T handoff.copy_password}"
+                                Style="{StaticResource Btn}" Margin="0,0,6,0"
+                                Padding="12,5" FontSize="12"
+                                Tag="{Binding Password}"
+                                Click="BtnCopyObserverPassword_Click"
+                                Visibility="{Binding HasPassword,
+                                  Converter={StaticResource BoolToVisible}}"/>
                         <StackPanel>
                           <TextBlock Text="{Binding Title}" FontSize="13"
                                      TextTrimming="CharacterEllipsis"/>

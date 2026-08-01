@@ -141,6 +141,7 @@ public partial class MainWindow
         DraftObserverInbox.ItemsSource = rows;
         ObserverInboxBar.Visibility = rows.Count == 0
             ? Visibility.Collapsed : Visibility.Visible;
+        AnnounceRequests(pending);
 
         // Who is already in, so the host knows there is somebody to place. The
         // note stays up after the inbox empties — admitting is the moment the
@@ -152,6 +153,36 @@ public partial class MainWindow
             ? Visibility.Collapsed : Visibility.Visible;
         DraftSpectatorBar.Visibility = rows.Count == 0 && admitted.Count == 0
             ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>Requests already announced, so a balloon fires once each rather
+    /// than every ten seconds for as long as somebody waits.</summary>
+    private readonly HashSet<string> _announcedRequests = new();
+
+    /// <summary>
+    /// Tell the host somebody is asking, where they will actually see it.
+    ///
+    /// A panel on the draft screen is the right place to *answer* and the wrong
+    /// place to be told: while a series is being played the host is in Forts,
+    /// full screen, and this window is behind it. So the tray says it and the
+    /// taskbar button flashes, which are the two things that reach through a
+    /// game.
+    /// </summary>
+    private void AnnounceRequests(List<ObserverPendingDto> pending)
+    {
+        // Anybody who has gone away is forgotten, or asking a second time after
+        // being declined would be silent.
+        _announcedRequests.IntersectWith(pending.Select(r => r.Id));
+        var fresh = pending.Where(r => _announcedRequests.Add(r.Id)).ToList();
+        if (fresh.Count == 0) return;
+
+        var who = string.Join(", ", fresh.Select(r => r.Who));
+        _tray?.ShowBalloonTip(10_000, Loc.T("app.title"),
+                              Loc.T("live.asks_to_watch", who),
+                              System.Windows.Forms.ToolTipIcon.Info);
+        // Not Activate(): stealing focus out of a full-screen game is how a
+        // match gets lost. This lights the taskbar button and waits.
+        if (!_hidden) FlashTaskbar();
     }
 
     /// <summary>The spectators admitted to the match this client published.
@@ -210,12 +241,30 @@ public partial class MainWindow
                 },
                 CanJoin = r.State == "approved" && r.Join_Url is { Length: > 0 },
                 JoinUrl = r.Join_Url ?? "",
+                Password = r.Lobby_Password ?? "",
+                HasPassword = r.State == "approved"
+                              && r.Lobby_Password is { Length: > 0 },
                 Brush = BrushFor(r.State == "approved" ? "Win"
                                  : r.State == "declined" ? "Loss" : "TextMid"),
             }).ToList();
         MyRequests.ItemsSource = rows;
         MyRequestsBar.Visibility = rows.Count == 0
             ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void BtnCopyObserverPassword_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button b || b.Tag is not string pw || pw.Length == 0)
+            return;
+        try
+        {
+            Clipboard.SetText(pw);
+            b.Content = Loc.T("series.copied");
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            // Another program can hold the clipboard; it is on screen either way.
+        }
     }
 
     private void BtnJoinAsObserver_Click(object sender, RoutedEventArgs e)

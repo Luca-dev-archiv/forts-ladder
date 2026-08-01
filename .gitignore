@@ -27,6 +27,10 @@ data/ratings.json
 # accident.
 data/session.txt
 data/server.txt
+# Which boxes this machine has ticked — tray, autostart, background tracking.
+# Local to one installation, and it appears as soon as the client is run from
+# the repository, so `git add -A` picks it up.
+data/prefs.json
 data/seed/
 matches/
 

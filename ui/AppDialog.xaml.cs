@@ -102,7 +102,11 @@ public partial class AppDialog : Window
                               preset);
         // Centre on the window that raised it, unless it is being raised before
         // there is one — which happens for the already-running check.
-        if (owner is not null && owner.IsLoaded) d.Owner = owner;
+        //
+        // `IsVisible` as well as `IsLoaded`: a window hidden to the tray is
+        // still loaded, and a modal dialog owned by an invisible window is one
+        // nobody can find. Standing on its own it at least appears.
+        if (owner is not null && owner.IsLoaded && owner.IsVisible) d.Owner = owner;
         else d.WindowStartupLocation = WindowStartupLocation.CenterScreen;
         return d;
     }

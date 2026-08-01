@@ -61,9 +61,42 @@ public static class Autostart
             if (ExePath() is not { Length: > 0 } exe) return false;
             // Quoted: a path with a space in it is otherwise read as a command
             // and an argument, and "C:\Program" is not a program.
-            key.SetValue(ValueName, $"\"{exe}\" --tray");
+            key.SetValue(ValueName, Command(exe));
             return true;
         }
         catch (Exception) { return false; }
+    }
+
+    private static string Command(string exe) => $"\"{exe}\" --tray";
+
+    /// <summary>
+    /// Point an existing entry at *this* executable.
+    ///
+    /// Updating means downloading a new file, usually beside the old one and
+    /// under a new name, and the Run entry still named the file that was current
+    /// when the box was ticked. So every login started an old version — hidden,
+    /// with no window — and it took the single-instance lock, which is what made
+    /// the new one refuse to start with nothing on screen to explain it.
+    ///
+    /// Only ever rewrites an entry that is already there. Turning autostart on
+    /// is a decision somebody makes; this only keeps it honest about which file
+    /// it means.
+    /// </summary>
+    /// <returns>The path that was replaced, or null if nothing changed.</returns>
+    public static string? PointAtThisBuild()
+    {
+        try
+        {
+            if (ExePath() is not { Length: > 0 } exe) return null;
+            using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
+            if (key?.GetValue(ValueName) is not string current
+                || current.Length == 0) return null;
+            var wanted = Command(exe);
+            if (string.Equals(current, wanted, StringComparison.OrdinalIgnoreCase))
+                return null;
+            key.SetValue(ValueName, wanted);
+            return current;
+        }
+        catch (Exception) { return null; }
     }
 }

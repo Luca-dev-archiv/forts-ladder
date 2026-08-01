@@ -37,6 +37,7 @@ public partial class MainWindow
 
     private void InitTray()
     {
+
         _tray = new Forms.NotifyIcon
         {
             Text = "Forts Ladder",
@@ -67,11 +68,25 @@ public partial class MainWindow
         DarkMenu.Apply(menu);
         _tray.ContextMenuStrip = menu;
 
+        // An autostart entry naming a file that is no longer this one starts an
+        // old build at every login — hidden, holding the single-instance lock,
+        // with nothing on screen. Corrected here rather than only when the box
+        // is clicked, because nobody clicks it again after updating.
+        if (Autostart.PointAtThisBuild() is { Length: > 0 } was)
+            _tray.ShowBalloonTip(8000, Loc.T("app.title"),
+                                 Loc.T("tray.autostart_updated", was),
+                                 Forms.ToolTipIcon.Info);
+
         // The registry is the truth about startup, not the preference file: an
         // entry somebody removed in Task Manager should not come back because a
         // JSON file still says yes.
         _prefs.Set(Prefs.StartWithWindows, Autostart.Enabled);
         UpdateTray();
+
+        // Starting the program again is the way back to a hidden window. It is
+        // what anybody tries first, and until now it only said "already
+        // running" — which is true and useless when there is nothing on screen.
+        SingleInstance.OnShowRequested(() => Dispatcher.Invoke(ShowFromTray));
     }
 
     private Forms.ToolStripMenuItem? _trackItem;
@@ -114,6 +129,53 @@ public partial class MainWindow
     [System.Runtime.InteropServices.DllImport("user32.dll",
         SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr handle);
+
+    /// <summary>
+    /// Light this window's taskbar button until somebody looks at it.
+    ///
+    /// For things that arrive while the person is inside a full-screen Forts.
+    /// Deliberately not <c>Activate()</c>: pulling focus out of a running match
+    /// to say somebody would like to watch it is a worse interruption than the
+    /// one it is reporting.
+    /// </summary>
+    private void FlashTaskbar()
+    {
+        try
+        {
+            var handle = new System.Windows.Interop.WindowInteropHelper(this)
+                .Handle;
+            if (handle == IntPtr.Zero) return;
+            var info = new FLASHWINFO
+            {
+                cbSize = (uint)System.Runtime.InteropServices.Marshal
+                    .SizeOf<FLASHWINFO>(),
+                hwnd = handle,
+                // Taskbar button only, until the window comes to the front.
+                dwFlags = FLASHW_TRAY | FLASHW_TIMERNOFG,
+                uCount = uint.MaxValue,
+                dwTimeout = 0,
+            };
+            FlashWindowEx(ref info);
+        }
+        catch (Exception) { /* a missed flash is not worth a crash */ }
+    }
+
+    private const uint FLASHW_TRAY = 0x00000002;
+    private const uint FLASHW_TIMERNOFG = 0x0000000C;
+
+    [System.Runtime.InteropServices.StructLayout(
+        System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct FLASHWINFO
+    {
+        public uint cbSize;
+        public IntPtr hwnd;
+        public uint dwFlags;
+        public uint uCount;
+        public uint dwTimeout;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
 
     /// <summary>Whether the log watcher should be running right now.</summary>
     private bool ShouldTrack =>
@@ -164,6 +226,9 @@ public partial class MainWindow
         WindowState = WindowState.Normal;
         Activate();
         UpdateTray();
+        // Deferred from startup when the program came up hidden: now there is a
+        // window for the question to belong to.
+        _ = CheckForUpdateAsync();
     }
 
     /// <summary>Hide to the tray, and say so once — a window that vanishes is
@@ -173,14 +238,34 @@ public partial class MainWindow
         _hidden = true;
         Hide();
         UpdateTray();
+        // You did it, so you know where it went; saying it every time is
+        // nagging. Being *started* hidden is the other case, and it says so
+        // every time — see StartedInTray.
         if (_prefs.Get("told_about_tray")) return;
         _prefs.Set("told_about_tray", true);
-        _tray?.ShowBalloonTip(
-            5000, Loc.T("app.title"),
-            Loc.T(_prefs.Get(Prefs.TrackInBackground)
-                      ? "tray.still_tracking" : "tray.still_running"),
-            Forms.ToolTipIcon.Info);
+        SayItIsRunning();
     }
+
+    /// <summary>
+    /// Brought up by the autostart entry, with no window at all.
+    ///
+    /// Announced every single time, unlike hiding it yourself: nothing was
+    /// clicked, there is nothing on screen, and Windows files a new tray icon
+    /// behind the overflow chevron where it is not visible either. Without this
+    /// the only evidence the program exists is Task Manager.
+    /// </summary>
+    public void StartedInTray()
+    {
+        _hidden = true;
+        UpdateTray();
+        SayItIsRunning();
+    }
+
+    private void SayItIsRunning() => _tray?.ShowBalloonTip(
+        5000, Loc.T("app.title"),
+        Loc.T(_prefs.Get(Prefs.TrackInBackground)
+                  ? "tray.still_tracking" : "tray.still_running"),
+        Forms.ToolTipIcon.Info);
 
     /// <summary>
     /// One handler for the three boxes.

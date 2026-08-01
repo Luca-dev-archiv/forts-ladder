@@ -172,8 +172,13 @@ public partial class MainWindow
         // maps with nothing in the program able to fix it.
         BtnPublishPools.Visibility = admin ? Visibility.Visible
                                            : Visibility.Collapsed;
-        BtnPublishPools.Content = Loc.T(pools?.Configured == true
-            ? "queue.update_pools" : "queue.publish_pools");
+        // The season on the button. A pool from the wrong season looks entirely
+        // correct on the draft board — the names are real map names — so the
+        // number is the only thing that gives it away without playing a match.
+        BtnPublishPools.Content =
+            pools?.Configured != true ? Loc.T("queue.publish_pools")
+            : pools.Season is { } n ? Loc.T("queue.pools_season", n)
+            : Loc.T("queue.update_pools");
         if (pools?.Configured == false && !admin)
             QueueError.Text = Loc.T("queue.no_pools_yet");
 
@@ -193,24 +198,51 @@ public partial class MainWindow
     private async void BtnPublishPools_Click(object sender, RoutedEventArgs e)
     {
         if (!await EnsureReadyAsync()) return;
-        // Replacing a pool changes what everybody drafts from the next match on,
-        // so it is asked once rather than being a button that quietly reshapes
-        // the season.
-        var pools = await _login.PoolsAsync();
-        if (pools?.Configured == true
-            && !AppDialog.Confirm(this, Loc.T("queue.replace_pools_ask"),
-                                  Loc.T("queue.update_pools"),
-                                  AppDialog.Kind.Question))
+
+        // Which season, asked rather than guessed. Forts ships seasons before
+        // they start — an install playing season 43 already has 44 in its data
+        // — and the season in play is not in any file the game writes. Taking
+        // the highest one was the old behaviour, and it published next season's
+        // maps to the whole ladder while everybody was still playing this one.
+        var seasons = RankedSeasons.All();
+        if (seasons.Count == 0)
+        {
+            QueueError.Text = Loc.T("queue.no_seasons");
             return;
-        var maps = LeagueMapPool();
+        }
+        var pools = await _login.PoolsAsync();
+        var preset = pools?.Season ?? seasons[^1].Number;
+        var typed = AppDialog.Ask(
+            this, Loc.T("queue.season_ask", RankedSeasons.RangeText(seasons)),
+            Loc.T("queue.update_pools"), preset.ToString());
+        if (typed is null) return;
+        if (!int.TryParse(typed, out var season)
+            || RankedSeasons.Maps(season) is not { } maps)
+        {
+            QueueError.Text = Loc.T("queue.season_unknown", typed,
+                                    RankedSeasons.RangeText(seasons));
+            return;
+        }
+
         var commanders = CommanderNames.Installed();
         if (maps.Count < 5 || commanders.Count < 4)
         {
             QueueError.Text = Loc.T("draft.too_little", maps.Count, commanders.Count);
             return;
         }
-        QueueError.Text = await _login.PublishPoolsAsync(maps, commanders)
-            ? Loc.T("queue.pools_published", maps.Count, commanders.Count)
+        // The names, before they go out. Replacing a pool changes what everybody
+        // drafts from the next match on, and the failure this guards against
+        // does not look like a failure: the wrong season's maps are real map
+        // names and the draft board renders them perfectly.
+        if (!AppDialog.Confirm(
+                this,
+                Loc.T("queue.replace_pools_ask", season,
+                      string.Join("\n· ", maps), commanders.Count),
+                Loc.T("queue.update_pools"), AppDialog.Kind.Question))
+            return;
+
+        QueueError.Text = await _login.PublishPoolsAsync(maps, commanders, season)
+            ? Loc.T("queue.pools_published", maps.Count, commanders.Count, season)
             : _api.LastError ?? "?";
         await RefreshAccountAsync();
         await LoadModesAsync();

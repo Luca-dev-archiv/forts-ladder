@@ -734,8 +734,7 @@ public partial class MainWindow : Window
     private async void BtnHostDraft_Click(object sender, RoutedEventArgs e)
     {
         if (!await EnsureReadyAsync()) return;
-        var maps = LeagueMapPool();
-        var commanders = CommanderNames.Installed();
+        var (maps, commanders) = await DraftPoolAsync();
         if (maps.Count < 5 || commanders.Count < 4)
         {
             ShowDraftError(Loc.T("draft.too_little", maps.Count, commanders.Count));
@@ -830,45 +829,35 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// The duel pool: this season's ranked maps, minus Hillfort. Falls back
-    /// to the maps present in the install if the season list is unreadable —
-    /// an empty draft would be worse than a rough one.
+    /// What a draft hosted from this client is built from.
+    ///
+    /// The ladder's published pool whenever there is one, and only otherwise
+    /// this machine's own reading of the game files. Two clients reading their
+    /// own Forts is how one of them drafted a different season's maps than the
+    /// other — and the pool the ladder publishes is the one an admin looked at
+    /// and confirmed, which no local guess ever is.
+    /// </summary>
+    private async Task<(List<string> Maps, List<string> Commanders)> DraftPoolAsync()
+    {
+        var pools = await _login.PoolsAsync();
+        if (pools?.Configured == true && pools.Map_Pool.Count > 0
+            && pools.Commander_Pool.Count > 0)
+            return (pools.Map_Pool,
+                    CommanderNames.InGameOrder(pools.Commander_Pool));
+        return (LeagueMapPool(), CommanderNames.Installed());
+    }
+
+    /// <summary>
+    /// This install's newest ranked season, minus Hillfort.
+    ///
+    /// The fallback for a server that has published nothing yet, and nothing
+    /// else: the newest season in the files is not the season being played —
+    /// Forts ships them early — so anything that matters asks the ladder.
     /// </summary>
     private static List<string> LeagueMapPool()
     {
-        var forts = FortsPaths.FindFortsDir();
-        var pool = new List<string>();
-        if (forts is not null)
-        {
-            var constants = Path.Combine(forts, "data", "db", "constants.lua");
-            if (File.Exists(constants))
-            {
-                try
-                {
-                    var text = File.ReadAllText(constants);
-                    var start = text.IndexOf("\nRankedMaps", StringComparison.Ordinal);
-                    if (start > 0)
-                    {
-                        var seasons = System.Text.RegularExpressions.Regex.Matches(
-                            text[start..], @"\[(\d+)\]\s*=\s*\{(.*?)\n\t\}",
-                            System.Text.RegularExpressions.RegexOptions.Singleline);
-                        if (seasons.Count > 0)
-                        {
-                            var last = seasons[^1];
-                            foreach (System.Text.RegularExpressions.Match m in
-                                     System.Text.RegularExpressions.Regex.Matches(
-                                         last.Groups[2].Value, @"^\s*""([^""]+)""",
-                                         System.Text.RegularExpressions.RegexOptions.Multiline))
-                                pool.Add(m.Groups[1].Value);
-                        }
-                    }
-                }
-                catch (IOException) { }
-            }
-        }
-        // Ladder rule: Hillfort is permanently banned in duels.
-        pool.RemoveAll(m => m == "Hillfort");
-        return pool;
+        var seasons = RankedSeasons.All();
+        return seasons.Count == 0 ? new List<string>() : seasons[^1].Maps;
     }
 
     // -------------------------------------------------------------- Rendering

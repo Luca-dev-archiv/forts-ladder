@@ -552,6 +552,61 @@ def test_a_pairing_code_does_not_outlive_the_link_it_was_issued_for():
         raise AssertionError("a code issued before the unlink still worked")
 
 
+# ------------------------------------------------------------------ Pools
+def test_the_pools_survive_a_restart():
+    """They can only be published from a machine that has Forts installed, so
+    holding them in memory meant every redeploy closed the queue until an admin
+    noticed and published again."""
+    maps = ["Balls", "Ledge Grab", "Moorings", "Stalactites 1v1",
+            "Desert Ruins", "Crevice"]
+    cmds = [f"commander-x-{n}" for n in "abcd"]
+    path = Path(tempfile.mkdtemp()) / "pools.sqlite"
+    store = Store(path)
+    store.save_pools(maps, cmds, 43, None)
+    store.close()
+
+    again = Store(path)
+    back = again.load_pools()
+    assert back is not None, "the pool did not survive"
+    assert back["map_pool"] == maps
+    assert back["commander_pool"] == cmds
+    assert back["season"] == 43
+    again.close()
+
+
+def test_publishing_a_pool_replaces_the_old_one():
+    """One ladder, one pool. A second row would leave which one is in play to
+    whichever query happened to run."""
+    store = fresh_store()
+    store.save_pools(["Abyss", "Split"], ["commander-x-a"], 42, None)
+    store.save_pools(["Crevice", "Balls"], ["commander-x-b"], 43, None)
+    assert store.load_pools()["map_pool"] == ["Crevice", "Balls"]
+    assert store.load_pools()["season"] == 43
+    assert store.db.execute("SELECT COUNT(*) c FROM pools").fetchone()["c"] == 1
+    store.close()
+
+
+def test_a_pool_with_no_season_is_still_a_pool():
+    """Published by a client from before the season was asked for. The maps are
+    what the queue needs; the number is only what it shows."""
+    store = fresh_store()
+    store.save_pools(["Abyss", "Split"], ["commander-x-a"], None, None)
+    back = store.load_pools()
+    assert back is not None and back["season"] is None
+    store.close()
+
+
+def test_a_damaged_pool_row_reads_as_no_pool():
+    """Better than taking the server down at import time: nothing can be drafted
+    either way, and one of those two says so."""
+    store = fresh_store()
+    store.save_pools(["Abyss", "Split"], ["commander-x-a"], 43, None)
+    store.db.execute("UPDATE pools SET map_pool = '{oops' WHERE id = 1")
+    store.db.commit()
+    assert store.load_pools() is None
+    store.close()
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

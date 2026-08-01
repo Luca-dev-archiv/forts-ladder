@@ -1179,6 +1179,73 @@ def test_nobody_learns_about_a_series_they_were_not_in():
     assert all(x["lobby_id"] != "70909" for x in rows), rows
 
 
+# -------------------------------------------------------------------- Pools
+class KeptPools:
+    """Put the queue's pools back afterwards.
+
+    One app is shared by every test in this file, and the pools live on it. A
+    test that publishes one and walks away changes what a later test sees —
+    which is the same shape of bug as the one being tested here.
+    """
+
+    def __enter__(self):
+        self.was = (list(app_mod.queue.map_pool),
+                    list(app_mod.queue.commander_pool), app_mod.queue.season)
+        return self
+
+    def __exit__(self, *_exc):
+        app_mod.queue.configure(*self.was)
+        return False
+
+
+def test_the_published_pool_comes_back_with_its_names_and_season():
+    """Every client hosting a draft asks for this. Working the pool out from its
+    own Forts is what let one client draft a different season's maps than the
+    other — the game ships seasons before they start, so the newest list in the
+    files is not the one being played."""
+    with KeptPools():
+        w = World()
+        _, owner = w.person("PoolOwner", Role.OWNER)
+        maps = ["Balls", "Ledge Grab", "Moorings", "Stalactites 1v1",
+                "Desert Ruins", "Crevice"]
+        r = w.client.put("/admin/pools", headers=owner,
+                         json={"map_pool": maps,
+                               "commander_pool": ["commander-x-a", "commander-x-b"],
+                               "season": 43})
+        assert r.status_code == 200, r.text[:300]
+
+        got = w.client.get("/queue/pools").json()
+        assert got["configured"] is True
+        assert got["map_pool"] == maps, got
+        assert got["season"] == 43
+        assert got["maps"] == len(maps)
+
+
+def test_a_pool_published_over_the_api_is_stored():
+    """The queue is empty after a restart otherwise, and the only cure is an
+    admin at a machine with Forts on it."""
+    with KeptPools():
+        w = World()
+        _, owner = w.person("PoolKeeper", Role.OWNER)
+        w.client.put("/admin/pools", headers=owner,
+                     json={"map_pool": ["Crevice", "Balls", "Elephants"],
+                           "commander_pool": ["commander-x-a"], "season": 43})
+        stored = app_mod.store.load_pools()
+        assert stored is not None
+        assert stored["map_pool"] == ["Crevice", "Balls", "Elephants"]
+        assert stored["season"] == 43
+
+
+def test_only_an_admin_may_replace_what_everybody_drafts_from():
+    w = World()
+    _, plain = w.person("PoolNobody")
+    before = list(app_mod.queue.map_pool)
+    r = w.client.put("/admin/pools", headers=plain,
+                     json={"map_pool": ["Abyss"], "commander_pool": ["c"]})
+    assert r.status_code in (401, 403), r.status_code
+    assert app_mod.queue.map_pool == before
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

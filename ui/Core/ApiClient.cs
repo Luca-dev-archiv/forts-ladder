@@ -784,6 +784,16 @@ public sealed class PoolStatusDto
     public bool Configured { get; set; }
     public int Maps { get; set; }
     public int Commanders { get; set; }
+
+    /// <summary>The game season the admin published this pool for, if they
+    /// said. Null from a server older than the field.</summary>
+    public int? Season { get; set; }
+
+    /// <summary>The names themselves, so a hosted draft uses the pool the
+    /// ladder published instead of one read off this machine's own Forts.
+    /// </summary>
+    public List<string> Map_Pool { get; set; } = new();
+    public List<string> Commander_Pool { get; set; } = new();
 }
 
 public sealed class SteamTicketDto

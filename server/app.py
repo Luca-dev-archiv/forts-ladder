@@ -106,6 +106,12 @@ drafts = DraftService()
 # not survive the thing persistence is for — a redeploy mid-tournament.
 drafts.restore(store.load_drafts())
 queue = QueueService(auth, drafts)
+# The pools only exist because an admin published them from a machine that has
+# Forts installed. Holding them in memory meant every redeploy closed the queue
+# with "this server has no map pool yet" until somebody noticed.
+if (_pools := store.load_pools()) is not None:
+    queue.configure(_pools["map_pool"], _pools["commander_pool"],
+                    _pools["season"])
 ranking = Ranking()
 # Reported series, and the standings they produce. Before this existed the
 # shared ranking was the imported spreadsheet and nothing else — winning a
@@ -1322,19 +1328,29 @@ def queue_decline(ladder_session: str | None = Cookie(None),
 class PoolConfig(BaseModel):
     map_pool: list[str]
     commander_pool: list[str]
+    #: Which game season this pool is. Recorded, never derived: Forts ships
+    #: future seasons in its data files and does not say which one is running,
+    #: so the only honest source is the admin publishing it.
+    season: int | None = None
 
 
 @app.get("/queue/pools")
 def queue_pools():
-    """Whether the queue is usable at all, and how large the pools are.
+    """What the ladder drafts from.
 
     Public because "the ladder is not set up yet" is not a secret, and a client
     that cannot tell the difference between that and its own fault shows the
-    wrong error.
+    wrong error. The names are here too, so every client hosting a draft uses
+    the pool that was published rather than one it worked out from its own
+    Forts install — two installs disagreeing about the season is exactly how the
+    wrong maps got drafted.
     """
     return {"configured": bool(queue.map_pool and queue.commander_pool),
             "maps": len(queue.map_pool),
-            "commanders": len(queue.commander_pool)}
+            "commanders": len(queue.commander_pool),
+            "season": queue.season,
+            "map_pool": list(queue.map_pool),
+            "commander_pool": list(queue.commander_pool)}
 
 
 @app.put("/admin/pools")
@@ -1344,8 +1360,11 @@ def set_pools(body: PoolConfig, ladder_session: str | None = Cookie(None),
     would let one side choose the list before the veto starts."""
     acc = require(session_token(ladder_session, authorization))
     guard(acc.require, "create_tournament")
-    queue.configure(body.map_pool, body.commander_pool)
-    return {"maps": len(body.map_pool), "commanders": len(body.commander_pool)}
+    queue.configure(body.map_pool, body.commander_pool, body.season)
+    # Stored, or the next redeploy leaves the queue with nothing to draft.
+    store.save_pools(body.map_pool, body.commander_pool, body.season, acc.id)
+    return {"maps": len(body.map_pool), "commanders": len(body.commander_pool),
+            "season": body.season}
 
 
 # ----------------------------------------------------------------- The page

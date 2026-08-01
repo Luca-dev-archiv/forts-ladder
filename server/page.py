@@ -309,9 +309,13 @@ def admin(*, accounts: list[dict], grants: list[str], my_id: str,
                else "<span class=warn>no</span>")
             + f"</div><div style='margin-top:12px'>{controls}</div></div>")
 
+    # The season, when it is known. A pool from the wrong season is not visibly
+    # wrong anywhere else — the map names are real either way — so the number is
+    # what tells an admin the queue is drafting last season's list.
+    season = (f", season {pools['season']}" if pools.get("season") else "")
     pool_row = ("<div class=row><span class=muted>map pool</span>"
                 f"<span class=val>{pools['maps']} maps, "
-                f"{pools['commanders']} commanders</span></div>"
+                f"{pools['commanders']} commanders{season}</span></div>"
                 if pools["configured"] else
                 "<div class=row><span class=muted>map pool</span>"
                 "<span class='val warn'>not set</span></div>"

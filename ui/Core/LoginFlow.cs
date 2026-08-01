@@ -308,11 +308,22 @@ public sealed class LoginFlow
     /// map list before the veto starts. So an admin publishes them once from a
     /// client that has the game, and that is what everyone then drafts from.
     /// </summary>
+    /// <param name="season">Which game season these maps are. Sent as given —
+    /// the season in play is not written in any of the game's files, so it can
+    /// only come from the person publishing.</param>
     public async Task<bool> PublishPoolsAsync(IEnumerable<string> maps,
-                                              IEnumerable<string> commanders)
+                                              IEnumerable<string> commanders,
+                                              int? season = null)
     {
-        var body = new { map_pool = maps.ToList(), commander_pool = commanders.ToList() };
-        return await _api.PutAsync<Dictionary<string, int>>("/admin/pools", body)
-               is not null;
+        var body = new
+        {
+            map_pool = maps.ToList(),
+            commander_pool = commanders.ToList(),
+            season,
+        };
+        // Not Dictionary<string, int>: the season comes back and may be null,
+        // which would throw and be reported as a failed publish that succeeded.
+        return await _api.PutAsync<Dictionary<string, object>>(
+                   "/admin/pools", body) is not null;
     }
 }

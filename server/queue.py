@@ -49,6 +49,11 @@ class QueueService:
         self.joined: dict[str, str] = {}
         self.map_pool: list[str] = []
         self.commander_pool: list[str] = []
+        #: Which game season the map pool was taken from, as the admin who
+        #: published it said. Never worked out here: the season in play is not
+        #: in the game's files at all, and the client that guessed it published
+        #: next season's maps to everybody.
+        self.season: int | None = None
         #: player id -> when their dodge cooldown runs out. Separate from the
         #: queue's own penalty, which lives on a queue entry and disappears the
         #: moment somebody leaves — exactly what a dodger does.
@@ -188,7 +193,8 @@ class QueueService:
             self.queues[mode_key] = Queue(offences=self.offences)
         return self.queues[mode_key]
 
-    def configure(self, map_pool: list[str], commander_pool: list[str]) -> None:
+    def configure(self, map_pool: list[str], commander_pool: list[str],
+                  season: int | None = None) -> None:
         """Pools come from the operator, not from a client.
 
         A client-supplied pool would let one side pick the map list it prefers
@@ -196,6 +202,7 @@ class QueueService:
         """
         self.map_pool = list(map_pool)
         self.commander_pool = list(commander_pool)
+        self.season = season
 
     def join(self, account: Account, rating: float,
              mode_key: str = "ranked_1v1") -> dict:

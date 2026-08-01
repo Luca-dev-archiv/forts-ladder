@@ -72,6 +72,25 @@ CREATE TABLE IF NOT EXISTS sanctioned_lobbies (
     created_at  REAL NOT NULL
 );
 
+-- What the whole ladder drafts from, and which game season it was taken from.
+--
+-- One row, because there is one ladder. Stored rather than held in memory: the
+-- pools can only be published from a client that has Forts installed, so an
+-- unstored pool meant every redeploy silently closed the queue until an admin
+-- happened to notice and publish again.
+--
+-- `season` is what the admin said it was. The season in play is not written
+-- anywhere in the game's files — Forts asks its own backend — so it is recorded
+-- here to be shown back to them, and never guessed.
+CREATE TABLE IF NOT EXISTS pools (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    map_pool       TEXT NOT NULL,          -- JSON list
+    commander_pool TEXT NOT NULL,          -- JSON list
+    season         INTEGER,
+    set_by         TEXT REFERENCES accounts(id),
+    set_at         REAL NOT NULL
+);
+
 -- Drafts are stored the same way tournaments are: the setup plus the moves,
 -- not a serialised object. Replaying the moves through the engine means a
 -- restored draft can only ever be a state the engine would produce itself, and
@@ -498,6 +517,43 @@ class Store:
         return self.db.execute(
             "SELECT 1 FROM sanctioned_lobbies WHERE lobby_id = ?",
             (int(lobby_id),)).fetchone() is not None
+
+    # -------------------------------------------------------------- Pools
+    def save_pools(self, map_pool: list[str], commander_pool: list[str],
+                   season: int | None, set_by: str | None) -> None:
+        """Replace what the ladder drafts from.
+
+        One row, overwritten. There is no history to keep: a pool that was
+        replaced is not something anybody can go back to playing, and the drafts
+        that used it stored their own copy when they were created.
+        """
+        self.db.execute(
+            """INSERT INTO pools (id, map_pool, commander_pool, season,
+                                  set_by, set_at)
+               VALUES (1, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   map_pool = excluded.map_pool,
+                   commander_pool = excluded.commander_pool,
+                   season = excluded.season,
+                   set_by = excluded.set_by,
+                   set_at = excluded.set_at""",
+            (json.dumps(list(map_pool)), json.dumps(list(commander_pool)),
+             season, set_by, time.time()))
+        self.db.commit()
+
+    def load_pools(self) -> dict | None:
+        """The stored pools, or nothing if none were ever published."""
+        row = self.db.execute(
+            "SELECT map_pool, commander_pool, season, set_at FROM pools "
+            "WHERE id = 1").fetchone()
+        if row is None:
+            return None
+        maps = _stored_json(row["map_pool"], [])
+        commanders = _stored_json(row["commander_pool"], [])
+        if not maps or not commanders:
+            return None
+        return {"map_pool": maps, "commander_pool": commanders,
+                "season": row["season"], "set_at": row["set_at"]}
 
     # ------------------------------------------------------------ Results
     def next_result_id(self) -> str:
